@@ -43,6 +43,7 @@ docker compose -f docker-compose.yml -f docker-compose.dev.yml up
 ```
 
 Full deployment notes in [DEPLOY.md](DEPLOY.md).
+Current state, what the AI does, and what is missing: [docs/STATUS.md](docs/STATUS.md).
 
 ---
 
@@ -133,6 +134,18 @@ either way.
 
 **It never states an amount.** Rent, deposits and fees are assembled by the
 system and sent verbatim.
+
+---
+
+## Where things stand
+
+[`docs/inventory-and-gaps.md`](docs/inventory-and-gaps.md) lists every function
+that exists, every place the AI is used and what bounds it, and what is missing
+in the order it should be built.
+
+The short version: the API is complete and the tools are built, but **nothing on
+the front end talks to the server yet**. Until that wiring is done, permissions,
+audit, signing locks and parking concurrency are decorative.
 
 ---
 
