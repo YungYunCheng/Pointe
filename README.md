@@ -8,36 +8,32 @@ Leasing management for 370 / 374 / 378 Clareview Station Drive NW, Edmonton, AB 
 ## Layout
 
 ```
-apps/
-  staff/src/tools/     Ten internal tools, English only
-  tenant/src/          Public chat widget, bilingual
-server/                Node + SQLite API
-docs/                  ERD, Postgres schema, architecture notes
-data/                  Unit inventory spreadsheet
+web/        Vite app: eleven tools behind one shell   → container 1
+server/     Express API: permissions, audit, locks    → container 2
+infra/      Postgres init, reverse proxy config       → container 3
+docs/       ERD, schema, architecture notes
+data/       Unit inventory spreadsheet
 ```
 
 ---
 
 ## Running it
 
-**Server**
-
 ```bash
-cd server
-npm install
-npm run seed          # creates 330 units, 8 unit types, 4 parking areas, 3 accounts
-npm start             # http://localhost:4000
+cp .env.example .env
+openssl rand -base64 32          # paste into POSTGRES_PASSWORD
+docker compose up -d --build
 ```
 
-**Front end**
+Open http://localhost:8080 and sign in as `admin@themizar.ca`.
 
-The files under `apps/` are self-contained React components. Drop one into a Vite
-or Next project and render it, or open it in a React sandbox. Each holds its own
-styles, so nothing else is needed to see it working.
+Development, with both servers reloading on save:
 
-Point them at the API by replacing the `window.storage` calls with `fetch`. Until
-then they run entirely in the browser, which is fine for review and not fine for
-anything else.
+```bash
+docker compose -f docker-compose.yml -f docker-compose.dev.yml up
+```
+
+Full deployment notes in [DEPLOY.md](DEPLOY.md).
 
 ---
 
@@ -76,6 +72,8 @@ record reads correctly for whoever opens it. The dictionary is
 ---
 
 ## The tools
+
+All under `web/src/tools/`.
 
 | File | Purpose | Access |
 |---|---|---|

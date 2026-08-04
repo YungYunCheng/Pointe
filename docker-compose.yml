@@ -1,0 +1,70 @@
+# Three services, one network. Only the web container publishes a port;
+# the API and the database are reachable inside the network only.
+#
+#   docker compose up -d --build
+#   open http://localhost:8080
+#
+services:
+
+  db:
+    image: postgres:16-alpine
+    container_name: baydo-db
+    restart: unless-stopped
+    environment:
+      POSTGRES_DB: ${POSTGRES_DB:-baydo}
+      POSTGRES_USER: ${POSTGRES_USER:-baydo}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?set POSTGRES_PASSWORD in .env}
+    volumes:
+      - db-data:/var/lib/postgresql/data
+      # Runs once, only when the volume is empty.
+      - ./infra/postgres/init:/docker-entrypoint-initdb.d:ro
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-baydo} -d ${POSTGRES_DB:-baydo}"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    networks: [baydo]
+    # No ports here. Exposing 5432 to the host is how databases end up on the
+    # internet. Use `docker compose exec db psql` instead.
+
+  api:
+    build:
+      context: ./server
+    container_name: baydo-api
+    restart: unless-stopped
+    environment:
+      NODE_ENV: production
+      PORT: 4000
+      DATABASE_URL: postgres://${POSTGRES_USER:-baydo}:${POSTGRES_PASSWORD}@db:5432/${POSTGRES_DB:-baydo}
+      CORS_ORIGINS: ${PUBLIC_URL:-http://localhost:8080}
+      SESSION_HOURS: ${SESSION_HOURS:-12}
+    volumes:
+      # Evidence files and backups. Losing this volume loses the proof behind
+      # every deposit deduction, so it belongs in your backup routine.
+      - api-data:/app/data
+    depends_on:
+      db:
+        condition: service_healthy
+    networks: [baydo]
+
+  web:
+    build:
+      context: ./web
+      args:
+        # Empty means "same origin", so nginx proxies /api to the api service.
+        VITE_API_URL: ""
+    container_name: baydo-web
+    restart: unless-stopped
+    ports:
+      - "${WEB_PORT:-8080}:80"
+    depends_on:
+      - api
+    networks: [baydo]
+
+volumes:
+  db-data:
+  api-data:
+
+networks:
+  baydo:
+    driver: bridge

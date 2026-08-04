@@ -1,0 +1,33 @@
+# Development overlay: source is mounted, both servers reload on save.
+#
+#   docker compose -f docker-compose.yml -f docker-compose.dev.yml up
+#
+services:
+  api:
+    build:
+      context: ./server
+    environment:
+      NODE_ENV: development
+      CORS_ORIGINS: http://localhost:3000
+    command: ["node", "--watch", "src/index.js"]
+    volumes:
+      - ./server/src:/app/src:ro
+      - api-data:/app/data
+    ports:
+      - "4000:4000"        # exposed in dev so you can curl the API directly
+
+  web:
+    image: node:20-alpine
+    working_dir: /app
+    command: sh -c "npm install && npm run dev"
+    environment:
+      VITE_API_URL: http://api:4000
+    volumes:
+      - ./web:/app
+      - /app/node_modules
+    ports:
+      - "3000:3000"
+
+  db:
+    ports:
+      - "5432:5432"        # dev only, so you can point a GUI client at it
