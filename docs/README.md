@@ -3,6 +3,8 @@
 | File | What it is |
 |---|---|
 | `STATUS.md` | Every function, what the AI does and does not do, and the gaps in order |
+| `STATUS.zh-Hant.md` | The same document in Chinese, for the manager |
+| `STATUS.zh-Hant.md` | The same inventory in Chinese, for the manager |
 | `inventory-and-gaps.md` | Everything built, what the AI does, and what is missing — start here |
 | `erd.mermaid` | 43 entities: identity, property, pricing, parking, messaging, scheduling, documents, leases |
 | `schema-postgres.sql` | Postgres version with seed data. The SQLite schema the server runs is `server/src/schema.sql` |
