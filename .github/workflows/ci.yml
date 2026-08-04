@@ -1,0 +1,29 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+jobs:
+  server:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+      - name: Install
+        working-directory: server
+        run: npm install
+      - name: Seed and boot
+        working-directory: server
+        run: |
+          npm run seed
+          npm start &
+          sleep 4
+          curl -fsS http://localhost:4000/health
+      - name: Reject unauthenticated access
+        run: |
+          code=$(curl -s -o /dev/null -w '%{http_code}' http://localhost:4000/api/units)
+          test "$code" = "401" || { echo "expected 401, got $code"; exit 1; }
