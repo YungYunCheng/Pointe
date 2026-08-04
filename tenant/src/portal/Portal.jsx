@@ -1,0 +1,346 @@
+import React, { useState, useEffect } from "react";
+import { useT } from "../lib/locale.jsx";
+
+/* ============================================================
+   Tenant portal — for people who have already moved in.
+
+   Four things a tenant actually needs between signing and moving out:
+   report a repair, read notices, pay rent, find their documents.
+
+   Two behaviours worth keeping when this is wired to the API:
+
+   · The repair form asks whether anything is unsafe before it asks
+     anything else. If the answer is yes it gives the office number
+     and says to call. A form that quietly queues an active leak
+     behind three other tickets is worse than no form.
+
+   · Rent links out to the accounting system rather than taking a
+     payment here. Yardi is the system of record for money; a second
+     place to record a payment is a second place for it to disagree.
+   ============================================================ */
+
+const OFFICE_PHONE = "306-974-1727";
+
+const STATE_KEY = {
+  new: "repairs.statusNew", scheduled: "repairs.statusScheduled",
+  in_progress: "repairs.statusProgress", done: "repairs.statusDone",
+};
+const STATE_COLOR = {
+  new: "#B23A54", scheduled: "#C98A15", in_progress: "#1C6FA6", done: "#0E8577",
+};
+
+export default function Portal() {
+  const { t } = useT();
+  const [session, setSession] = useState(undefined);
+  const [tab, setTab] = useState("home");
+
+  useEffect(() => {
+    (async () => {
+      try {
+        const r = await window.storage.get("baydo:tenant-session");
+        setSession(r?.value ? JSON.parse(r.value) : null);
+      } catch { setSession(null); }
+    })();
+  }, []);
+
+  if (session === undefined) return <div className="bt-loading">{t("common.loading")}</div>;
+  if (!session) return <SignIn onIn={setSession} />;
+
+  return (
+    <section className="bt-sec">
+      <div className="bt-portal-h">
+        <div>
+          <h2>{t("portal.hello", { name: session.name })}</h2>
+          <span className="bt-dim">{t("portal.yourSuite", { unit: session.unit })}</span>
+        </div>
+        <button className="bt-btn bt-btn--ghost bt-btn--sm"
+                onClick={async () => { await window.storage.delete("baydo:tenant-session").catch(() => {});
+                                       setSession(null); }}>
+          {t("nav.signout")}
+        </button>
+      </div>
+
+      <nav className="bt-ptabs">
+        {[["home", "portal.tabHome"], ["repairs", "portal.tabRepairs"],
+          ["notices", "portal.tabNotices"], ["rent", "portal.tabRent"],
+          ["docs", "portal.tabDocs"]].map(([k, label]) => (
+          <button key={k} className={tab === k ? "on" : ""} onClick={() => setTab(k)}>{t(label)}</button>
+        ))}
+      </nav>
+
+      {tab === "home"    && <Overview session={session} />}
+      {tab === "repairs" && <Repairs session={session} />}
+      {tab === "notices" && <Notices session={session} />}
+      {tab === "rent"    && <Rent session={session} />}
+      {tab === "docs"    && <Docs />}
+
+      <style>{PORTAL_CSS}</style>
+    </section>
+  );
+}
+
+/* ---------- sign in ---------- */
+function SignIn({ onIn }) {
+  const { t } = useT();
+  const [email, setEmail] = useState("");
+  const [pw, setPw] = useState("");
+  const [err, setErr] = useState("");
+  const [busy, setBusy] = useState(false);
+
+  const go = async () => {
+    setBusy(true); setErr("");
+    // Demo stand-in. The real call is POST /api/tenant/login, which does not
+    // say whether the email exists — the same reason the staff login does not.
+    await new Promise((r) => setTimeout(r, 400));
+    if (!email.trim() || !pw) { setErr(t("common.error")); setBusy(false); return; }
+    const s = { name: email.split("@")[0], email: email.trim(), unit: "378-519",
+                leaseEnd: "2027-08-31", term: "fixed_12", rent: 1850, parking: "Underground / 378" };
+    await window.storage.set("baydo:tenant-session", JSON.stringify(s)).catch(() => {});
+    onIn(s); setBusy(false);
+  };
+
+  return (
+    <section className="bt-sec"><div className="bt-form">
+      <h2>{t("portal.title")}</h2>
+      <p className="bt-body">{t("portal.signInSub")}</p>
+      <div className="bt-f">
+        <label>{t("portal.email")}</label>
+        <input className="bt-in" type="email" value={email} autoComplete="username"
+               onChange={(e) => setEmail(e.target.value)} onKeyDown={(e) => e.key === "Enter" && go()} />
+      </div>
+      <div className="bt-f">
+        <label>{t("portal.password")}</label>
+        <input className="bt-in" type="password" value={pw} autoComplete="current-password"
+               onChange={(e) => setPw(e.target.value)} onKeyDown={(e) => e.key === "Enter" && go()} />
+      </div>
+      {err && <div className="bt-err">{err}</div>}
+      <button className="bt-btn" onClick={go} disabled={busy || !email.trim() || !pw}>
+        {busy ? t("common.loading") : t("portal.signIn")}
+      </button>
+      <p className="bt-hint" style={{ marginTop: 14 }}>{t("portal.firstTime")}</p>
+    </div></section>
+  );
+}
+
+/* ---------- overview ---------- */
+function Overview({ session }) {
+  const { t, money, date } = useT();
+  return (
+    <div className="bt-cards" style={{ marginTop: 20 }}>
+      <div className="bt-card">
+        <h3>{t("portal.yourSuite", { unit: session.unit })}</h3>
+        <div className="bt-dim">
+          {session.term === "periodic" ? t("portal.leaseMonthly")
+            : t("portal.leaseEnds", { date: date(session.leaseEnd) })}
+        </div>
+        <div className="bt-price"><strong>{money(session.rent)}</strong><em>{t("suites.perMonth")}</em></div>
+      </div>
+      <div className="bt-card">
+        <h3>{t("parking.title")}</h3>
+        <div className="bt-dim">
+          {session.parking ? t("portal.parkingStall", { pool: session.parking })
+            : session.waitlist ? t("portal.onWaitlist", { n: session.waitlist })
+            : t("portal.noParking")}
+        </div>
+      </div>
+    </div>
+  );
+}
+
+/* ---------- repairs ---------- */
+function Repairs({ session }) {
+  const { t, date } = useT();
+  const [list, setList] = useState([]);
+  const [open, setOpen] = useState(false);
+  const [f, setF] = useState({ what: "", where: "", urgent: null, files: [] });
+  const [busy, setBusy] = useState(false);
+
+  const load = async () => {
+    try {
+      const r = await window.storage.get("baydo:tenant-repairs");
+      const all = r?.value ? JSON.parse(r.value) : [];
+      setList(all.filter((x) => x.unit === session.unit));
+    } catch { setList([]); }
+  };
+  useEffect(() => { load(); }, []);
+
+  const submit = async () => {
+    setBusy(true);
+    const rec = { id: "r" + Date.now().toString(36), unit: session.unit,
+                  what: f.what, where: f.where, urgent: f.urgent === true,
+                  photos: f.files.map((x) => x.name), state: "new",
+                  createdAt: new Date().toISOString() };
+    try {
+      const r = await window.storage.get("baydo:tenant-repairs");
+      const all = r?.value ? JSON.parse(r.value) : [];
+      await window.storage.set("baydo:tenant-repairs", JSON.stringify([...all, rec]));
+    } catch {}
+    setF({ what: "", where: "", urgent: null, files: [] });
+    setOpen(false); setBusy(false); load();
+  };
+
+  return (
+    <div style={{ marginTop: 20 }}>
+      <div className="bt-rowhead">
+        <h3>{t("repairs.title")}</h3>
+        {!open && <button className="bt-btn bt-btn--sm" onClick={() => setOpen(true)}>{t("repairs.new")}</button>}
+      </div>
+
+      {open && (
+        <div className="bt-panel">
+          <div className="bt-f">
+            <label>{t("repairs.urgentQ")}</label>
+            <div className="bt-opts">
+              <button className={f.urgent === true ? "on" : ""} onClick={() => setF({ ...f, urgent: true })}>
+                {t("repairs.urgentYes")}
+              </button>
+              <button className={f.urgent === false ? "on" : ""} onClick={() => setF({ ...f, urgent: false })}>
+                {t("repairs.urgentNo")}
+              </button>
+            </div>
+          </div>
+
+          {/* Asked first, and answered first. A leak should not wait in a queue. */}
+          {f.urgent === true && (
+            <div className="bt-note" style={{ margin: "0 0 16px" }}>
+              <p>{t("repairs.urgentCall", { phone: OFFICE_PHONE })}</p>
+              <a className="bt-btn bt-btn--sm" href={`tel:${OFFICE_PHONE}`}>{OFFICE_PHONE}</a>
+            </div>
+          )}
+
+          {f.urgent !== null && (
+            <>
+              <div className="bt-f">
+                <label>{t("repairs.what")}</label>
+                <textarea className="bt-ta" value={f.what} onChange={(e) => setF({ ...f, what: e.target.value })} />
+              </div>
+              <div className="bt-f">
+                <label>{t("repairs.where")}</label>
+                <input className="bt-in" value={f.where} onChange={(e) => setF({ ...f, where: e.target.value })} />
+              </div>
+              <div className="bt-f">
+                <label>{t("repairs.photos")}</label>
+                <input className="bt-in" type="file" accept="image/*" multiple
+                       onChange={(e) => setF({ ...f, files: Array.from(e.target.files || []) })} />
+              </div>
+              <p className="bt-hint">{t("repairs.entryConsent")}</p>
+              <div style={{ display: "flex", gap: 8, marginTop: 14 }}>
+                <button className="bt-btn" disabled={!f.what.trim() || busy} onClick={submit}>
+                  {t("repairs.submit")}
+                </button>
+                <button className="bt-btn bt-btn--ghost" onClick={() => setOpen(false)}>{t("common.close")}</button>
+              </div>
+            </>
+          )}
+        </div>
+      )}
+
+      {list.length === 0 ? <p className="bt-empty">{t("repairs.none")}</p> : (
+        <div className="bt-list">
+          {list.slice().reverse().map((r) => (
+            <div className="bt-item" key={r.id}>
+              <div className="bt-item-h">
+                <span className="bt-tag" style={{ "--c": STATE_COLOR[r.state] }}>{t(STATE_KEY[r.state])}</span>
+                {r.urgent && <span className="bt-tag" style={{ "--c": "#B23A54" }}>{t("repairs.rush")}</span>}
+                <span className="bt-dim">{date(r.createdAt)}</span>
+              </div>
+              <p>{r.what}</p>
+              {r.where && <div className="bt-dim">{r.where}</div>}
+              {r.scheduledAt && <div className="bt-dim">{t("repairs.scheduledFor", { date: date(r.scheduledAt) })}</div>}
+            </div>
+          ))}
+        </div>
+      )}
+    </div>
+  );
+}
+
+/* ---------- notices ---------- */
+function Notices({ session }) {
+  const { t, date } = useT();
+  const [list, setList] = useState([]);
+  useEffect(() => {
+    (async () => {
+      try {
+        const r = await window.storage.get("baydo:entrynotices");
+        const all = r?.value ? JSON.parse(r.value) : [];
+        setList(all.filter((n) => n.unitId === session.unit && n.state === "sent"));
+      } catch { setList([]); }
+    })();
+  }, [session.unit]);
+
+  if (!list.length) return <p className="bt-empty" style={{ marginTop: 20 }}>{t("notices.none")}</p>;
+
+  return (
+    <div className="bt-list" style={{ marginTop: 20 }}>
+      {list.map((n) => {
+        const [from, to] = (n.window || "").split("–");
+        return (
+          <div className="bt-item" key={n.id}>
+            <div className="bt-item-h">
+              <span className="bt-tag" style={{ "--c": "#1C6FA6" }}>{t("notices.entry")}</span>
+              <span className="bt-dim">{date(n.sentAt)}</span>
+            </div>
+            <p>{t("notices.entryBody", { date: date(n.entry_date || n.date),
+                 from: from || "—", to: to || "—", reason: n.purpose })}</p>
+            <div className="bt-dim">{t("notices.entryReschedule")}</div>
+          </div>
+        );
+      })}
+    </div>
+  );
+}
+
+/* ---------- rent ---------- */
+function Rent({ session }) {
+  const { t, money } = useT();
+  return (
+    <div style={{ marginTop: 20 }}>
+      <h3>{t("rent.title")}</h3>
+      <div className="bt-price" style={{ marginBottom: 4 }}>
+        <strong>{money(session.rent)}</strong><em>{t("suites.perMonth")}</em>
+      </div>
+      <p className="bt-dim">{t("rent.dueOn", { day: 1 })}</p>
+      {/* Payments live in the accounting system. Recording them here as well
+          would create a second version of the truth about money. */}
+      <a className="bt-btn" href="#" onClick={(e) => e.preventDefault()}>{t("rent.payLink")}</a>
+      <p className="bt-hint" style={{ marginTop: 10 }}>{t("rent.external")}</p>
+    </div>
+  );
+}
+
+/* ---------- documents ---------- */
+function Docs() {
+  const { t } = useT();
+  const docs = [
+    { k: "docs.lease" }, { k: "docs.inspection" }, { k: "docs.receipt" },
+  ];
+  return (
+    <div className="bt-list" style={{ marginTop: 20 }}>
+      {docs.map((d) => (
+        <div className="bt-item bt-item--row" key={d.k}>
+          <span>{t(d.k)}</span>
+          <button className="bt-btn bt-btn--ghost bt-btn--sm">{t("docs.download")}</button>
+        </div>
+      ))}
+    </div>
+  );
+}
+
+const PORTAL_CSS = `
+.bt-portal-h{display:flex;justify-content:space-between;align-items:flex-start;gap:16px;flex-wrap:wrap}
+.bt-portal-h h2{margin:0}
+.bt-ptabs{display:flex;gap:2px;flex-wrap:wrap;border-bottom:1px solid var(--rule);margin-top:18px}
+.bt-ptabs button{font:inherit;font-size:14px;font-weight:600;cursor:pointer;background:none;border:0;
+  padding:11px 14px;color:var(--dim);border-bottom:2px solid transparent;margin-bottom:-1px}
+.bt-ptabs button.on{color:var(--ink);border-bottom-color:var(--ink)}
+.bt-rowhead{display:flex;justify-content:space-between;align-items:center;gap:12px;margin-bottom:14px}
+.bt-rowhead h3{font-family:'Archivo',sans-serif;font-size:18px;margin:0}
+.bt-panel{border:1px solid var(--rule);border-radius:10px;padding:18px;margin-bottom:18px;background:#fff}
+.bt-list{display:flex;flex-direction:column;gap:10px}
+.bt-item{border:1px solid var(--rule);border-radius:10px;padding:14px 16px;background:#fff}
+.bt-item--row{display:flex;justify-content:space-between;align-items:center;gap:12px}
+.bt-item-h{display:flex;align-items:center;gap:8px;flex-wrap:wrap;margin-bottom:6px}
+.bt-item p{margin:0 0 4px;font-size:14.5px;line-height:1.6}
+.bt-tag{font-size:11px;font-weight:700;color:#fff;background:var(--c);border-radius:10px;padding:2px 9px}
+`;

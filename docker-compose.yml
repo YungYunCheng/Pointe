@@ -47,6 +47,7 @@ services:
         condition: service_healthy
     networks: [baydo]
 
+  # Staff tools. Internal use, so it is not the site on the public domain.
   web:
     build:
       context: ./web
@@ -57,6 +58,20 @@ services:
     restart: unless-stopped
     ports:
       - "${WEB_PORT:-8080}:80"
+    depends_on:
+      - api
+    networks: [baydo]
+
+  # Public site: listings, viewings, applications, and the tenant portal.
+  tenant:
+    build:
+      context: ./tenant
+      args:
+        VITE_API_URL: ""
+    container_name: baydo-tenant
+    restart: unless-stopped
+    ports:
+      - "${TENANT_PORT:-8081}:80"
     depends_on:
       - api
     networks: [baydo]

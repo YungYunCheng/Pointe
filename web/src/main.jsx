@@ -24,7 +24,6 @@ const Documents       = lazy(() => import("./tools/Documents.jsx"));
 const Operations      = lazy(() => import("./tools/Operations.jsx"));
 const BuildingManager = lazy(() => import("./tools/BuildingManager.jsx"));
 const AuditLog        = lazy(() => import("./tools/AuditLog.jsx"));
-const TenantChat      = lazy(() => import("./tools/TenantChat.jsx"));
 
 const ALL = "admin property_manager building_manager".split(" ");
 const TOOLS = [
@@ -76,10 +75,6 @@ function Shell() {
 
   if (session === undefined)
     return <div className="sh-load">Loading…</div>;
-
-  // The tenant chat is public; everything else needs a session.
-  if (loc.pathname === "/chat")
-    return <Suspense fallback={<div className="sh-load">Loading…</div>}><TenantChat /></Suspense>;
 
   if (!session)
     return <Suspense fallback={<div className="sh-load">Loading…</div>}><AuthConsole /></Suspense>;

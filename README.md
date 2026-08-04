@@ -8,12 +8,18 @@ Leasing management for 370 / 374 / 378 Clareview Station Drive NW, Edmonton, AB 
 ## Layout
 
 ```
-web/        Vite app: eleven tools behind one shell   → container 1
-server/     Express API: permissions, audit, locks    → container 2
-infra/      Postgres init, reverse proxy config       → container 3
+web/        Staff tools: ten tools behind one shell    → container
+tenant/     Public site and tenant portal, bilingual  → container
+server/     Express API: permissions, audit, locks    → container
+infra/      Postgres init, reverse proxy config       → container
 docs/       ERD, schema, architecture notes
 data/       Unit inventory spreadsheet
 ```
+
+Two front ends, deliberately separate. The staff tools are internal and English
+only; the tenant site is public, bilingual, and indexed. Keeping them apart means
+a mistake in one cannot expose the other, and the public site can be cached hard
+without touching the staff session.
 
 ---
 
@@ -25,7 +31,10 @@ openssl rand -base64 32          # paste into POSTGRES_PASSWORD
 docker compose up -d --build
 ```
 
-Open http://localhost:8080 and sign in as `admin@themizar.ca`.
+| | |
+|---|---|
+| Staff tools | http://localhost:8080 — sign in as `admin@themizar.ca` |
+| Tenant site | http://localhost:8081 |
 
 Development, with both servers reloading on save:
 
