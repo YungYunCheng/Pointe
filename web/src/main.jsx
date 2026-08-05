@@ -1,6 +1,7 @@
 import React, { useState, useEffect, Suspense, lazy } from "react";
 import { createRoot } from "react-dom/client";
 import { BrowserRouter, Routes, Route, NavLink, Navigate, useLocation } from "react-router-dom";
+import { applyTheme, ROLE_THEME, MizarMark, BRAND_CSS, roleColor } from "./lib/theme.jsx";
 
 /* ============================================================
    Entry point and shell
@@ -26,6 +27,8 @@ const BuildingManager = lazy(() => import("./tools/BuildingManager.jsx"));
 const AuditLog        = lazy(() => import("./tools/AuditLog.jsx"));
 const Accounting      = lazy(() => import("./tools/Accounting.jsx"));
 const Agreements      = lazy(() => import("./tools/Agreements.jsx"));
+const Portfolio       = lazy(() => import("./tools/Portfolio.jsx"));
+const AdminConsole    = lazy(() => import("./tools/AdminConsole.jsx"));
 
 const ALL = "admin property_manager building_manager accounting".split(" ");
 const LEASING = ["admin", "property_manager", "building_manager"];
@@ -39,21 +42,29 @@ const TOOLS = [
   { path: "/operations",  label: "Operations",  el: Operations,      roles: ["admin", "property_manager"] },
   { path: "/agreements",  label: "Agreements",  el: Agreements,      roles: LEASING },
   { path: "/documents",   label: "Documents",   el: Documents,       roles: LEASING },
+  { path: "/portfolio",   label: "Portfolio",   el: Portfolio,       roles: ["admin", "property_manager", "building_manager"] },
   { path: "/accounting",  label: "Accounting",  el: Accounting,      roles: ["admin", "accounting", "property_manager"] },
   { path: "/audit",       label: "Audit",       el: AuditLog,        roles: ["admin"] },
+  { path: "/admin",       label: "Admin",       el: AdminConsole,    roles: ["admin"] },
 ];
 
-const ROLE_LABEL = {
-  admin: "Admin",
-  property_manager: "Property Manager",
-  building_manager: "Building Manager",
-  accounting: "Accounting",
-};
-const ROLE_COLOR = { admin: "#131C25", property_manager: "#1C6FA6",
-                     building_manager: "#7C5CBF", accounting: "#0E8577" };
+/* Labels and colours come from the theme, so there is one place a role is
+   described rather than four that can drift apart. */
+const ROLE_LABEL = Object.fromEntries(
+  Object.entries(ROLE_THEME).map(([k, v]) => [k, v.label]));
+const ROLE_COLOR = Object.fromEntries(
+  Object.entries(ROLE_THEME).map(([k, v]) => [k, v.ink]));
 
 function useSession() {
   const [session, setSession] = useState(undefined);   // undefined = still loading
+
+  /* The whole shell recolours on sign-in. With four people sharing a screen
+     and one of them able to post to the ledger, whose session this is should
+     be answerable at a glance rather than by reading. */
+  useEffect(() => {
+    if (session === undefined) return;
+    applyTheme(session?.role ?? "admin");
+  }, [session?.role]);
 
   useEffect(() => {
     let alive = true;
@@ -127,7 +138,8 @@ function Shell() {
 const CSS = `
 @import url('https://fonts.googleapis.com/css2?family=IBM+Plex+Sans:wght@400;500;600;700&family=Archivo:wght@700;800&display=swap');
 *{box-sizing:border-box}
-body{margin:0;font-family:'IBM Plex Sans',system-ui,sans-serif;background:#E9EDF0;color:#131C25}
+body{margin:0;font-family:'IBM Plex Sans',system-ui,sans-serif;
+  background:var(--ground);color:var(--ink)}
 .sh{min-height:100vh;display:flex;flex-direction:column}
 .sh-load{padding:80px 20px;text-align:center;color:#78899A;font-size:14px}
 .sh-nav{display:flex;align-items:center;gap:20px;flex-wrap:wrap;padding:0 20px;background:#fff;
@@ -139,9 +151,9 @@ body{margin:0;font-family:'IBM Plex Sans',system-ui,sans-serif;background:#E9EDF
 .sh-links a{font-size:13.5px;font-weight:600;color:#78899A;text-decoration:none;padding:16px 13px;
   border-bottom:2px solid transparent;margin-bottom:-1px;white-space:nowrap}
 .sh-links a:hover{color:#131C25}
-.sh-links a.on{color:#131C25;border-bottom-color:#131C25}
+.sh-links a.on{color:var(--brand);border-bottom-color:var(--brand);font-weight:700}
 .sh-who{display:flex;align-items:center;gap:8px;flex:0 0 auto;padding:12px 0}
-.sh-chip{font-size:10.5px;font-weight:700;color:#fff;border-radius:9px;padding:2px 9px;white-space:nowrap}
+.sh-chip{font-size:10.5px;font-weight:700;color:#fff;background:var(--brand);border-radius:9px;padding:3px 10px;letter-spacing:.01em;transition:background .35s ease}
 .sh-name{font-size:13px;font-weight:600}
 .sh-main{flex:1}
 @media (max-width:720px){

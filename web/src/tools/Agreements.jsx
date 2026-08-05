@@ -1012,7 +1012,7 @@ function PrepareSignature({ agreements, session, onCancel, onCreate }) {
 const CSS = `
 @import url('https://fonts.googleapis.com/css2?family=IBM+Plex+Sans:wght@400;500;600;700&family=IBM+Plex+Mono:wght@400;500&family=Archivo:wght@700;800&display=swap');
 .ag{--ink:#131C25;--ink2:#3E4C5A;--dim:#78899A;--paper:#fff;--ground:#E9EDF0;--rule:#D3DBE1;
-  --amber:#FFF6E0;--amberline:#E8C877;--red:#B23A54;--green:#0E8577;--accent:#1C6FA6;
+  --amber:#FFF6E0;--amberline:#E8C877;--red:#B23A54;--green:#0E8577;--accent:var(--brand,#2A6183);
   background:var(--ground);color:var(--ink);min-height:100vh;font-size:14px;line-height:1.55;
   font-family:'IBM Plex Sans',system-ui,sans-serif;padding-bottom:40px}
 .ag *{box-sizing:border-box}
@@ -1036,7 +1036,7 @@ const CSS = `
 .ag-tabs button{font:inherit;font-weight:600;font-size:13.5px;cursor:pointer;background:none;
   border:0;padding:12px 16px;color:var(--dim);border-bottom:2px solid transparent;
   margin-bottom:-1px;display:flex;align-items:center;gap:6px}
-.ag-tabs button.on{color:var(--ink);border-bottom-color:var(--ink)}
+.ag-tabs button.on{color:var(--ink);border-bottom-color:var(--brand,var(--ink))}
 .ag-tabs i{font-style:normal;font-family:'IBM Plex Mono',monospace;font-size:10px;
   background:var(--dim);color:#fff;border-radius:8px;padding:1px 6px}
 
@@ -1111,8 +1111,8 @@ const CSS = `
 .ag-in--sm{padding:5px 8px;font-size:12px;width:auto}
 .ag-in:focus{outline:2px solid var(--accent);outline-offset:1px}
 
-.ag-btn{font:inherit;font-weight:600;font-size:13px;cursor:pointer;background:var(--ink);
-  color:#fff;border:1px solid var(--ink);padding:8px 15px;border-radius:3px}
+.ag-btn{font:inherit;font-weight:600;font-size:13px;cursor:pointer;background:var(--brand,var(--ink));
+  color:#fff;border:1px solid var(--brand,var(--ink));padding:8px 15px;border-radius:3px}
 .ag-btn:hover:not(:disabled){background:#000}
 .ag-btn:disabled{opacity:.4;cursor:not-allowed}
 .ag-btn--ghost{background:transparent;color:var(--ink2);border-color:var(--rule)}
@@ -1129,7 +1129,7 @@ const CSS = `
 .ag-seg button{font:inherit;font-size:13px;font-weight:600;cursor:pointer;background:var(--paper);
   border:0;border-right:1px solid var(--rule);padding:8px 16px;color:var(--dim)}
 .ag-seg button:last-child{border-right:0}
-.ag-seg button.on{background:var(--ink);color:#fff}
+.ag-seg button.on{background:var(--brand,var(--ink));color:#fff}
 
 .ag-issues{display:flex;flex-direction:column;gap:10px}
 .ag-issue{background:var(--paper);border:1px solid var(--rule);border-radius:4px;

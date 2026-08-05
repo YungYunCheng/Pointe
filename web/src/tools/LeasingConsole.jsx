@@ -1074,7 +1074,7 @@ const CSS = `
   --ink:#131C25; --ink2:#3E4C5A; --dim:#78899A;
   --paper:#FFFFFF; --ground:#E9EDF0; --rule:#D3DBE1;
   --amber:#FFF6E0; --amberline:#E8C877; --red:#B23A54; --green:#0E8577;
-  --accent:#1C6FA6;
+  --accent:var(--brand,#2A6183);
   background:var(--ground); color:var(--ink); min-height:100vh;
   font-family:'IBM Plex Sans','PingFang TC','Microsoft JhengHei',system-ui,sans-serif;
   font-size:14px; line-height:1.55; padding:0 0 64px;
@@ -1126,7 +1126,7 @@ const CSS = `
 .bp-tabs button{font:inherit; font-weight:600; font-size:13.5px; cursor:pointer; background:none; border:0;
   padding:12px 18px; color:var(--dim); border-bottom:2px solid transparent; margin-bottom:-1px;
   display:flex; align-items:center; gap:6px}
-.bp-tabs button.on{color:var(--ink); border-bottom-color:var(--ink)}
+.bp-tabs button.on{color:var(--ink); border-bottom-color:var(--brand,var(--ink))}
 .bp-badge{font-style:normal; font-family:'IBM Plex Mono',monospace; font-size:10px; background:var(--red);
   color:#fff; border-radius:8px; padding:1px 6px}
 .bp-user{display:flex;align-items:center;gap:8px}

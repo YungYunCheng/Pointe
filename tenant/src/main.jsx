@@ -364,8 +364,11 @@ body{margin:0;background:#fff;color:#131C25;
   font-family:'IBM Plex Sans','PingFang TC','Microsoft JhengHei',system-ui,sans-serif;
   font-size:15px;line-height:1.6;-webkit-font-smoothing:antialiased}
 a{color:inherit}
-.bt{--ink:#131C25;--ink2:#3E4C5A;--dim:#78899A;--rule:#DFE5EA;--tint:#F4F7F9;
-  --accent:#1C6FA6;--green:#0E8577;--warn:#B23A54;--amber:#FFF6E0;--amberline:#E8C877;
+/* Mizar steel blue leads, Baydo gold accents. The public site is the property's
+   face, so it carries the marks rather than the role colours — a prospective
+   tenant has no role. */
+.bt{--ink:#1B3358;--ink2:#3E4C5A;--dim:#78899A;--rule:#DFE5EA;--tint:#F4F7F9;
+  --accent:#2A6183;--gold:#E9B21F;--violet:#574A9E;--green:#0E8577;--warn:#B23A54;--amber:#FFF6E0;--amberline:#E8C877;
   min-height:100vh;display:flex;flex-direction:column}
 .bt main{flex:1}
 .bt-loading{padding:80px 20px;text-align:center;color:var(--dim)}

@@ -442,7 +442,7 @@ function ConfirmActual({ po, session, onCancel, onSave }) {
 
 const CSS = `
 .po{--ink:#131C25;--ink2:#3E4C5A;--dim:#78899A;--paper:#fff;--rule:#D3DBE1;
-  --amber:#FFF6E0;--amberline:#E8C877;--red:#B23A54;--green:#0E8577;--accent:#1C6FA6;
+  --amber:#FFF6E0;--amberline:#E8C877;--red:#B23A54;--green:#0E8577;--accent:var(--brand,#2A6183);
   display:flex;flex-direction:column;gap:12px;font-size:14px}
 .po *{box-sizing:border-box}
 .po-mono{font-family:'IBM Plex Mono',monospace;font-variant-numeric:tabular-nums}
@@ -457,7 +457,7 @@ const CSS = `
   border:0;border-right:1px solid var(--rule);padding:8px 15px;color:var(--dim);
   display:flex;align-items:center;gap:6px}
 .po-seg button:last-child{border-right:0}
-.po-seg button.on{background:var(--ink);color:#fff}
+.po-seg button.on{background:var(--brand,var(--ink));color:#fff}
 .po-seg i{font-style:normal;font-family:'IBM Plex Mono',monospace;font-size:10px;
   background:var(--red);color:#fff;border-radius:8px;padding:1px 6px}
 
@@ -532,8 +532,8 @@ const CSS = `
 .po-tally-v{font-weight:700;border-top:1px solid var(--rule);padding-top:5px}
 .po-tally em{font-style:normal;font-size:11px}
 
-.po-btn{font:inherit;font-weight:600;font-size:13px;cursor:pointer;background:var(--ink);
-  color:#fff;border:1px solid var(--ink);padding:8px 15px;border-radius:3px}
+.po-btn{font:inherit;font-weight:600;font-size:13px;cursor:pointer;background:var(--brand,var(--ink));
+  color:#fff;border:1px solid var(--brand,var(--ink));padding:8px 15px;border-radius:3px}
 .po-btn:hover:not(:disabled){background:#000}
 .po-btn:disabled{opacity:.4;cursor:not-allowed}
 .po-btn--ghost{background:transparent;color:var(--ink2);border-color:var(--rule)}

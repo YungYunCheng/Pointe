@@ -570,7 +570,7 @@ function checkNumbers(draft, allowed) {
 const CSS = `
 @import url('https://fonts.googleapis.com/css2?family=IBM+Plex+Sans:wght@400;500;600;700&family=IBM+Plex+Mono:wght@400;500;600&family=Archivo:wght@700;800&display=swap');
 .ai-root{--ink:#131C25;--ink2:#3E4C5A;--dim:#78899A;--paper:#fff;--ground:#E9EDF0;--rule:#D3DBE1;
-  --amber:#FFF6E0;--amberline:#E8C877;--red:#B23A54;--accent:#1C6FA6;
+  --amber:#FFF6E0;--amberline:#E8C877;--red:#B23A54;--accent:var(--brand,#2A6183);
   background:var(--ground);color:var(--ink);min-height:100vh;font-size:14px;line-height:1.55;
   font-family:'IBM Plex Sans','PingFang TC','Microsoft JhengHei',system-ui,sans-serif;padding-bottom:48px}
 .ai-root *{box-sizing:border-box}
@@ -586,8 +586,8 @@ const CSS = `
   letter-spacing:-.02em;margin:4px 0 0}
 .ai-head h1 span{font-weight:700;font-size:16px;color:var(--dim);margin-left:6px}
 .ai-headr{display:flex;gap:10px}
-.ai-btn{font:inherit;font-weight:600;font-size:13px;cursor:pointer;background:var(--ink);color:#fff;
-  border:1px solid var(--ink);padding:8px 16px;border-radius:3px}
+.ai-btn{font:inherit;font-weight:600;font-size:13px;cursor:pointer;background:var(--brand,var(--ink));color:#fff;
+  border:1px solid var(--brand,var(--ink));padding:8px 16px;border-radius:3px}
 .ai-btn:hover:not(:disabled){background:#000}
 .ai-btn:disabled{opacity:.4;cursor:not-allowed}
 .ai-btn--ghost{background:transparent;color:var(--ink2);border-color:var(--rule)}
