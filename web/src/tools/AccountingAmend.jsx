@@ -1,4 +1,5 @@
 import React, { useState, useMemo } from "react";
+import { ai } from "../lib/ai.js";
 
 /* ============================================================
    Amendments, the change log, and the deposit interest rate
@@ -461,34 +462,7 @@ export function ChangeLog({ amendments, entries, save, canPost }) {
   const writeNarrative = async (row) => {
     setBusy(row.id); setErr("");
     try {
-      const res = await fetch("https://api.anthropic.com/v1/messages", {
-        method: "POST", headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          model: "claude-sonnet-4-6", max_tokens: 300,
-          messages: [{ role: "user", content:
-`Describe one accounting change in a single plain sentence, for a change log a bookkeeper will read.
-
-CHANGE
-What: ${row.summary}
-Record: ${row.entity} ${row.entity_id}
-By: ${row.by} at ${row.at}
-Reason given: ${row.reason ?? "(none recorded)"}
-Fields that moved: ${JSON.stringify(row.changed ?? [], null, 2)}
-
-Rules:
-1. State what changed and by how much, using the exact figures above.
-2. Never introduce a number that is not above.
-3. Include the recorded reason. If none was recorded, say so rather than inventing one.
-4. One sentence. No preamble, and no judgement about whether it was correct.
-
-Example of the register: "Invoice 4471 from Northgate Plumbing amended from $682.50 to $745.00 and moved from repairs to elevator maintenance, because the original was coded to the wrong account."
-
-Write the sentence only.` }],
-        }),
-      });
-      const data = await res.json();
-      const text = (data.content || []).filter((c) => c.type === "text")
-        .map((c) => c.text).join("").trim();
+      const text = await ai(taskName, taskInput, taskRef);
       if (text) save.amendments(amendments.map((a) => a.id === row.id
         ? { ...a, narrative: text, narrative_model: "claude-sonnet-4-6" } : a));
     } catch {
@@ -591,30 +565,7 @@ export function InterestRates({ rates, proposals, save, canPost, session }) {
   const research = async () => {
     setBusy(true); setErr("");
     try {
-      const res = await fetch("https://api.anthropic.com/v1/messages", {
-        method: "POST", headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          model: "claude-sonnet-4-6", max_tokens: 1000,
-          tools: [{ type: "web_search_20250305", name: "web_search" }],
-          messages: [{ role: "user", content:
-`Find the security deposit interest rate for ${year} in Alberta, Canada.
-
-Under the Residential Tenancies Act, a landlord holding a security deposit must pay interest at the rate set by the Security Deposit Interest Rate Regulation. The rate is prescribed annually.
-
-Rules:
-1. If you are not certain of the published figure for ${year}, say so and set confidence to "unverified". A confident wrong rate makes every deposit refund wrong, and it is not discovered until a tenant moves out.
-2. Do not interpolate from other years and do not estimate. Either you have the published figure or you do not.
-3. Give the rate as a decimal: 0.02 for 2%, 0.0 for zero.
-4. This rate has been set at zero for a long stretch of recent years. If that is what you find, report zero plainly rather than treating it as an error.
-5. Name a source a person can check.
-
-Reply with JSON only, no markdown:
-{"year":${year},"rate":0.0,"confidence":"high|low|unverified","source_text":"what the source says","source_url":"where to verify","reasoning":"one or two sentences, including what a person should confirm"}` }],
-        }),
-      });
-      const data = await res.json();
-      const text = (data.content || []).filter((c) => c.type === "text")
-        .map((c) => c.text).join("").trim();
+      const text = await ai(taskName, taskInput, taskRef);
       const json = JSON.parse(text.replace(/```json|```/g, "").trim());
       save.proposals([{ id: uid("irp_"), ...json, state: "proposed",
         model: "claude-sonnet-4-6", created_at: new Date().toISOString() }, ...proposals]);

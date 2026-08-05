@@ -36,8 +36,18 @@ services:
       NODE_ENV: production
       PORT: 4000
       DATABASE_URL: postgres://${POSTGRES_USER:-baydo}:${POSTGRES_PASSWORD}@db:5432/${POSTGRES_DB:-baydo}
-      CORS_ORIGINS: ${PUBLIC_URL:-http://localhost:8080}
+      CORS_ORIGINS: ${PUBLIC_URL:-http://localhost:8080},${PUBLIC_TENANT_URL:-http://localhost:8081}
       SESSION_HOURS: ${SESSION_HOURS:-12}
+      PUBLIC_URL: ${PUBLIC_URL:-http://localhost:8080}
+      PUBLIC_TENANT_URL: ${PUBLIC_TENANT_URL:-http://localhost:8081}
+      # Held here, never sent to the browser.
+      ANTHROPIC_API_KEY: ${ANTHROPIC_API_KEY:-}
+      RESEND_API_KEY: ${RESEND_API_KEY:-}
+      FROM_EMAIL: ${FROM_EMAIL:-noreply@themizar.ca}
+      FROM_NAME: ${FROM_NAME:-Baydo Pointe}
+      TWILIO_ACCOUNT_SID: ${TWILIO_ACCOUNT_SID:-}
+      TWILIO_AUTH_TOKEN: ${TWILIO_AUTH_TOKEN:-}
+      TWILIO_FROM: ${TWILIO_FROM:-}
     volumes:
       # Evidence files and backups. Losing this volume loses the proof behind
       # every deposit deduction, so it belongs in your backup routine.

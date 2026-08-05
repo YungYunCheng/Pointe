@@ -1,6 +1,7 @@
 import React, { useState, useEffect, useMemo, useCallback } from "react";
 import Banking from "./AccountingBanking.jsx";
 import { AmendDialog, VersionHistory, ChangeLog, InterestRates } from "./AccountingAmend.jsx";
+import { ai } from "../lib/ai.js";
 
 /* ============================================================
    BAYDO POINTE — Accounting
@@ -1469,36 +1470,9 @@ function Reports({ reports, periods, entries, charges, receipts, coa, save, canP
   const writeNarrative = async (rep) => {
     setBusy(rep.id); setErr("");
     try {
-      const res = await fetch("https://api.anthropic.com/v1/messages", {
-        method: "POST", headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          model: "claude-sonnet-4-6", max_tokens: 1000,
-          messages: [{ role: "user", content:
-`You write the commentary on a monthly property report for building ${rep.building_code} at Baydo Pointe, a residential rental in Edmonton, Alberta.
-
-The figures below were computed from posted, reconciled ledger entries. They are final.
-
-FIGURES
-${JSON.stringify(rep.figures, null, 2)}
-
-HOW EACH FIGURE WAS DERIVED
-${rep.method}
-
-Rules:
-1. Never recalculate, adjust or round anything. Quote the figures exactly as given.
-2. Never introduce a number that is not in the figures above.
-3. Say what the numbers show and what is worth attention. Do not speculate about causes you cannot see in the data.
-4. If arrears or collection moved in a direction worth noticing, say so plainly.
-5. No recommendations about rent levels, and nothing about individual tenants.
-6. Four short paragraphs at most. Plain English, no jargon, no bullet points.
-7. End with one sentence naming the single thing most worth looking at next month.
-
-Write the commentary only. No heading, no preamble, no markdown.` }],
-        }),
-      });
-      const data = await res.json();
-      const text = (data.content || []).filter((c) => c.type === "text")
-        .map((c) => c.text).join("").trim();
+      const text = await ai("report_narrative",
+        { building: rep.building_code, figures: rep.figures, method: rep.method },
+        { ref_type: "monthly_report", ref_id: rep.id });
       save.reports(reports.map((r) => r.id === rep.id
         ? { ...r, narrative: text || null, state: text ? "review" : r.state,
             model: "claude-sonnet-4-6" } : r));

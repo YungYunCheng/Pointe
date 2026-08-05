@@ -12,6 +12,9 @@ import workflowRoutes from "./routes/workflow.js";
 import adminRoutes from "./routes/admin.js";
 import accountingRoutes from "./routes/accounting.js";
 import opsRoutes from "./routes/ops.js";
+import crmRoutes from "./routes/crm.js";
+import aiRoutes from "./routes/ai.js";
+import tenantRoutes from "./routes/tenant.js";
 import { startBackupJob, startDailyJobs } from "./jobs.js";
 import { startAccountingJobs } from "./jobs-accounting.js";
 import { ensureSeed } from "./seed.js";
@@ -51,6 +54,9 @@ app.use("/api", workflowRoutes);
 app.use("/api/admin", adminRoutes);
 app.use("/api/accounting", accountingRoutes);
 app.use("/api", opsRoutes);
+app.use("/api", crmRoutes);
+app.use("/api", tenantRoutes);
+app.use("/api", aiRoutes);
 
 app.use("/api", (req, res) => res.status(404).json({ code: "NO_SUCH_ENDPOINT" }));
 

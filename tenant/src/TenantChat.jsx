@@ -1,4 +1,5 @@
 import React, { useState, useEffect, useRef, useCallback } from "react";
+import { publicAi } from "./lib/ai.js";
 
 /* ============================================================
    BAYDO POINTE — tenant chat widget
@@ -229,33 +230,10 @@ export default function TenantChat() {
     // 2. Otherwise answer from the property data
     setBusy(true);
     try {
-      const res = await fetch("https://api.anthropic.com/v1/messages", {
-        method: "POST", headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          model: "claude-sonnet-4-6", max_tokens: 1000,
-          messages: [{ role: "user", content:
-`You answer questions from prospective tenants on the Baydo Pointe website. Below is the live property data. It is your only source of facts.
-
-${factSheet()}
-
-Recent conversation:
-${msgs.slice(-6).map((m) => `${m.role === "tenant" ? "Tenant" : "You"}: ${m.text}`).join("\n")}
-Tenant: ${body}
-
-Rules:
-1. Every number, date and unit reference must appear in the data above. Never calculate, estimate or fill a gap.
-2. If something is marked "not set" or is absent, say you will check and come back to them. Do not invent it.
-3. Never promise to hold a unit, negotiate, quote lease terms, or answer questions about who qualifies.
-4. Never state a rent or fee that is not in the data.
-5. Reply in ${detected === "zh" ? "Traditional Chinese" : "English"}, matching the tenant.
-6. Two or three sentences. Warm and direct, not salesy. No greeting boilerplate.
-7. If you cannot answer from the data, say so plainly and offer to pass it to a colleague.
-
-Reply with the message text only. No preamble, no markdown.` }],
-        }),
-      });
-      const data = await res.json();
-      const reply = (data.content || []).filter((c) => c.type === "text").map((c) => c.text).join("").trim();
+      const reply = await publicAi({ facts: factSheet(), message: body,
+        history: msgs.slice(-6).map((m) => `${m.role === "tenant" ? "Tenant" : "You"}: ${m.text}`).join("
+"),
+        language: detected });
       if (reply) push({ role: "bot", text: reply, auto: true });
       else { push({ role: "bot", text: tt.offlineErr }); }
     } catch (e) {

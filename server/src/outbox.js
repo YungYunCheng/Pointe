@@ -98,20 +98,109 @@ export function confirmationFor(refType, refId) {
 }
 
 /* ---------- Delivery ----------
-   The provider is not wired. Until it is, messages queue and the worker
-   marks them for review rather than pretending they went out — a silent
-   success here would be worse than an obvious failure. */
+   Two providers, both over plain HTTP so nothing extra has to be installed.
+   Without keys the queue holds and says so, rather than reporting a send
+   that did not happen — a silent success here is worse than an obvious
+   failure, because a notice of entry that never arrived looks identical to
+   one that did. */
+
+const FROM_EMAIL = process.env.FROM_EMAIL || "noreply@themizar.ca";
+const FROM_NAME = process.env.FROM_NAME || "Baydo Pointe";
+
+async function sendEmail({ to, name, subject, body }) {
+  const key = process.env.RESEND_API_KEY;
+  if (!key) throw new Error("EMAIL_NOT_CONFIGURED");
+  const res = await fetch("https://api.resend.com/emails", {
+    method: "POST",
+    headers: { Authorization: `Bearer ${key}`, "Content-Type": "application/json" },
+    body: JSON.stringify({
+      from: `${FROM_NAME} <${FROM_EMAIL}>`,
+      to: [name ? `${name} <${to}>` : to],
+      subject: subject || "A message from Baydo Pointe",
+      text: body,
+    }),
+  });
+  if (!res.ok) throw new Error(`EMAIL_${res.status}: ${(await res.text()).slice(0, 200)}`);
+  return (await res.json())?.id ?? null;
+}
+
+async function sendSms({ to, body }) {
+  const sid = process.env.TWILIO_ACCOUNT_SID;
+  const token = process.env.TWILIO_AUTH_TOKEN;
+  const from = process.env.TWILIO_FROM;
+  if (!sid || !token || !from) throw new Error("SMS_NOT_CONFIGURED");
+
+  // Long messages split into several billable segments. Truncating with a
+  // pointer back is cheaper and reads better than three fragments arriving
+  // out of order.
+  const text = body.length > 300 ? `${body.slice(0, 280)}… (see your email for the rest)` : body;
+  const res = await fetch(`https://api.twilio.com/2010-04-01/Accounts/${sid}/Messages.json`, {
+    method: "POST",
+    headers: { Authorization: `Basic ${Buffer.from(`${sid}:${token}`).toString("base64")}`,
+               "Content-Type": "application/x-www-form-urlencoded" },
+    body: new URLSearchParams({ To: to, From: from, Body: text }),
+  });
+  if (!res.ok) throw new Error(`SMS_${res.status}: ${(await res.text()).slice(0, 200)}`);
+  return (await res.json())?.sid ?? null;
+}
+
+export function providerStatus() {
+  return {
+    email: !!process.env.RESEND_API_KEY,
+    sms: !!(process.env.TWILIO_ACCOUNT_SID && process.env.TWILIO_AUTH_TOKEN
+            && process.env.TWILIO_FROM),
+  };
+}
 
 export async function deliver(row) {
-  const hasProvider = !!process.env.EMAIL_PROVIDER_KEY;
-  if (!hasProvider) {
-    db.prepare(`UPDATE outbox SET attempts = attempts + 1,
-      last_error = 'No delivery provider configured' WHERE id = ?`).run(row.id);
+  const want = row.channel;
+  const status = providerStatus();
+  const results = [];
+  let anySent = false, lastError = null;
+
+  const tryEmail = (want === "email" || want === "both") && row.to_email;
+  const trySms = (want === "sms" || want === "both") && row.to_phone;
+
+  if (tryEmail) {
+    if (!status.email) lastError = "Email provider not configured";
+    else {
+      try {
+        const id = await sendEmail({ to: row.to_email, name: row.to_name,
+                                     subject: row.subject, body: row.body });
+        results.push(`email:${id ?? "ok"}`); anySent = true;
+      } catch (e) { lastError = e.message; }
+    }
+  }
+
+  if (trySms) {
+    if (!status.sms) lastError = lastError ?? "SMS provider not configured";
+    else {
+      try {
+        const id = await sendSms({ to: row.to_phone, body: row.body });
+        results.push(`sms:${id ?? "ok"}`); anySent = true;
+      } catch (e) { lastError = e.message; }
+    }
+  }
+
+  if (!tryEmail && !trySms) {
+    db.prepare(`UPDATE outbox SET state='failed', attempts=attempts+1,
+      last_error='No usable address for the requested channel' WHERE id=?`).run(row.id);
     return false;
   }
-  // TODO: send through the provider, then record its id so a bounce can be traced.
-  db.prepare("UPDATE outbox SET state='sent', sent_at=? WHERE id=?").run(nowISO(), row.id);
-  return true;
+
+  // "Both" counts as delivered if either arrived. The tenant got the message;
+  // the failure is recorded so the gap in one channel is still visible.
+  if (anySent) {
+    db.prepare(`UPDATE outbox SET state='sent', sent_at=?, provider_id=?,
+      attempts=attempts+1, last_error=? WHERE id=?`)
+      .run(nowISO(), results.join(","), lastError, row.id);
+    return true;
+  }
+
+  const attempts = row.attempts + 1;
+  db.prepare(`UPDATE outbox SET attempts=?, last_error=?, state=? WHERE id=?`)
+    .run(attempts, lastError, attempts >= 5 ? "failed" : "queued", row.id);
+  return false;
 }
 
 export async function drainOutbox(limit = 50) {

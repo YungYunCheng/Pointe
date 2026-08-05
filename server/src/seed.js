@@ -1,6 +1,7 @@
 import { db, uid, hashPassword } from "./db.js";
 import { syncRbac } from "./rbac.js";
 import { seedAccounting } from "./seed-accounting.js";
+import { backfillNormalised } from "./screening.js";
 
 const BUILDINGS = [
   ["370", "Baydo Pointe 370", "370 Clareview Station Drive NW, Edmonton, AB", 6, 118],
@@ -53,6 +54,10 @@ const HOLIDAYS = [
 export function ensureSeed() {
   syncRbac();
   seedAccounting();
+  // Contacts created before duplicate detection existed have no normalised
+  // columns, and the checks scan those rather than the raw strings.
+  const filled = backfillNormalised();
+  if (filled) console.log(`[seed] normalised ${filled} contact(s)`);
 
   const insB = db.prepare(`INSERT OR IGNORE INTO buildings (id, code, name, address, storeys, unit_count)
                            VALUES (?,?,?,?,?,?)`);

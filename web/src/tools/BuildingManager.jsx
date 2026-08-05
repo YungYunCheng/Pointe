@@ -1,4 +1,5 @@
 import React, { useState, useEffect, useMemo, useCallback } from "react";
+import { ai } from "../lib/ai.js";
 
 /* ============================================================
    BAYDO POINTE — Building Manager console
@@ -232,35 +233,21 @@ export default function BuildingManager() {
     const startH = item.ev.time;
     const [hh, mm] = startH.split(":").map(Number);
     const endH = `${String(hh + 1).padStart(2, "0")}:${String(mm).padStart(2, "0")}`;
-    const prompt = `You manage residential property in Alberta, Canada. Write a notice of entry for a tenant who still lives in the unit.
-Purpose: a showing. The tenant has given notice and the unit is being re-let.
-
-Facts. Use only these, add nothing:
-- Unit: ${item.ev.unit}${t ? ` (${t}, ${BED[t]})` : ""}
-- Tenant: ${item.tenant?.tenant || "the tenant"}
-- Date of entry: ${item.ev.date}
-- Time window: ${startH} to ${endH}
-- Purpose: a showing, accompanied by property staff
-- Notice issued: ${new Date().toISOString().slice(0, 16).replace("T", " ")}
-
-Requirements:
-1. Write it twice, English first then Traditional Chinese, with identical content. This goes to a tenant, so both languages are required.
-2. State the date, the time window, the purpose and who will accompany.
-3. Polite and brief. No sales language, and do not ask the tenant to tidy up.
-4. Say the tenant can reply to arrange a different time if this one is difficult.
-5. Do not cite or claim any statute or section number.
-6. No filler beyond a heading. Keep the whole thing under 200 words across both languages.
-
-Output the notice text only, with no commentary and no markdown.`;
+    // Facts only. The prompt lives on the server, where it can be reviewed and
+    // changed once rather than being whatever version this browser last loaded.
+    const aiInput = {
+      unit: item.ev.unit,
+      layout: t ? `${t}, ${BED[t]}` : null,
+      tenant: item.tenant?.tenant || "",
+      date: item.ev.date,
+      from: startH,
+      to: endH,
+      purpose: "a showing — the tenant has given notice and the unit is being re-let",
+      issued: new Date().toISOString().slice(0, 16).replace("T", " "),
+    };
 
     try {
-      const res = await fetch("https://api.anthropic.com/v1/messages", {
-        method: "POST", headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ model: "claude-sonnet-4-6", max_tokens: 1000,
-                               messages: [{ role: "user", content: prompt }] }),
-      });
-      const data = await res.json();
-      const text = (data.content || []).filter((c) => c.type === "text").map((c) => c.text).join("").trim();
+      const text = await ai("entry_notice", aiInput, { ref_type: "event", ref_id: item.ev.id });
       const rec = { id: uid("nt_"), eventId: item.ev.id, unitId: item.ev.unit,
                     tenant: item.tenant?.tenant || "", contact: item.tenant?.email || item.tenant?.phone || "",
                     date: item.ev.date, window: `${startH}–${endH}`, text,

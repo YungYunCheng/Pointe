@@ -1,4 +1,5 @@
 import React, { useState, useEffect, useMemo, useCallback } from "react";
+import { ai } from "../lib/ai.js";
 
 /* ============================================================
    BAYDO POINTE — Document templates, AI field filling and approval
@@ -205,32 +206,8 @@ export default function DocLibrary() {
     if (!text) return;
     setBusy(true);
     try {
-      const res = await fetch("https://api.anthropic.com/v1/messages", {
-        method: "POST", headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          model: "claude-sonnet-4-6", max_tokens: 2000,
-          messages: [{ role: "user", content:
-`Below is a document template used for residential rentals in Alberta. Find every blank that needs filling and decide where each value should come from.
-
-Document type: ${KINDS[d.kind]}
-Template:
-"""
-${text.slice(0, 12000)}
-"""
-
-There are three sources:
-- backend: pulled from property data (rent, deposit, fees, parking area, unit size, address)
-- tenant: collected from the tenant (names, start date, term, number of occupants, emergency contact)
-- staff: needs human judgement (special conditions, exceptions, signature dates)
-
-Important: never mark a field as one to ask the tenant if it touches a protected ground — household composition, marital status, nationality, religion, age, income, employment or credit. If the template contains such a field, set source to staff and note in the note field that it needs legal review.
-
-Output a JSON array only, no markdown:
-[{"key":"snake_case_identifier","label":"Human label","source":"backend|tenant|staff","type":"text|number|date|select","note":"A caution where relevant, or null"}]` }],
-        }),
-      });
-      const data = await res.json();
-      const raw = (data.content || []).filter((c) => c.type === "text").map((c) => c.text).join("");
+      const raw = await ai("template_fields", { kind: KINDS[d.kind], body: text },
+        { ref_type: "template", ref_id: d.id });
       const fields = JSON.parse(raw.replace(/```json|```/g, "").trim());
       patchDoc(d.id, { fields });
       flash(`${fields.length} field(s) proposed. Check the source on each one.`);
@@ -244,30 +221,9 @@ Output a JSON array only, no markdown:
     const target = FORMAT_FOR[targetRole];
     try {
       const body = bodies[doc.id];
-      const res = await fetch("https://api.anthropic.com/v1/messages", {
-        method: "POST", headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          model: "claude-sonnet-4-6", max_tokens: 4000,
-          messages: [{ role: "user", content:
-`Restructure this document for ${target.label}, which is ${target.why}.
-
-DOCUMENT
-${body ?? "(no content)"}
-
-Rules:
-1. Do not change any clause, figure, date or name. This is a formatting task, not an editing one.
-2. Keep every {{field}} marker exactly as written. They are filled by the system later.
-3. For PDF: clean headings, numbered clauses, a signature block at the end.
-4. For plain text: no markup, short lines, readable on a phone.
-5. For CSV: one row per line item, with a header row. Only if the document actually contains tabular figures — if it does not, say so instead of inventing a table.
-6. If the document is already in a suitable shape, say so rather than rewriting it.
-
-Output the restructured content only, with no commentary.` }],
-        }),
-      });
-      const data = await res.json();
-      const text = (data.content || []).filter((c) => c.type === "text")
-        .map((c) => c.text).join("").trim();
+      const text = await ai("document_convert",
+        { target: target.label, why: target.why, body: body ?? "" },
+        { ref_type: "template", ref_id: doc.id });
       if (text) {
         await persist(`baydo:docbody:${doc.id}:${targetRole}`, text);
         setBodies((b) => ({ ...b, [`${doc.id}:${targetRole}`]: text }));

@@ -1,4 +1,5 @@
 import React, { useState, useEffect, useMemo, useCallback } from "react";
+import { ai } from "../lib/ai.js";
 
 /* ============================================================
    BAYDO POINTE — Lease assembly and approval
@@ -263,13 +264,10 @@ Output JSON only, no markdown:
 {"extracted":{"field":"value"},"next_question":"the next question, or null","done":false}`;
 
     try {
-      const res = await fetch("https://api.anthropic.com/v1/messages", {
-        method: "POST", headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ model: "claude-sonnet-4-6", max_tokens: 1000,
-                               messages: [{ role: "user", content: prompt }] }),
-      });
-      const data = await res.json();
-      const raw = (data.content || []).filter((c) => c.type === "text").map((c) => c.text).join("");
+      const raw = await ai("intake_question",
+        { fields: ASK_VARS.map((x) => `- ${x.k} (${x.label})`).join("\n"),
+          known: JSON.stringify(vals), reply: reply || "" },
+        { ref_type: "intake", ref_id: unitId });
       const out = JSON.parse(raw.replace(/```json|```/g, "").trim());
 
       if (out.extracted) {

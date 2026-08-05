@@ -1,4 +1,5 @@
 import React, { useState, useEffect, useMemo, useCallback } from "react";
+import { ai } from "../lib/ai.js";
 
 /* ============================================================
    BAYDO POINTE — Pricing and parking console v2
@@ -837,24 +838,8 @@ function ParkingAdvisor({ parking, poolStats, totals, waitlist }) {
     ].join("\n");
 
     try {
-      const res = await fetch("https://api.anthropic.com/v1/messages", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          model: "claude-sonnet-4-6",
-          max_tokens: 1000,
-          messages: [{
-            role: "user",
-            content:
-              `You advise a residential property manager in Alberta, Canada. Here is the current parking position:\n\n${state}\n\n` +
-              `Question: ${question}\n\n` +
-              `Answer in English, concretely and briefly (under 150 words), with advice tied to these actual numbers. ` +
-              `Where a rule or regulation is involved, say it should be confirmed with their manager or a RECA advisor rather than stating a legal conclusion.`,
-          }],
-        }),
-      });
-      const data = await res.json();
-      const text = (data.content || []).filter((c) => c.type === "text").map((c) => c.text).join("\n");
+      const text = await ai("parking_advice", { state, question },
+        { ref_type: "parking", ref_id: null });
       setAnswer(text || "No response came back. Try again.");
     } catch (e) {
       setErr("The request failed. Try again shortly.");

@@ -1,4 +1,5 @@
 import React, { useState, useEffect, useMemo, useCallback } from "react";
+import { ai } from "../lib/ai.js";
 
 /* ============================================================
    BAYDO POINTE — AI reply review console
@@ -170,17 +171,10 @@ export default function AIInbox() {
 
     // 2 and 4. Classify, then draft.
     try {
-      const res = await fetch("https://api.anthropic.com/v1/messages", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          model: "claude-sonnet-4-6",
-          max_tokens: 1000,
-          messages: [{ role: "user", content: buildPrompt(m, facts) }],
-        }),
-      });
-      const data = await res.json();
-      const raw = (data.content || []).filter((c) => c.type === "text").map((c) => c.text).join("");
+      const raw = await ai("inbox_draft",
+        { facts, message: m.body, channel: m.channel,
+          intents: Object.keys(INTENT_RULES) },
+        { ref_type: "message", ref_id: m.id });
       const parsed = JSON.parse(raw.replace(/```json|```/g, "").trim());
 
       const rule = INTENT_RULES[parsed.intent] || INTENT_RULES.other;
