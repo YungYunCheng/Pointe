@@ -48,6 +48,16 @@ const FIELD_SOURCES = {
 const uid = (p) => p + Date.now().toString(36) + Math.random().toString(36).slice(2, 5);
 const now = () => new Date().toISOString().slice(0, 16).replace("T", " ");
 
+/* What each role needs a document as. Asking someone to convert a file by hand
+   because the next step wants a different format is the kind of small friction
+   that gets skipped, and then the file that reaches the tenant is the wrong one. */
+const FORMAT_FOR = {
+  admin:            { label: "PDF", why: "the version that gets filed and signed" },
+  property_manager: { label: "PDF", why: "goes to the tenant to sign" },
+  building_manager: { label: "Plain text", why: "read on a phone in a corridor" },
+  accounting:       { label: "CSV", why: "figures that go into the ledger" },
+};
+
 /* ---------- Derive the unit type and layout from the unit number ---------- */
 const BED = { "1A": "1 bed", "1A (M)": "1 bed", "1B": "1 bed + den", "1C": "1 bed",
               "2A": "2 bed 2 bath", "2A (M)": "2 bed 2 bath", "3A": "2 bed + den", "3A (M)": "2 bed + den" };
@@ -183,7 +193,13 @@ export default function DocLibrary() {
     saveDocs([...docs, d]); setSel(d.id);
   };
 
-  /* ---------- AI proposes the field list ---------- */
+  /* ---------- AI conversion ----------
+   Restructures content into the shape a target format needs. It does not
+   produce a PDF: making one in the browser is a guess, and a wrong guess in a
+   document somebody signs is worse than an extra step. What it does is prepare
+   the content so the converter has something clean to work from.            */
+
+/* ---------- AI proposes the field list ---------- */
   const aiFields = async (d) => {
     const text = bodies[d.id];
     if (!text) return;
@@ -220,6 +236,47 @@ Output a JSON array only, no markdown:
       flash(`${fields.length} field(s) proposed. Check the source on each one.`);
     } catch (e) { flash("The AI service did not respond. Add the fields by hand."); }
     setBusy(false);
+  };
+
+  /* ---------- Conversion ---------- */
+  const convertFor = async (doc, targetRole) => {
+    setBusy("convert:" + doc.id);
+    const target = FORMAT_FOR[targetRole];
+    try {
+      const body = bodies[doc.id];
+      const res = await fetch("https://api.anthropic.com/v1/messages", {
+        method: "POST", headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          model: "claude-sonnet-4-6", max_tokens: 4000,
+          messages: [{ role: "user", content:
+`Restructure this document for ${target.label}, which is ${target.why}.
+
+DOCUMENT
+${body ?? "(no content)"}
+
+Rules:
+1. Do not change any clause, figure, date or name. This is a formatting task, not an editing one.
+2. Keep every {{field}} marker exactly as written. They are filled by the system later.
+3. For PDF: clean headings, numbered clauses, a signature block at the end.
+4. For plain text: no markup, short lines, readable on a phone.
+5. For CSV: one row per line item, with a header row. Only if the document actually contains tabular figures — if it does not, say so instead of inventing a table.
+6. If the document is already in a suitable shape, say so rather than rewriting it.
+
+Output the restructured content only, with no commentary.` }],
+        }),
+      });
+      const data = await res.json();
+      const text = (data.content || []).filter((c) => c.type === "text")
+        .map((c) => c.text).join("").trim();
+      if (text) {
+        await persist(`baydo:docbody:${doc.id}:${targetRole}`, text);
+        setBodies((b) => ({ ...b, [`${doc.id}:${targetRole}`]: text }));
+        flash(`Prepared for ${target.label}. Check it before it goes anywhere.`);
+      }
+    } catch {
+      flash("The AI service did not respond. The original is unchanged.");
+    }
+    setBusy(null);
   };
 
   /* ---------- Create a document instance ---------- */
@@ -993,6 +1050,10 @@ const CSS = `
   border-bottom:1px solid var(--rule);padding:11px 18px;display:flex;align-items:center;gap:10px}
 .dl-grouph h2{font-size:14px}
 .dl-gcaret{color:var(--dim);font-size:11px}
+.dl-convert{border:1px solid var(--rule);border-radius:3px;padding:12px 14px;
+  display:flex;flex-direction:column;gap:7px;background:#FCFDFE}
+.dl-convertbtns{display:flex;gap:6px;flex-wrap:wrap}
+.dl-convertbtns em{font-style:normal;color:var(--dim);font-size:11px}
 .dl-newdot{font-size:10.5px;font-weight:700;color:#fff;background:var(--red);border-radius:9px;
   padding:1px 8px;margin-left:auto}
 .dl-cards{display:flex;flex-direction:column;gap:1px;background:var(--rule)}

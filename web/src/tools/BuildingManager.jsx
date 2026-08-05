@@ -10,6 +10,12 @@ import React, { useState, useEffect, useMemo, useCallback } from "react";
    ============================================================ */
 
 const NOTICE_HOURS = 24;          // notice of entry lead time
+const REMINDER_HOURS = 24;        // second message, closer to the time
+
+/* When a tenant will and will not accept access. A refusal is recorded as
+   carefully as availability: entering during a window the tenant excluded is
+   what turns a repair into a complaint. */
+const WEEKDAYS = ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"];
 /* Showings and key handovers occupy the manager's time. Vendor visits do not,
       but they still appear on the schedule so the manager knows someone is coming. */
 const DUR = { showing: 30, keys: 30, maintenance: 60 };
@@ -89,6 +95,8 @@ export default function BuildingManager() {
   const [maint, setMaint] = useState(seedMaint);
   const [keys, setKeys] = useState(seedKeys);
   const [notices, setNotices] = useState([]);
+  const [windows, setWindows] = useState([]);
+  const [reminders, setReminders] = useState([]);
   const [loading, setLoading] = useState(true);
   const [saveState, setSaveState] = useState("idle");
   const [tab, setTab] = useState("maint");
@@ -109,6 +117,8 @@ export default function BuildingManager() {
       const mt = await read("baydo:maintenance"); if (mt) setMaint(mt);
       const kh = await read("baydo:keyhandover"); if (kh) setKeys(kh);
       const nt = await read("baydo:entrynotices"); if (nt) setNotices(nt);
+      const ew = await read("baydo:entrywindows"); if (ew) setWindows(ew);
+      const rm = await read("baydo:entryreminders"); if (rm) setReminders(rm);
       setLoading(false);
     })();
   }, []);
@@ -125,6 +135,42 @@ export default function BuildingManager() {
   const saveMaint = (v) => { setMaint(v); persist("baydo:maintenance", v); };
   const saveKeys = (v) => { setKeys(v); persist("baydo:keyhandover", v); };
   const saveNotices = (v) => { setNotices(v); persist("baydo:entrynotices", v); };
+  const saveWindows = (v) => { setWindows(v); persist("baydo:entrywindows", v); };
+  const saveReminders = (v) => { setReminders(v); persist("baydo:entryreminders", v); };
+
+  /* The notice is the legal step and goes out first. A reminder follows closer
+     to the time, because a notice read four days ago is not the same as knowing
+     somebody is at the door this afternoon — and the tenant may not be home. */
+  const scheduleReminder = async (notice, channel) => {
+    const entryAt = new Date(`${notice.date}T${(notice.window ?? "09:00–10:00").split("–")[0]}:00`);
+    const remindAt = new Date(entryAt.getTime() - REMINDER_HOURS * 3600e3);
+    const body = [
+      `Reminder: we will be entering ${notice.unitId} on ${notice.date}, ${notice.window}.`,
+      "You do not need to be home. If the time no longer works, reply and we will arrange another.",
+      "",
+      `提醒：我們將於 ${notice.date} ${notice.window} 進入 ${notice.unitId}。`,
+      "你不需要在家。如果這個時間不方便，回覆我們可以另約。",
+    ].join("\n");
+
+    const rec = { id: uid("rm_"), notice_id: notice.id, unit: notice.unitId,
+      channel, body, remind_at: remindAt.toISOString(), entry_at: entryAt.toISOString(),
+      state: remindAt <= new Date() ? "due" : "scheduled",
+      confirm_state: "sent", created_at: nowISO(), by: who };
+    saveReminders([rec, ...reminders]);
+
+    let queue = [];
+    try {
+      const r = await window.storage.get("baydo:outbox");
+      if (r?.value) queue = JSON.parse(r.value);
+    } catch (e) {}
+    try {
+      await window.storage.set("baydo:outbox", JSON.stringify([{
+        id: uid("ob_"), kind: "entry_reminder", channel, to: notice.contact,
+        to_name: notice.tenant, body, ref_type: "entry_notice", ref_id: notice.id,
+        required_by: remindAt.toISOString(), state: "queued", created_at: nowISO() },
+        ...queue]));
+    } catch (e) {}
+  };
 
   /* ---------- Conflicts: only showings and key handovers occupy time ---------- */
   const booked = useMemo(() => {
@@ -409,6 +455,14 @@ Output the notice text only, with no commentary and no markdown.`;
             );
           })}
 
+          {noticeNeeded.length > 0 && (
+            <section className="bm-card">
+              <EntryWindows unit={noticeNeeded[0].ev.unit} windows={windows}
+                onAdd={(w) => saveWindows([...windows, w])}
+                onRemove={(id) => saveWindows(windows.filter((x) => x.id !== id))} />
+            </section>
+          )}
+
           {notices.filter((n) => n.state === "sent").length > 0 && (
             <section className="bm-card">
               <h2>Notices sent <span className="bm-n">{notices.filter((n) => n.state === "sent").length}</span></h2>
@@ -420,6 +474,23 @@ Output the notice text only, with no commentary and no markdown.`;
                     <span className="bm-dim">{n.date} {n.window}</span>
                     <span className="bm-dim">{n.tenant}</span>
                     <span className="bm-dim bm-mono bm-right">{fmt(n.sentAt)} · {n.sentBy}</span>
+                    {(() => {
+                      const rm = reminders.find((r) => r.notice_id === n.id);
+                      if (rm) return (
+                        <span className="bm-dim">
+                          Reminder {rm.channel === "both" ? "email and text"
+                            : rm.channel === "sms" ? "text" : "email"} · {fmt(rm.remind_at)}
+                        </span>
+                      );
+                      return (
+                        <span className="bm-remind">
+                          <button className="bm-btn bm-btn--xs bm-btn--ghost"
+                                  onClick={() => scheduleReminder(n, "email")}>Remind by email</button>
+                          <button className="bm-btn bm-btn--xs bm-btn--ghost"
+                                  onClick={() => scheduleReminder(n, "both")}>Email and text</button>
+                        </span>
+                      );
+                    })()}
                   </div>
                 ))}
               </div>
@@ -469,6 +540,77 @@ Output the notice text only, with no commentary and no markdown.`;
 }
 
 /* ============================ Sub-components ============================ */
+
+/** The tenant's own availability. Advisory rather than enforced: a landlord
+ *  keeps a right of entry on proper notice, and an emergency does not wait for
+ *  a convenient slot. But going ahead over a stated objection should be a
+ *  decision somebody makes on purpose, not something the calendar does quietly. */
+function EntryWindows({ unit, windows, onAdd, onRemove }) {
+  const [kind, setKind] = useState("blocked");
+  const [weekday, setWeekday] = useState(1);
+  const [from, setFrom] = useState("09:00");
+  const [to, setTo] = useState("17:00");
+  const [reason, setReason] = useState("");
+
+  const mine = windows.filter((w) => w.unit_number === unit);
+  const blocked = mine.filter((w) => w.kind === "blocked");
+  const available = mine.filter((w) => w.kind === "available");
+
+  return (
+    <div className="bm-windows">
+      <div className="bm-noteh">When we can enter {unit}</div>
+      <p className="bm-dim">
+        Set by the tenant, or by you after speaking to them. Times marked as not
+        suitable still allow entry on proper notice, but going ahead anyway is a
+        decision rather than an accident.
+      </p>
+
+      {available.length > 0 && (
+        <div className="bm-wlist">
+          <span className="bm-wlabel bm-wlabel--ok">Suits the tenant</span>
+          {available.map((w) => (
+            <span className="bm-window" key={w.id}>
+              {w.specific_date ?? WEEKDAYS[w.weekday]} {w.from_time}–{w.to_time}
+              <button className="bm-x" onClick={() => onRemove(w.id)}>×</button>
+            </span>
+          ))}
+        </div>
+      )}
+      {blocked.length > 0 && (
+        <div className="bm-wlist">
+          <span className="bm-wlabel bm-wlabel--no">Not suitable</span>
+          {blocked.map((w) => (
+            <span className="bm-window bm-window--no" key={w.id} title={w.reason ?? ""}>
+              {w.specific_date ?? WEEKDAYS[w.weekday]} {w.from_time}–{w.to_time}
+              <button className="bm-x" onClick={() => onRemove(w.id)}>×</button>
+            </span>
+          ))}
+        </div>
+      )}
+      {mine.length === 0 && (
+        <div className="bm-dim">Nothing set. Any time inside office hours is assumed to work.</div>
+      )}
+
+      <div className="bm-wadd">
+        <select className="bm-sel" value={kind} onChange={(e) => setKind(e.target.value)}>
+          <option value="blocked">Not suitable</option>
+          <option value="available">Suits the tenant</option>
+        </select>
+        <select className="bm-sel" value={weekday} onChange={(e) => setWeekday(Number(e.target.value))}>
+          {WEEKDAYS.map((d, i) => <option key={d} value={i}>{d}</option>)}
+        </select>
+        <input className="bm-in" type="time" value={from} onChange={(e) => setFrom(e.target.value)} />
+        <input className="bm-in" type="time" value={to} onChange={(e) => setTo(e.target.value)} />
+        <input className="bm-in" value={reason} placeholder="Reason (optional)"
+               onChange={(e) => setReason(e.target.value)} />
+        <button className="bm-btn bm-btn--xs"
+                onClick={() => { onAdd({ id: uid("ew_"), unit_number: unit, kind, weekday,
+                  from_time: from, to_time: to, reason, set_by: "staff" });
+                  setReason(""); }}>Add</button>
+      </div>
+    </div>
+  );
+}
 
 function NewMaint({ onAdd, onCancel }) {
   const [f, setF] = useState({ unitId: "", tenant: "", phone: "", category: MAINT_CATEGORIES[0],
@@ -805,6 +947,20 @@ const CSS = `
 .bm-actions{display:flex;gap:9px;align-items:center;flex-wrap:wrap}
 
 .bm-foot{padding:4px 28px 0;color:var(--dim);font-size:11.5px;max-width:90ch;line-height:1.7}
+
+.bm-windows{display:flex;flex-direction:column;gap:8px}
+.bm-wlist{display:flex;gap:6px;flex-wrap:wrap;align-items:center}
+.bm-wlabel{font-size:10.5px;font-weight:700;letter-spacing:.05em;text-transform:uppercase;
+  font-family:'IBM Plex Mono',monospace}
+.bm-wlabel--ok{color:var(--green)}
+.bm-wlabel--no{color:var(--red)}
+.bm-window{font-size:12px;border:1px solid var(--green);color:var(--green);border-radius:12px;
+  padding:2px 4px 2px 10px;display:inline-flex;align-items:center;gap:2px}
+.bm-window--no{border-color:var(--red);color:var(--red)}
+.bm-wadd{display:flex;gap:6px;flex-wrap:wrap;align-items:center;border-top:1px solid var(--rule);
+  padding-top:9px}
+.bm-wadd .bm-in,.bm-wadd .bm-sel{width:auto;flex:0 1 auto;min-width:90px}
+.bm-remind{display:flex;gap:5px;flex-wrap:wrap}
 
 @media (max-width:720px){
   .bm-head,.bm-tabs,.bm-body,.bm-foot{padding-left:16px;padding-right:16px}

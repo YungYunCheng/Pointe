@@ -26,13 +26,27 @@ const ROLES = {
   admin:            { label: "Admin",            color: "#131C25" },
   property_manager: { label: "Property Manager", color: "#1C6FA6" },
   building_manager: { label: "Building Manager", color: "#7C5CBF" },
+  accounting:       { label: "Accounting",       color: "#0E8577" },
 };
 
+/* Every account carries both an email and a phone. An account reachable on one
+   channel is an account that gets locked out the day that channel fails. */
 const SEED_USERS = [
-  { email: "admin@themizar.ca",      full_name: "Admin",      role: "admin",            password: "Mizar@2026!" },
-  { email: "bowen.wang@themizar.ca", full_name: "Bowen Wang", role: "property_manager", password: "Agent@2026!" },
-  { email: "rentals@themizar.ca",    full_name: "Rentals",    role: "building_manager", password: "Rentals@2026!" },
+  { email: "admin@themizar.ca",      full_name: "Admin",      role: "admin",
+    phone: "306-974-1727", password: "Mizar@2026!" },
+  { email: "bowen.wang@themizar.ca", full_name: "Bowen Wang", role: "property_manager",
+    phone: "780-555-0101", password: "Agent@2026!" },
+  { email: "rentals@themizar.ca",    full_name: "Rentals",    role: "building_manager",
+    phone: "780-555-0102", password: "Rentals@2026!" },
+  { email: "invoice@themizar.ca",    full_name: "Accounting", role: "accounting",
+    phone: "780-555-0103", password: "Invoice@2026!" },
 ];
+
+/* Passwords expire twice a year: long enough not to be an irritation, short
+   enough that a credential leaked and unnoticed does not stay useful. */
+const PASSWORD_MAX_AGE_DAYS = 182;
+const PASSWORD_WARN_DAYS = 14;
+const PASSWORD_HISTORY = 5;
 
 /* ---------- Crypto (Web Crypto API) ---------- */
 const b64 = (buf) => btoa(String.fromCharCode(...new Uint8Array(buf)));
@@ -76,6 +90,8 @@ const PW_RULES = [
 const nowISO = () => new Date().toISOString();
 const addMin = (m) => new Date(Date.now() + m * 60000).toISOString();
 const fmt = (iso) => (iso ? iso.slice(0, 16).replace("T", " ") : "—");
+const addDays = (n) => new Date(Date.now() + n * 864e5).toISOString();
+const daysUntil = (iso) => (iso ? Math.ceil((new Date(iso) - Date.now()) / 864e5) : null);
 
 export default function AuthConsole() {
   const [users, setUsers] = useState([]);
@@ -117,8 +133,12 @@ export default function AuthConsole() {
           u.push({
             id: "usr_" + Math.random().toString(36).slice(2, 10),
             email: s.email.toLowerCase(), full_name: s.full_name, role: s.role,
+            phone: s.phone ?? null,
             password_algo: h.algo, password_iterations: h.iterations,
             password_salt: h.salt, password_hash: h.hash,
+            password_changed_at: nowISO(),
+            password_expires_at: addDays(PASSWORD_MAX_AGE_DAYS),
+            password_history: [],
             must_change_password: true, is_active: true,
             last_login_at: null, created_at: nowISO(), updated_at: nowISO(),
           });
@@ -165,11 +185,27 @@ export default function AuthConsole() {
 
     const a = { ...attempts }; delete a[key]; await saveAttempts(a);
     await saveUsers(users.map((x) => (x.id === u.id ? { ...x, last_login_at: nowISO() } : x)));
-    const s = { accountId: u.id, name: u.full_name, email: u.email, role: u.role, at: nowISO() };
+
+    // An expired password still signs in, but the session can do nothing until
+    // it is changed. Locking the account outright turns a routine expiry into
+    // a support call on a Monday morning.
+    const left = daysUntil(u.password_expires_at);
+    const expired = u.password_expires_at && new Date(u.password_expires_at) < new Date();
+
+    const s = { accountId: u.id, name: u.full_name, email: u.email, phone: u.phone,
+                role: u.role, at: nowISO(),
+                password_expires_at: u.password_expires_at,
+                password_expired: !!expired,
+                must_change_password: !!u.must_change_password || !!expired };
     setSession(s); await write(SESSION, s);
     setPw(""); setScreen("done"); setBusy(false);
-    if (u.must_change_password)
+
+    if (expired)
+      setInfo(`This password expired ${Math.abs(left)} days ago. Set a new one before carrying on.`);
+    else if (u.must_change_password)
       setInfo("This is still the initial password. Change it now using the reset flow.");
+    else if (left != null && left <= PASSWORD_WARN_DAYS)
+      setInfo(`This password expires in ${left} days.`);
   };
 
   /* ---------- Forgot password ---------- */
@@ -210,17 +246,29 @@ export default function AuthConsole() {
     if (await verifyPassword(newPw, u)) {
       setErr("The new password must be different from the current one."); setBusy(false); return;
     }
+    // Rotating between two passwords is not a rotation.
+    for (const old of (u.password_history ?? []).slice(0, PASSWORD_HISTORY)) {
+      if (await verifyPassword(newPw, { password_hash: old.hash, password_salt: old.salt,
+                                        password_iterations: old.iterations })) {
+        setErr(`That is one of your last ${PASSWORD_HISTORY} passwords. Choose one you have not used.`);
+        setBusy(false); return;
+      }
+    }
 
     const h = await hashPassword(newPw);
     await saveUsers(users.map((x) => (x.id === u.id ? {
       ...x, password_algo: h.algo, password_iterations: h.iterations,
       password_salt: h.salt, password_hash: h.hash,
+      password_changed_at: nowISO(), password_expires_at: addDays(PASSWORD_MAX_AGE_DAYS),
+      password_history: [{ hash: x.password_hash, salt: x.password_salt,
+                           iterations: x.password_iterations, at: nowISO() },
+                         ...(x.password_history ?? [])].slice(0, PASSWORD_HISTORY),
       must_change_password: false, updated_at: nowISO(),
     } : x)));
     await saveTokens(tokens.map((x) => (x.id === rec.id ? { ...x, used_at: nowISO() } : x)));
     const a = { ...attempts }; delete a[u.email]; await saveAttempts(a);
 
-    setInfo("Password updated. Sign in with the new one.");
+    setInfo(`Password updated. It is good for ${PASSWORD_MAX_AGE_DAYS} days.`);
     setToken(""); setNewPw(""); setNewPw2(""); setIssued(null);
     setScreen("login"); setBusy(false);
   };
@@ -263,8 +311,18 @@ export default function AuthConsole() {
                 <div>
                   <strong>{session.name}</strong>
                   <div className="au-dim">{session.email}</div>
+                  <div className="au-dim">{session.phone ?? "no phone on file"}</div>
                 </div>
               </div>
+
+              {session.password_expires_at && (
+                <div className={`au-pw ${session.password_expired ? "expired"
+                  : daysUntil(session.password_expires_at) <= PASSWORD_WARN_DAYS ? "warn" : ""}`}>
+                  {session.password_expired
+                    ? `Password expired ${Math.abs(daysUntil(session.password_expires_at))} days ago`
+                    : `Password expires ${fmt(session.password_expires_at).slice(0, 10)} · ${daysUntil(session.password_expires_at)} days`}
+                </div>
+              )}
               {info && <div className="au-info">{info}</div>}
               <p className="au-note">
                 Your session is saved. The other tools will show only what this role can access.
@@ -481,4 +539,9 @@ const CSS = `
 .au-warn{font-size:11.5px;color:#7A5D14;background:#FFF8E6;border:1px solid var(--amberline);
   border-radius:4px;padding:12px 14px;line-height:1.7}
 .au-warn strong{display:block;margin-bottom:3px}
+.au-pw{font-size:12px;color:var(--dim);border:1px solid var(--rule);border-radius:3px;
+  padding:7px 11px;font-family:'IBM Plex Mono',monospace}
+.au-pw.warn{color:#7A5D14;background:var(--amber);border-color:var(--amberline)}
+.au-pw.expired{color:var(--red);background:#FDF6F7;border-color:var(--red);font-weight:600}
+.au-contact{display:flex;gap:8px;flex-wrap:wrap;align-items:flex-end}
 `;

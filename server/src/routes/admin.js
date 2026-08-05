@@ -1,6 +1,7 @@
 import { Router } from "express";
 import fs from "node:fs";
 import path from "node:path";
+import crypto from "node:crypto";
 import { db, uid, nowISO, hashPassword, passwordIssues, BACKUP_DIR, DATA_DIR } from "../db.js";
 import { authenticate, require_, audit, ROLES, ROLE_PERMISSIONS, permissionsOf } from "../rbac.js";
 
@@ -21,6 +22,9 @@ r.get("/users", require_("users.manage"), (req, res) => {
 r.post("/users", require_("users.manage"), (req, res) => {
   const { email, full_name, role_code, password, phone, locale } = req.body ?? {};
   if (!email || !full_name || !role_code) return res.status(400).json({ code: "MISSING_USER_FIELDS" });
+  // A phone is required, not optional. An account reachable on one channel is
+  // an account that gets locked out the day that channel fails.
+  if (!phone?.trim()) return res.status(400).json({ code: "PHONE_REQUIRED" });
   if (!ROLES[role_code]) return res.status(400).json({ code: "UNKNOWN_ROLE" });
   const issues = passwordIssues(password);
   if (issues.length) return res.status(400).json({ code: "WEAK_PASSWORD", issues });
@@ -75,14 +79,86 @@ r.get("/permissions", (req, res) => {
 
 /* ================= Audit log (read only, no delete path) ================= */
 
+/** Search across the log. Free text matches the action, the record, the person
+ *  or anything inside the before and after values, which is where the useful
+ *  detail usually is. */
+function auditQuery({ q, from, to, action, entity_type, entity_id, actor, limit = 200 }) {
+  const args = {};
+  let sql = "SELECT * FROM audit_log WHERE 1=1";
+  if (from)        { sql += " AND date(created_at) >= @from"; args.from = from; }
+  if (to)          { sql += " AND date(created_at) <= @to"; args.to = to; }
+  if (action)      { sql += " AND action LIKE @action"; args.action = `${action}%`; }
+  if (entity_type) { sql += " AND entity_type = @entity_type"; args.entity_type = entity_type; }
+  if (entity_id)   { sql += " AND entity_id = @entity_id"; args.entity_id = entity_id; }
+  if (actor)       { sql += " AND (actor_user_id = @actor OR actor_name LIKE @actorLike)";
+                     args.actor = actor; args.actorLike = `%${actor}%`; }
+  if (q) {
+    sql += ` AND (action LIKE @q OR entity_type LIKE @q OR entity_id LIKE @q
+             OR actor_name LIKE @q OR before_value LIKE @q OR after_value LIKE @q
+             OR ip LIKE @q)`;
+    args.q = `%${q}%`;
+  }
+  sql += " ORDER BY id DESC LIMIT @limit";
+  args.limit = Math.min(Number(limit) || 200, 20000);
+  return db.prepare(sql).all(args);
+}
+
 r.get("/audit", require_("audit.view"), (req, res) => {
-  const { entity_type, entity_id, actor, limit = 200 } = req.query;
-  let sql = "SELECT * FROM audit_log WHERE 1=1", args = [];
-  if (entity_type) { sql += " AND entity_type = ?"; args.push(entity_type); }
-  if (entity_id)   { sql += " AND entity_id = ?";   args.push(entity_id); }
-  if (actor)       { sql += " AND actor_user_id = ?"; args.push(actor); }
-  sql += " ORDER BY id DESC LIMIT ?"; args.push(Math.min(Number(limit) || 200, 1000));
-  res.json({ entries: db.prepare(sql).all(...args) });
+  const rows = auditQuery(req.query);
+  const counts = db.prepare(`SELECT action, COUNT(*) n FROM audit_log
+    GROUP BY action ORDER BY n DESC LIMIT 40`).all();
+  const actors = db.prepare(`SELECT actor_name, COUNT(*) n FROM audit_log
+    WHERE actor_name IS NOT NULL GROUP BY actor_name ORDER BY n DESC LIMIT 20`).all();
+  const range = db.prepare(`SELECT MIN(date(created_at)) first, MAX(date(created_at)) last,
+    COUNT(*) total FROM audit_log`).get();
+  res.json({ entries: rows, count: rows.length, actions: counts, actors, range });
+});
+
+/** Export. The log is evidence, so taking a copy is itself an event: who took
+ *  it, covering what, and a hash of exactly what they received. */
+r.get("/audit/export", require_("audit.view"), (req, res) => {
+  const format = (req.query.format ?? "csv").toLowerCase();
+  const rows = auditQuery({ ...req.query, limit: req.query.limit ?? 20000 });
+
+  let body, mime, ext;
+  if (format === "json") {
+    body = JSON.stringify(rows.map((e) => ({ ...e,
+      before_value: e.before_value ? JSON.parse(e.before_value) : null,
+      after_value: e.after_value ? JSON.parse(e.after_value) : null })), null, 2);
+    mime = "application/json"; ext = "json";
+  } else {
+    const cell = (v) => {
+      if (v == null) return "";
+      const s = String(v);
+      return /[",\n]/.test(s) ? `"${s.replace(/"/g, '""')}"` : s;
+    };
+    const head = ["id", "created_at", "actor_name", "actor_user_id", "action",
+                  "entity_type", "entity_id", "before_value", "after_value", "ip"];
+    body = [head.join(","), ...rows.map((e) => head.map((h) => cell(e[h])).join(","))].join("\n");
+    mime = "text/csv"; ext = "csv";
+  }
+
+  const sha = crypto.createHash("sha256").update(body).digest("hex");
+  db.prepare(`INSERT INTO log_exports (id, from_date, to_date, query, format, row_count,
+    sha256, exported_by, exported_name) VALUES (?,?,?,?,?,?,?,?,?)`)
+    .run(uid("lx_"), req.query.from ?? null, req.query.to ?? null,
+         JSON.stringify({ q: req.query.q ?? null, action: req.query.action ?? null,
+                          actor: req.query.actor ?? null }),
+         ext, rows.length, sha, req.user.id, req.user.name);
+  audit(req, { action: "audit.export", entityType: "audit_log", entityId: null,
+               after: { rows: rows.length, from: req.query.from, to: req.query.to,
+                        format: ext, sha256: sha } });
+
+  const name = `baydo-audit-${req.query.from ?? "start"}-to-${req.query.to ?? "now"}.${ext}`;
+  res.setHeader("Content-Type", `${mime}; charset=utf-8`);
+  res.setHeader("Content-Disposition", `attachment; filename="${name}"`);
+  res.setHeader("X-Content-SHA256", sha);
+  res.send(body);
+});
+
+r.get("/audit/exports", require_("audit.view"), (req, res) => {
+  res.json({ exports: db.prepare("SELECT * FROM log_exports ORDER BY exported_at DESC LIMIT 100")
+                        .all() });
 });
 
 /* ================= Backup and restore ================= */

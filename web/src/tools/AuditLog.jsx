@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useRef, useCallback } from "react";
+import React, { useState, useEffect, useRef, useCallback, useMemo } from "react";
 
 /* ============================================================
    BAYDO POINTE — Change log and backups (Admin)
@@ -71,6 +71,11 @@ export default function AuditConsole() {
   const [status, setStatus] = useState("");
   const [filterKey, setFilterKey] = useState("all");
   const [openId, setOpenId] = useState(null);
+  const [q, setQ] = useState("");
+  const [from, setFrom] = useState("");
+  const [to, setTo] = useState("");
+  const [actor, setActor] = useState("");
+  const [exports, setExports] = useState([]);
   const [confirmRestore, setConfirmRestore] = useState(null);
   const [busy, setBusy] = useState(false);
   const lastState = useRef({});
@@ -172,6 +177,7 @@ export default function AuditConsole() {
       const l = await read(LOG_KEY); if (l) setLog(l);
       const b = await read(IDX_KEY);
       if (b) { setBackups(b); if (b[0]) lastSnapAt.current = new Date(b[0].at).getTime(); }
+      const x = await read("baydo:logexports"); if (x) setExports(x);
       lastState.current = await snapshotAll();
       setLoading(false);
     })();
@@ -195,7 +201,75 @@ export default function AuditConsole() {
     </div>
   );
 
-  const shown = filterKey === "all" ? log : log.filter((e) => e.key === filterKey);
+  /* Search runs across the action, the record, the person and the field values.
+     The useful detail is usually inside the before and after, not in the label. */
+  const shown = useMemo(() => {
+    const needle = q.trim().toLowerCase();
+    return log.filter((e) => {
+      if (filterKey !== "all" && e.key !== filterKey) return false;
+      const day = String(e.at).slice(0, 10);
+      if (from && day < from) return false;
+      if (to && day > to) return false;
+      if (actor && !String(e.actor ?? "").toLowerCase().includes(actor.toLowerCase())) return false;
+      if (!needle) return true;
+      const hay = [e.action, e.label, e.key, e.actor,
+        ...(e.changes ?? []).flatMap((c) => [c.path, String(c.before), String(c.after)])]
+        .filter(Boolean).join(" ").toLowerCase();
+      return hay.includes(needle);
+    });
+  }, [log, filterKey, q, from, to, actor]);
+
+  const actors = useMemo(
+    () => [...new Set(log.map((e) => e.actor).filter(Boolean))].sort(), [log]);
+
+  /* Taking a copy of the log is itself an event: who took it, covering what,
+     and a hash of exactly what they received. Without that, an export is a
+     file of unknown provenance. */
+  const exportLog = async (format) => {
+    const rows = shown;
+    let body, mime, ext;
+    if (format === "json") {
+      body = JSON.stringify(rows, null, 2);
+      mime = "application/json"; ext = "json";
+    } else {
+      const cell = (v) => {
+        if (v == null) return "";
+        const t = typeof v === "object" ? JSON.stringify(v) : String(v);
+        return /[",\n]/.test(t) ? `"${t.replace(/"/g, '""')}"` : t;
+      };
+      const head = ["at", "actor", "action", "record", "field", "before", "after"];
+      const lines = [head.join(",")];
+      for (const e of rows) {
+        if (!e.changes?.length) {
+          lines.push([e.at, e.actor, e.action, e.label, "", "", ""].map(cell).join(","));
+          continue;
+        }
+        for (const c of e.changes)
+          lines.push([e.at, e.actor, e.action, e.label, c.path, c.before, c.after]
+            .map(cell).join(","));
+      }
+      body = lines.join("\n"); mime = "text/csv"; ext = "csv";
+    }
+
+    const digest = await crypto.subtle.digest("SHA-256", new TextEncoder().encode(body));
+    const sha = [...new Uint8Array(digest)].map((b) => b.toString(16).padStart(2, "0")).join("");
+
+    const rec = { id: "lx_" + Date.now().toString(36), at: nowISO(),
+      by: session?.name ?? "unsigned", from: from || "start", to: to || "now",
+      query: q || null, actor: actor || null, format: ext, rows: rows.length,
+      sha256: sha };
+    const next = [rec, ...exports].slice(0, 100);
+    setExports(next);
+    try { await window.storage.set("baydo:logexports", JSON.stringify(next)); } catch (e) {}
+
+    const blob = new Blob([body], { type: `${mime};charset=utf-8` });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement("a");
+    a.href = url;
+    a.download = `baydo-audit-${from || "start"}-to-${to || "now"}.${ext}`;
+    a.click();
+    URL.revokeObjectURL(url);
+  };
 
   return (
     <div className="ad">
@@ -225,6 +299,9 @@ export default function AuditConsole() {
         <button className={tab === "backup" ? "on" : ""} onClick={() => setTab("backup")}>
           Backups <i>{backups.length}</i>
         </button>
+        <button className={tab === "exports" ? "on" : ""} onClick={() => setTab("exports")}>
+          Exports {exports.length > 0 && <i>{exports.length}</i>}
+        </button>
       </nav>
 
       <div className="ad-warn">
@@ -234,6 +311,49 @@ export default function AuditConsole() {
 
       {tab === "log" && (
         <div className="ad-body">
+          <section className="ad-search">
+            <div className="ad-searchrow">
+              <label className="ad-f" style={{ flex: "2 1 240px" }}>
+                <span>Search</span>
+                <input className="ad-in" value={q} placeholder="Account, amount, unit, field name…"
+                       onChange={(e) => setQ(e.target.value)} />
+              </label>
+              <label className="ad-f"><span>From</span>
+                <input className="ad-in" type="date" value={from}
+                       onChange={(e) => setFrom(e.target.value)} /></label>
+              <label className="ad-f"><span>To</span>
+                <input className="ad-in" type="date" value={to}
+                       onChange={(e) => setTo(e.target.value)} /></label>
+              <label className="ad-f"><span>Who</span>
+                <select className="ad-in" value={actor} onChange={(e) => setActor(e.target.value)}>
+                  <option value="">Anyone</option>
+                  {actors.map((a) => <option key={a} value={a}>{a}</option>)}
+                </select></label>
+            </div>
+            <div className="ad-searchfoot">
+              <span className="ad-dim">
+                {shown.length} of {log.length} entries
+                {(q || from || to || actor) && (
+                  <button className="ad-btn ad-btn--ghost ad-btn--xs" style={{ marginLeft: 8 }}
+                          onClick={() => { setQ(""); setFrom(""); setTo(""); setActor(""); }}>
+                    Clear
+                  </button>
+                )}
+              </span>
+              <div className="ad-exportbtns">
+                <button className="ad-btn ad-btn--ghost" disabled={shown.length === 0}
+                        onClick={() => exportLog("csv")}>Download CSV</button>
+                <button className="ad-btn ad-btn--ghost" disabled={shown.length === 0}
+                        onClick={() => exportLog("json")}>Download JSON</button>
+              </div>
+            </div>
+            <p className="ad-note">
+              The download covers exactly what is filtered above. Each export is
+              recorded with a hash of its contents, so a copy can be shown to be
+              the copy that was taken.
+            </p>
+          </section>
+
           <div className="ad-chips">
             <button className={filterKey === "all" ? "on" : ""} onClick={() => setFilterKey("all")}>All</button>
             {WATCH.map((w) => (
@@ -271,6 +391,38 @@ export default function AuditConsole() {
                       ))}
                     </div>
                   )}
+                </div>
+              ))}
+            </div>
+          )}
+        </div>
+      )}
+
+      {tab === "exports" && (
+        <div className="ad-body">
+          <p className="ad-note">
+            Every copy taken of the log, and by whom. The hash identifies exactly
+            what was in that file — a copy that does not match its hash is not the
+            copy that was taken.
+          </p>
+          {exports.length === 0 ? (
+            <div className="ad-empty">Nothing exported yet.</div>
+          ) : (
+            <div className="ad-list">
+              {exports.map((x) => (
+                <div className="ad-snap" key={x.id}>
+                  <div className="ad-snaph">
+                    <strong className="ad-mono">{fmt(x.at)}</strong>
+                    <span className="ad-dim">{x.by}</span>
+                    <span className="ad-dim">{x.rows} rows · {x.format.toUpperCase()}</span>
+                    <span className="ad-dim">{x.from} → {x.to}</span>
+                  </div>
+                  {(x.query || x.actor) && (
+                    <div className="ad-dim">
+                      Filtered by {[x.query && `"${x.query}"`, x.actor].filter(Boolean).join(", ")}
+                    </div>
+                  )}
+                  <div className="ad-hash">{x.sha256}</div>
                 </div>
               ))}
             </div>
@@ -452,6 +604,21 @@ const CSS = `
 .ad-confirm{display:flex;gap:9px;align-items:center;flex-wrap:wrap;background:#FDF6F7;
   border:1px solid var(--red);border-radius:3px;padding:10px 12px;font-size:12.5px;color:var(--ink2)}
 
+.ad-search{background:var(--paper);border:1px solid var(--rule);border-radius:4px;
+  padding:14px 16px;display:flex;flex-direction:column;gap:10px}
+.ad-searchrow{display:flex;gap:10px;flex-wrap:wrap}
+.ad-searchrow>*{flex:1 1 130px}
+.ad-f{display:flex;flex-direction:column;gap:4px}
+.ad-f>span{font-size:12px;font-weight:600;color:var(--ink2)}
+.ad-in{font:inherit;font-size:13px;padding:7px 10px;border:1px solid var(--rule);
+  border-radius:3px;background:var(--paper);color:var(--ink);width:100%;min-width:0}
+.ad-in:focus{outline:2px solid var(--accent);outline-offset:1px}
+.ad-searchfoot{display:flex;justify-content:space-between;align-items:center;gap:12px;
+  flex-wrap:wrap}
+.ad-exportbtns{display:flex;gap:8px}
+.ad-btn--xs{padding:3px 8px;font-size:11px}
+.ad-hash{font-family:'IBM Plex Mono',monospace;font-size:10.5px;color:var(--dim);
+  word-break:break-all;background:#F7F9FB;border-radius:2px;padding:5px 8px}
 .ad-foot{padding:4px 28px 0;color:var(--dim);font-size:11.5px;max-width:90ch;line-height:1.7}
 
 @media (max-width:760px){

@@ -66,6 +66,51 @@ function seedEvents() {
   ];
 }
 
+/** Sending, and asking the other side to agree. A step waiting on a
+ *  confirmation does not advance on the assumption that a message was read —
+ *  a booking nobody confirmed is a trip to a locked door. */
+function ConfirmBar({ ev, onSend, onMark }) {
+  const [channel, setChannel] = useState(ev.confirm_channel ?? CHANNEL_DEFAULT[ev.type] ?? "email");
+  const st = CONFIRM_STATE[ev.confirm_state ?? "none"];
+  return (
+    <div className="sc-confirm">
+      <span className="sc-cstate" style={{ "--c": st.color }}>{st.label}</span>
+      {(ev.confirm_state ?? "none") === "none" ? (
+        <>
+          <div className="sc-chan">
+            {[["email", "Email"], ["sms", "Text"], ["both", "Both"]].map(([k, l]) => (
+              <button key={k} className={channel === k ? "on" : ""}
+                      onClick={() => setChannel(k)}>{l}</button>
+            ))}
+          </div>
+          <button className="sc-btn sc-btn--xs" onClick={() => onSend(ev, channel)}>
+            Send confirmation
+          </button>
+        </>
+      ) : (
+        <>
+          <span className="sc-dim">
+            {ev.confirm_channel === "both" ? "email and text"
+              : ev.confirm_channel === "sms" ? "text" : "email"}
+            {ev.confirm_sent_at ? ` · ${String(ev.confirm_sent_at).slice(5, 16).replace("T", " ")}` : ""}
+          </span>
+          {ev.confirm_state === "sent" && (
+            <>
+              <button className="sc-btn sc-btn--xs sc-btn--ghost"
+                      onClick={() => onMark(ev, "confirmed")}>Mark confirmed</button>
+              <button className="sc-btn sc-btn--xs sc-btn--ghost"
+                      onClick={() => onMark(ev, "declined")}>Declined</button>
+            </>
+          )}
+          {ev.confirm_state === "declined" && (
+            <span className="sc-bad">Offer another time — this one does not work.</span>
+          )}
+        </>
+      )}
+    </div>
+  );
+}
+
 export default function ScheduleConsole() {
   const [today, setToday] = useState(iso(new Date()));
   const [events, setEvents] = useState(seedEvents);
@@ -110,6 +155,38 @@ export default function ScheduleConsole() {
     if (patch.done) setDone(patch.done);
     if (patch.agent !== undefined) setAgent(patch.agent);
     persist(next);
+  };
+
+  /* ---------- Confirmations ----------
+     Queued rather than sent from here. A provider outage should delay a
+     message, not lose it and leave nobody knowing which ones went missing. */
+  const sendConfirmation = async (ev, channel) => {
+    const when = `${ev.date} ${ev.time}`;
+    const body = [
+      `We have you booked for ${TYPE_META[ev.type]?.label ?? ev.type} at ${ev.unit ?? "our office"} on ${when}.`,
+      "Reply to confirm, or tell us if another time suits you better.",
+      "",
+      `已為你預約 ${when}${ev.unit ? `，${ev.unit}` : ""}。`,
+      "回覆確認即可，時間不方便的話也請告訴我們。",
+    ].join("\n");
+
+    let queue = [];
+    try {
+      const r = await window.storage.get("baydo:outbox");
+      if (r?.value) queue = JSON.parse(r.value);
+    } catch (e) {}
+    const msg = { id: "ob_" + Date.now().toString(36), kind: `${ev.type}_confirm`,
+      channel, to_name: ev.name, to: ev.contact, body, ref_type: "event", ref_id: ev.id,
+      state: "queued", created_at: nowISO() };
+    try { await window.storage.set("baydo:outbox", JSON.stringify([msg, ...queue])); } catch (e) {}
+
+    save({ ...data, events: data.events.map((x) => x.id === ev.id
+      ? { ...x, confirm_state: "sent", confirm_channel: channel, confirm_sent_at: nowISO() } : x) });
+  };
+
+  const markConfirmation = (ev, state) => {
+    save({ ...data, events: data.events.map((x) => x.id === ev.id
+      ? { ...x, confirm_state: state, confirm_responded_at: nowISO() } : x) });
   };
 
   /* ---------- Today's list ---------- */
@@ -239,6 +316,7 @@ export default function ScheduleConsole() {
                           The lease has not been approved, so no signing link will go out. Handle it under Signing approval on the right.
                         </div>
                       )}
+                      <ConfirmBar ev={e} onSend={sendConfirmation} onMark={markConfirmation} />
                     </div>
                     <div className="sc-acts">
                       <button className="sc-chk" onClick={() => toggleDone(e.id)}
@@ -481,6 +559,19 @@ const CSS = `
 .sc-gate-a{display:flex;gap:8px;align-items:center;flex-wrap:wrap}
 .sc-done{display:flex;align-items:center;gap:9px;font-size:12px;padding:7px 0;
   border-top:1px dotted var(--rule);flex-wrap:wrap}
+
+/* Confirmations */
+.sc-confirm{display:flex;align-items:center;gap:8px;flex-wrap:wrap;margin-top:6px;
+  padding-top:6px;border-top:1px dotted var(--rule)}
+.sc-cstate{font-size:10.5px;font-weight:700;color:#fff;background:var(--c);border-radius:9px;
+  padding:1px 8px}
+.sc-chan{display:inline-flex;border:1px solid var(--rule);border-radius:3px;overflow:hidden}
+.sc-chan button{font:inherit;font-size:11.5px;cursor:pointer;background:var(--paper);border:0;
+  border-right:1px solid var(--rule);padding:4px 9px;color:var(--dim)}
+.sc-chan button:last-child{border-right:0}
+.sc-chan button.on{background:var(--ink);color:#fff}
+.sc-btn--xs{padding:4px 9px;font-size:11.5px}
+.sc-bad{font-size:11.5px;color:var(--red)}
 
 /* Holidays */
 .sc-hol{display:flex;flex-wrap:wrap;gap:6px;margin-bottom:10px}

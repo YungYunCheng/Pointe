@@ -11,6 +11,7 @@ import coreRoutes from "./routes/core.js";
 import workflowRoutes from "./routes/workflow.js";
 import adminRoutes from "./routes/admin.js";
 import accountingRoutes from "./routes/accounting.js";
+import opsRoutes from "./routes/ops.js";
 import { startBackupJob, startDailyJobs } from "./jobs.js";
 import { startAccountingJobs } from "./jobs-accounting.js";
 import { ensureSeed } from "./seed.js";
@@ -49,6 +50,7 @@ app.use("/api", coreRoutes);
 app.use("/api", workflowRoutes);
 app.use("/api/admin", adminRoutes);
 app.use("/api/accounting", accountingRoutes);
+app.use("/api", opsRoutes);
 
 app.use("/api", (req, res) => res.status(404).json({ code: "NO_SUCH_ENDPOINT" }));
 

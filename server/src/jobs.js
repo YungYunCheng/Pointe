@@ -1,6 +1,7 @@
 import { db, uid, nowISO, addDays, daysBetween, prevBusinessDay } from "./db.js";
 import { notify } from "./rbac.js";
 import { makeBackup } from "./routes/admin.js";
+import { drainOutbox, overdueMessages, queue } from "./outbox.js";
 
 const HOUR = 3600e3;
 const RENEWAL_LEAD_DAYS = 30;
@@ -102,11 +103,59 @@ export function scanRefundDeadlines() {
   return n;
 }
 
+/** Warns before the morning somebody cannot get in. An expiry that arrives
+ *  unannounced is a support call; two weeks of notice is a nuisance nobody
+ *  minds. */
+export function passwordExpiryWarnings() {
+  const soon = new Date(Date.now() + 14 * 864e5).toISOString();
+  const rows = db.prepare(`SELECT id, email, full_name, password_expires_at FROM users
+    WHERE is_active = 1 AND password_expires_at IS NOT NULL
+      AND password_expires_at <= ? AND password_expires_at > datetime('now')`).all(soon);
+
+  let sent = 0;
+  for (const u of rows) {
+    const exists = db.prepare(`SELECT 1 FROM outbox WHERE kind='password_expiry'
+      AND ref_id=? AND date(created_at) > date('now','-7 day')`).get(u.id);
+    if (exists) continue;
+    const days = Math.ceil((new Date(u.password_expires_at) - Date.now()) / 864e5);
+    queue({ kind: "password_expiry", channel: "email", toEmail: u.email, toName: u.full_name,
+      subject: `Your Baydo Pointe password expires in ${days} days`,
+      body: [`Hello ${u.full_name},`, "",
+        `Your password expires in ${days} days. Change it from your account settings before then.`,
+        "", "If it expires you can still sign in, but nothing will work until you set a new one.",
+      ].join("\n"),
+      refType: "user", refId: u.id });
+    sent++;
+  }
+
+  const expired = db.prepare(`SELECT COUNT(*) n FROM users WHERE is_active=1
+    AND password_expires_at IS NOT NULL AND password_expires_at < datetime('now')`).get().n;
+  if (expired > 0) notify("admin", "security", "PASSWORDS_EXPIRED", { count: expired },
+                          "/admin/users");
+  return sent;
+}
+
+/** The queue growing is the thing to notice. A notice of entry that never
+ *  left is worse than one sent late, because nobody knows. */
+export function outboxHealth() {
+  const overdue = overdueMessages();
+  if (!overdue.length) return 0;
+  const exists = db.prepare(`SELECT 1 FROM notifications WHERE kind='outbox'
+    AND date(created_at)=date('now')`).get();
+  if (exists) return overdue.length;
+  notify("admin", "outbox", "MESSAGES_OVERDUE",
+         { count: overdue.length, oldest: overdue[0]?.required_by }, "/admin/outbox");
+  return overdue.length;
+}
+
 export function startDailyJobs() {
   const run = () => {
     try {
       const a = scanRenewals(), b = scanReminders(), c = scanRefundDeadlines();
-      console.log(`[jobs] renewals ${a} / reminders ${b} / refunds ${c} @ ${nowISO()}`);
+      const d = passwordExpiryWarnings();
+      const e = outboxHealth();
+      drainOutbox(100).catch((err) => console.error("[outbox]", err.message));
+      console.log(`[jobs] renewals ${a} / reminders ${b} / refunds ${c} / pw ${d} / overdue ${e} @ ${nowISO()}`);
     } catch (e) { console.error("[jobs] failed:", e.message); }
   };
   run();

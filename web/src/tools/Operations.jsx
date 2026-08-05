@@ -352,6 +352,15 @@ export default function Operations() {
           {newMo && <NewMoveout onAdd={(m) => { saveMoveouts([...moveouts, m]); setNewMo(false); }}
                                 onCancel={() => setNewMo(false)} />}
 
+          <div className="op-note-acct">
+            <strong>Handled in Accounting.</strong> Deposits are held as a trust
+            liability against a separate bank account, and interest accrues at the
+            annual rate once it is confirmed. The refund figure below is the
+            settlement; the posting and the payment happen in Accounting, so there
+            is no second place to record the money. Skip anything here that is
+            already done there.
+          </div>
+
           <div className="op-warn">
             Alberta sets a deadline for returning a deposit and requires an itemised statement of any deductions. The usual figure is {REFUND_DAYS} days after the tenancy ends,
             either to refund or to provide the statement. Confirm the exact number, what may be deducted, and where normal wear ends
@@ -977,6 +986,9 @@ const CSS = `
   background:#FFFCF3;border-radius:3px;padding:11px 13px;font-size:12.5px;color:var(--ink2)}
 .op-vacate.done{border-color:var(--green);background:#F6FBF8}
 .op-vacate strong{font-size:13px}
+.op-note-acct{background:#F5FAF8;border:1px solid var(--green);border-left:3px solid var(--green);
+  border-radius:3px;padding:11px 14px;font-size:12.5px;color:var(--ink2);line-height:1.7}
+.op-note-acct strong{color:var(--green)}
 .op-calc{display:flex;gap:16px;align-items:baseline;font-size:12.5px;flex-wrap:wrap;
   border-top:1px solid var(--rule);padding-top:8px}
 .op-calc strong{font-size:14px;font-family:'IBM Plex Mono',monospace}

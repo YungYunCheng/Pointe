@@ -50,6 +50,105 @@ const pretty = (s) => `${s.slice(5, 7)}/${s.slice(8, 10)} (${WD[parseD(s).getDay
 const hoursSince = (iso) => (iso ? (Date.now() - new Date(iso).getTime()) / 3.6e6 : null);
 const fmtH = (h) => (h == null ? "—" : h < 1 ? `${Math.round(h * 60)} min` : h < 48 ? `${h.toFixed(1)} h` : `${Math.round(h / 24)} d`);
 const uid = () => "ld_" + Date.now().toString(36) + Math.random().toString(36).slice(2, 5);
+
+/* ---------- Duplicate detection ----------
+
+   An email or phone already on file is a hard stop: the same person cannot
+   apply twice under the same contact details.
+
+   A resemblance is not, and that is deliberate. Two people with the same
+   common surname are two people. Refusing one of them automatically would
+   fall unevenly across communities where a handful of surnames are shared by
+   thousands of families, and under the Alberta Human Rights Act that pattern
+   is a problem whatever was intended by the rule. So a close match is flagged
+   and a person decides, with the reason recorded.                          */
+
+const SIMILARITY_FLAG = 0.70;
+
+const normEmail = (s) => {
+  const e = String(s ?? "").trim().toLowerCase();
+  if (!e.includes("@")) return e;
+  const [local, domain] = e.split("@");
+  // Gmail ignores dots and anything after a plus, so a.b+x@gmail.com and
+  // ab@gmail.com are one mailbox. Treating them as two lets one person apply
+  // repeatedly with what look like different addresses.
+  if (/^(gmail|googlemail)\.com$/.test(domain))
+    return `${local.split("+")[0].replace(/\./g, "")}@gmail.com`;
+  return `${local.split("+")[0]}@${domain}`;
+};
+
+const normPhone = (s) => {
+  const d = String(s ?? "").replace(/\D/g, "");
+  return d.length === 11 && d.startsWith("1") ? d.slice(1) : d;
+};
+
+const normName = (s) => String(s ?? "").trim().toLowerCase()
+  .replace(/[^\p{L}\p{N}\s]/gu, "").replace(/\s+/g, " ");
+
+function editSimilarity(a, b) {
+  const s = normName(a), t = normName(b);
+  if (!s || !t) return 0;
+  if (s === t) return 1;
+  let prev = Array.from({ length: t.length + 1 }, (_, j) => j);
+  for (let i = 1; i <= s.length; i++) {
+    const cur = [i];
+    for (let j = 1; j <= t.length; j++)
+      cur[j] = Math.min(prev[j] + 1, cur[j - 1] + 1,
+                        prev[j - 1] + (s[i - 1] === t[j - 1] ? 0 : 1));
+    prev = cur;
+  }
+  return 1 - prev[t.length] / Math.max(s.length, t.length);
+}
+
+/** Word overlap, so a reordered name still scores. "Chen Wei-Lun" and
+ *  "Wei-Lun Chen" are one person written two ways. */
+function tokenOverlap(a, b) {
+  const s = new Set(normName(a).split(" ").filter(Boolean));
+  const t = new Set(normName(b).split(" ").filter(Boolean));
+  if (!s.size || !t.size) return 0;
+  let hit = 0;
+  for (const x of s) if (t.has(x)) hit++;
+  return hit / Math.max(s.size, t.size);
+}
+
+const nameSimilarity = (a, b) => Math.max(editSimilarity(a, b), tokenOverlap(a, b));
+
+export function screenLead({ email, phone, name }, existing, excludeId) {
+  const e = normEmail(email), p = normPhone(phone);
+
+  for (const l of existing) {
+    if (excludeId && l.id === excludeId) continue;
+    if (e && normEmail(l.email) === e)
+      return { result: "duplicate", type: "email", match: l, similarity: 1,
+        detail: `This email is already on file for ${l.name}, added ${String(l.created_at).slice(0, 10)}.` };
+    if (p && p.length >= 10 && normPhone(l.phone) === p)
+      return { result: "duplicate", type: "phone", match: l, similarity: 1,
+        detail: `This phone number is already on file for ${l.name}.` };
+  }
+
+  // A name alone never flags: a shared surname is common and means nothing on
+  // its own. It counts only alongside a partial match on a contact detail.
+  let best = null;
+  for (const l of existing) {
+    if (excludeId && l.id === excludeId) continue;
+    const nameScore = nameSimilarity(name, l.name);
+    if (nameScore < SIMILARITY_FLAG) continue;
+    const emailScore = e && l.email ? editSimilarity(e, normEmail(l.email)) : 0;
+    const phoneScore = p && l.phone
+      ? (p.slice(-7) === normPhone(l.phone).slice(-7) ? 0.9 : editSimilarity(p, normPhone(l.phone)))
+      : 0;
+    const contact = Math.max(emailScore, phoneScore);
+    if (contact < 0.5) continue;
+    const combined = nameScore * 0.5 + contact * 0.5;
+    if (!best || combined > best.similarity)
+      best = { result: "review", type: "similarity", match: l,
+        similarity: Number(combined.toFixed(3)),
+        detail: `Resembles ${l.name} (${l.email || l.phone || "no contact on file"}): name ${(nameScore * 100).toFixed(0)}% alike, contact ${(contact * 100).toFixed(0)}% alike.` };
+  }
+  if (best) return best;
+
+  return { result: "clear", type: null, match: null, similarity: 0, detail: null };
+}
 const nowISO = () => new Date().toISOString();
 
 function seedLeads() {
@@ -240,7 +339,8 @@ export default function CRM() {
         <button className={tab === "funnel" ? "on" : ""} onClick={() => setTab("funnel")}>Funnel</button>
       </nav>
 
-      {adding && <AddLead onAdd={(l) => { save([...leads, l]); setAdding(false); setSel(l.id); }}
+      {adding && <AddLead existing={leads}
+                          onAdd={(l) => { save([...leads, l]); setAdding(false); setSel(l.id); }}
                           onCancel={() => setAdding(false)} />}
 
       {/* ═══ Leads ═══ */}
@@ -449,9 +549,23 @@ function Stat({ l, v, warn, small }) {
   );
 }
 
-function AddLead({ onAdd, onCancel }) {
+function AddLead({ onAdd, onCancel, existing }) {
   const [f, setF] = useState({ name: "", phone: "", email: "", source: SOURCES[0], units: "", beds: "", moveIn: "" });
+  const [override, setOverride] = useState("");
   const set = (k, v) => setF({ ...f, [k]: v });
+
+  // Checked as it is typed, so a duplicate is caught at the email field rather
+  // than after the whole form is filled in.
+  const check = useMemo(
+    () => (f.email || f.phone || f.name)
+      ? screenLead({ email: f.email, phone: f.phone, name: f.name }, existing)
+      : { result: "clear" },
+    [f.email, f.phone, f.name, existing]);
+
+  const blocked = check.result === "duplicate";
+  const needsNote = check.result === "review";
+  const canAdd = f.name.trim() && !blocked && (!needsNote || override.trim());
+
   return (
     <div className="cr-add">
       <input className="cr-in" placeholder="Name" value={f.name} onChange={(e) => set("name", e.target.value)} />
@@ -463,12 +577,37 @@ function AddLead({ onAdd, onCancel }) {
       <input className="cr-in" placeholder="Units of interest, e.g. 370-412" value={f.units}
              onChange={(e) => set("units", e.target.value)} />
       <input className="cr-in" type="date" value={f.moveIn} onChange={(e) => set("moveIn", e.target.value)} />
-      <button className="cr-btn" disabled={!f.name.trim()}
+      {blocked && (
+        <div className="cr-block">
+          <strong>Already on file.</strong> {check.detail}
+          <span> The same contact details cannot be registered twice.</span>
+        </div>
+      )}
+
+      {needsNote && (
+        <div className="cr-review">
+          <strong>Looks like an existing record.</strong> {check.detail}
+          <p>
+            This is a resemblance, not a match, so it is your call. People do share
+            names, and refusing someone on that basis alone is not something the
+            system will do on its own. Say what you checked.
+          </p>
+          <input className="cr-in" value={override}
+                 placeholder="Different person — spoke to both, different addresses"
+                 onChange={(e) => setOverride(e.target.value)} />
+        </div>
+      )}
+
+      <button className="cr-btn" disabled={!canAdd}
               onClick={() => onAdd({ id: uid(), name: f.name.trim(), phone: f.phone.trim(),
                 email: f.email.trim(), source: f.source, stage: "new",
                 units: f.units.trim() ? f.units.split(/[,、\s]+/).filter(Boolean) : [],
                 beds: f.beds, moveIn: f.moveIn, assigned: "", created_at: nowISO(),
-                last_contact_at: null, next_action_at: "", dnc: false, notes: [] })}>
+                last_contact_at: null, next_action_at: "", dnc: false,
+                screen: needsNote ? { ...check, match: check.match?.id ?? null,
+                  decided_note: override.trim(), decided_at: nowISO() } : null,
+                notes: needsNote ? [{ at: nowISO(), by: "screening",
+                  text: `Flagged as similar to an existing record and allowed: ${override.trim()}` }] : [] })}>
         Create
       </button>
       <button className="cr-btn cr-btn--ghost" onClick={onCancel}>Cancel</button>
@@ -700,6 +839,12 @@ const CSS = `
 .cr-tr--h{background:var(--ground);font-size:10.5px;letter-spacing:.06em;text-transform:uppercase;
   color:var(--dim);font-family:'IBM Plex Mono',monospace}
 
+.cr-block{flex:1 1 100%;font-size:12.5px;color:var(--red);background:#FDF6F7;
+  border:1px solid var(--red);border-radius:3px;padding:10px 13px;line-height:1.65}
+.cr-review{flex:1 1 100%;font-size:12.5px;color:#7A5D14;background:var(--amber);
+  border:1px solid var(--amberline);border-radius:3px;padding:10px 13px;line-height:1.65;
+  display:flex;flex-direction:column;gap:6px}
+.cr-review p{margin:0;line-height:1.7}
 .cr-foot{padding:4px 28px 0;color:var(--dim);font-size:11.5px;max-width:90ch;line-height:1.7}
 
 @media (max-width:760px){

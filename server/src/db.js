@@ -17,6 +17,7 @@ db.pragma("journal_mode = WAL");
 db.pragma("foreign_keys = ON");
 db.exec(fs.readFileSync(path.join(__dirname, "schema.sql"), "utf8"));
 db.exec(fs.readFileSync(path.join(__dirname, "schema-accounting.sql"), "utf8"));
+db.exec(fs.readFileSync(path.join(__dirname, "schema-ops.sql"), "utf8"));
 
 /** SQLite has no ADD COLUMN IF NOT EXISTS, so columns added after the first
  *  release go through here. Startup must be repeatable: a schema step that
@@ -27,6 +28,15 @@ function addColumn(table, column, definition) {
 }
 for (const t of ["ap_invoices", "ar_receipts", "ar_charges"])
   addColumn(t, "version", "INTEGER NOT NULL DEFAULT 1");
+
+// Every account carries a phone as well as an email: a password reset that can
+// only reach one channel is a lockout waiting for a mailbox to go down.
+addColumn("users", "password_changed_at", "TEXT");
+addColumn("users", "password_expires_at", "TEXT");
+addColumn("users", "phone_verified", "INTEGER NOT NULL DEFAULT 0");
+addColumn("users", "email_verified", "INTEGER NOT NULL DEFAULT 0");
+addColumn("contacts", "normalised_email", "TEXT");
+addColumn("contacts", "normalised_phone", "TEXT");
 
 /** Money rounds to cents at every boundary. Left as raw floats, a rent run
  *  across 330 units drifts by a few cents a month and the bank never matches. */
