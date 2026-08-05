@@ -4,6 +4,7 @@
 |---|---|
 | `STATUS.md` | Every function, what the AI does and does not do, and the gaps in order |
 | `STATUS.zh-Hant.md` | The same document in Chinese, for the manager |
+| `REPORT-v3.zh-Hant.md` | Current report: every module, who uses it, what the AI does, what is missing |
 | `REPORT.zh-Hant.md` | Full written report: every module, who uses it, what the AI does, and what is missing |
 | `STATUS-v2.zh-Hant.md` | Second pass, after accounting and the gap closures |
 | `ACCOUNTING.md` | Double entry, deposits in trust, amendments, the close |
