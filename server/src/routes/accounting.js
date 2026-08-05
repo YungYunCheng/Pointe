@@ -29,7 +29,7 @@ const today = () => new Date().toISOString().slice(0, 10);
 /** Refuses to post into a closed period, and refuses to post something
  *  that does not balance. Both are cheap checks that prevent expensive
  *  evenings later. */
-function postEntry({ date, buildingCode, source, sourceId, memo, lines, userId }) {
+export function postEntry({ date, buildingCode, source, sourceId, memo, lines, userId }) {
   const p = period(date);
   const per = db.prepare("SELECT state FROM accounting_periods WHERE period = ?").get(p);
   if (per?.state === "closed")

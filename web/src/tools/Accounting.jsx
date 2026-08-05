@@ -1,6 +1,7 @@
 import React, { useState, useEffect, useMemo, useCallback } from "react";
 import Banking from "./AccountingBanking.jsx";
 import { AmendDialog, VersionHistory, ChangeLog, InterestRates } from "./AccountingAmend.jsx";
+import MonthEnd, { MONTH_END_CSS } from "./MonthEnd.jsx";
 import { ai } from "../lib/ai.js";
 
 /* ============================================================
@@ -91,6 +92,22 @@ const COA_SEED = [
 ].map(([code, name, type, side, bank, trust]) =>
   ({ code, name, type, normal_side: side, is_bank: bank, is_trust: trust }));
 
+/* Starting formulas. Both are editable and versioned by effective date — these
+   are what was described, not what an accountant has confirmed. */
+const SEED_FORMULAS = [
+  { id: "ff_mgmt", code: "management_fee", label_en: "Property management fee",
+    label_zh: "物業管理費", basis: "percent_of_income", rate: 0.04,
+    income_scope: ["4010", "4020", "4030", "4040", "4080"], income_basis: "collected",
+    gst_applies: 1, gst_rate: 0.05, expense_gl: "5030", gst_gl: "1210",
+    payable_gl: "2420", effective_from: `${new Date().getFullYear()}-01-01`,
+    note: "4% of rent, parking, storage, pet rent and laundry collected, plus GST." },
+  { id: "ff_bm", code: "bm_payroll", label_en: "Building manager", label_zh: "管理員薪資",
+    basis: "per_unit", per_unit_rate: 30, unit_scope: "all", gst_applies: 0,
+    expense_gl: "5170", payable_gl: "2410",
+    effective_from: `${new Date().getFullYear()}-01-01`,
+    note: "$30 per unit per month across all 330 units." },
+];
+
 const VENDOR_SEED = [
   { id: "vn_1", name: "Northgate Plumbing", email: "ap@northgateplumbing.ca",
     phone: "780-555-0301", default_gl: "5010", payment_terms: 30 },
@@ -119,6 +136,10 @@ export default function Accounting() {
   const [amendments, setAmendments] = useState([]);
   const [rates, setRates] = useState([]);
   const [proposals, setProposals] = useState([]);
+  const [formulas, setFormulas] = useState([]);
+  const [calculations, setCalculations] = useState([]);
+  const [payrollRuns, setPayrollRuns] = useState([]);
+  const [distributions, setDistributions] = useState([]);
   const [loading, setLoading] = useState(true);
 
   const canPost = session?.role === "accounting" || session?.role === "admin";
@@ -143,6 +164,10 @@ export default function Accounting() {
       setAmendments(await read("acct:amendments", []));
       setRates(await read("acct:rates", []));
       setProposals(await read("acct:proposals", []));
+      setFormulas(await read("acct:formulas", SEED_FORMULAS));
+      setCalculations(await read("acct:calculations", []));
+      setPayrollRuns(await read("acct:payroll", []));
+      setDistributions(await read("acct:distributions", []));
       setLoading(false);
     })();
   }, []);
@@ -169,6 +194,10 @@ export default function Accounting() {
     amendments: (v) => { setAmendments(v); persist("acct:amendments", v); },
     rates: (v) => { setRates(v); persist("acct:rates", v); },
     proposals: (v) => { setProposals(v); persist("acct:proposals", v); },
+    formulas: (v) => { setFormulas(v); persist("acct:formulas", v); },
+    calculations: (v) => { setCalculations(v); persist("acct:calculations", v); },
+    payroll: (v) => { setPayrollRuns(v); persist("acct:payroll", v); },
+    distributions: (v) => { setDistributions(v); persist("acct:distributions", v); },
   };
 
   /* ---------- posting ----------
@@ -266,6 +295,7 @@ export default function Accounting() {
     ["banking", "Banking"],
     ["reports", "Reports"],
     ["coa", "Accounts"],
+    ["monthend", "Month end"],
     ["changelog", "Change log"],
     ["settings", "Settings"],
   ];
@@ -327,6 +357,9 @@ export default function Accounting() {
       {tab === "reports" && <Reports {...{ reports, periods, entries, charges, receipts,
         coa, save, canPost, session }} />}
       {tab === "coa" && <ChartOfAccounts {...{ coa, balances, setCoa, canPost }} />}
+      {tab === "monthend" && <MonthEnd {...{ period: thisPeriod(), charges, receipts,
+        entries, invoices, coa, formulas, calculations, payroll: payrollRuns,
+        distributions, save, canPost, session }} />}
       {tab === "changelog" && <ChangeLog {...{ amendments, entries, save, canPost }} />}
       {tab === "settings" && <InterestRates {...{ rates, proposals, save, canPost, session }} />}
 
@@ -1674,7 +1707,7 @@ function ChartOfAccounts({ coa, balances, setCoa, canPost }) {
 
 /* ══════════════════ Styles ══════════════════ */
 
-export const CSS = `
+export const CSS = MONTH_END_CSS + `
 @import url('https://fonts.googleapis.com/css2?family=IBM+Plex+Sans:wght@400;500;600;700&family=IBM+Plex+Mono:wght@400;500;600&family=Archivo:wght@700;800&display=swap');
 .ac{--ink:#131C25;--ink2:#3E4C5A;--dim:#78899A;--paper:#fff;--ground:#E9EDF0;--rule:#D3DBE1;
   --amber:#FFF6E0;--amberline:#E8C877;--red:#B23A54;--green:#0E8577;--accent:#1C6FA6;

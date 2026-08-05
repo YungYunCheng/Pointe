@@ -236,3 +236,150 @@ years accrues at each year's own rate.
 
 Until a rate is confirmed the accrual does nothing, and a notification says so
 rather than letting it fail quietly.
+
+---
+
+## Month end
+
+Five things belong to a month, in this order. Fees, payroll and depreciation
+are expenses of the month — a report issued before they land overstates the
+income by exactly those amounts.
+
+```
+1  Rent raised
+2  Management fee posted
+3  Payroll posted
+4  Depreciation posted
+5  Bank reconciled  →  period reconciled  →  reports  →  closed
+```
+
+`GET /api/month-end/:period` returns the checklist and what is outstanding.
+
+---
+
+## Management fee
+
+**4% of income collected, plus GST.** Both the rate and what counts as income
+are editable.
+
+**Which income counts is the part owners argue about**, so it is listed rather
+than assumed. The default scope is rent, parking, storage, pet rent and
+laundry. Late fees and damage recovery are excluded: a percentage of a penalty
+rewards the penalty, and an owner will eventually ask why the manager profited
+from an arrear.
+
+**Collected, not billed**, by default. Charging a percentage of rent that has
+not arrived pays the manager on arrears they have not recovered. The basis is
+switchable, and the calculation says which one it used.
+
+Posts as:
+
+```
+  5030  Property management        4,120.00
+  1210  GST receivable               206.00
+    2420  Management fee payable            4,326.00
+```
+
+The GST is an input tax credit, recoverable on the return.
+
+---
+
+## Building manager payroll
+
+**$30 per unit per month.** Both the rate and which units count are editable.
+
+All 330 units by default — a manager looks after an empty suite as much as a
+full one, arguably more during a turnover.
+
+### The part that matters more than the arithmetic
+
+**Employment or contract?** The system will not decide it, and getting it wrong
+is a CRA assessment rather than a bookkeeping tidy-up.
+
+| | Employee | Contractor |
+|---|---|---|
+| Withholding | CPP, EI, income tax | none |
+| Employer pays | CPP matched, EI × 1.4 | nothing extra |
+| GST | no | if registered |
+| Cost of $9,900 gross | roughly $10,700 | $9,900, or $10,395 with GST |
+
+The employer's share sits **on top of** the wage, not inside it. Treating it as
+included understates what the position costs by about a tenth.
+
+If the person works set hours under direction and cannot send somebody else,
+CRA may treat it as employment whatever the agreement calls it. That is a
+question for your accountant, and the assessment lands on the property, not on
+them.
+
+Deduction figures are entered, not calculated here — use CRA's payroll
+deductions calculator for the period. A wage posted without them understates
+what is owed to CRA.
+
+---
+
+## Editing a rate
+
+Rates are **versioned by effective date, never edited in place.**
+
+Change 4% to 4.5% from June and May still calculates at 4%. A rate that reached
+backwards would restate months that have been reported and possibly paid, and
+the system refuses to set a new rate over a period already posted.
+
+Every calculation keeps its inputs and its method text, so "why was August
+$412.80" has an answer without recalculating it from a formula that may since
+have changed.
+
+---
+
+## GST filing
+
+Calculated from posted entries: 2300 out, 1210 in, the difference to CRA.
+
+Filing posts the settlement, so neither account carries a balance that belongs
+to a period already filed.
+
+Most residential rent is exempt from GST. If the collected figure looks large,
+something has been coded to 2300 that should not have been — the method text
+says so rather than leaving it to be noticed.
+
+---
+
+## Depreciation
+
+Straight line or declining balance, monthly, idempotent per period. It will not
+take an asset below salvage.
+
+Posting produces **one entry for the month** rather than one per asset. Twenty
+lines for the same monthly charge makes the account unreadable.
+
+---
+
+## Owner distributions
+
+**Cash basis, not profit.**
+
+```
+Operating cash
+  less unpaid vendor invoices
+  less management fee posted and unpaid
+  less payroll posted and unpaid
+  less prepaid rent held
+  less any reserve
+= available
+```
+
+Prepaid rent is in that list on purpose: it is a tenant's money sitting in the
+account until the charge it belongs to exists. Distributing it spends next
+month's rent.
+
+An owner who takes the accrual profit out of an account holding rent that has
+not arrived writes a cheque the bank will not honour. That is why the owner
+statement shows both figures and this screen shows only the cash one.
+
+A distribution posts against **owner draws**, not as an expense. Booking it as
+an expense understates what the property actually earned, which is the number
+the owner is trying to see.
+
+The trust account check runs before a distribution is allowed. If deposits and
+the trust balance disagree, that is resolved first — distributing while they
+are out means possibly distributing a tenant's deposit.
