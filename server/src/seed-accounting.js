@@ -164,6 +164,40 @@ export async function seedAccounting() {
       startOfYear, f.note ?? null);
   }
 
+  // Components. A formula is built from these, so a change of arrangement is
+  // a change of configuration rather than a change of code.
+  const insC = db.prepare(`INSERT OR IGNORE INTO formula_components (id, formula_id, seq,
+    label, basis, rate, per_unit_rate, income_scope, income_basis, unit_scope,
+    gst_applies, expense_gl, note) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)`);
+
+  const mgmt = db.prepare("SELECT id FROM fee_formulas WHERE code='management_fee'").get();
+  if (mgmt && !db.prepare("SELECT 1 FROM formula_components WHERE formula_id=?").get(mgmt.id)) {
+    insC.run(uid("fcp_"), mgmt.id, 1, "Management fee", "percent_of_income", 0.04, null,
+      JSON.stringify(["4010", "4020", "4030", "4040", "4080"]), "collected", "all",
+      1, "5030", "4% of rent, parking, storage, pet rent and laundry collected.");
+  }
+
+  const bm = db.prepare("SELECT id FROM fee_formulas WHERE code='bm_payroll'").get();
+  if (bm && !db.prepare("SELECT 1 FROM formula_components WHERE formula_id=?").get(bm.id)) {
+    insC.run(uid("fcp_"), bm.id, 1, "Building manager", "per_unit", null, 30.0,
+      "[]", "collected", "all", 0, "5170",
+      "$30 per unit across all units. A manager looks after an empty suite as much as a full one.");
+  }
+
+  // The group. Both of the above are money the property pays to the management
+  // side, and the total is the number an owner asks about.
+  db.prepare(`INSERT OR IGNORE INTO remuneration_groups (code, label_en, label_zh,
+    description, wages_included, agreed_note) VALUES (?,?,?,?,?,?)`)
+    .run("management", "Paid to management", "支付予管理方",
+         "The management fee and the wages of anyone the management side employs on this property.",
+         0,
+         "Recorded as: the percentage is the management company's fee, and staff wages are charged on top. Confirm this against the signed management agreement before the first month is posted — if the percentage was meant to cover wages, charging both pays twice.");
+
+  const insM = db.prepare(`INSERT OR IGNORE INTO remuneration_members (group_code, fee_code, seq)
+    VALUES (?,?,?)`);
+  insM.run("management", "management_fee", 1);
+  insM.run("management", "bm_payroll", 2);
+
   const n = db.prepare("SELECT COUNT(*) n FROM gl_accounts").get().n;
   console.log(`[seed] chart of accounts: ${n} accounts`);
 }

@@ -2,6 +2,7 @@ import { Router } from "express";
 import { db, uid, nowISO, cents, txn } from "../db.js";
 import { authenticate, require_, audit, notify } from "../rbac.js";
 import { postEntry } from "./accounting.js";
+import { evaluateFormula, remunerationTotal, BASES, incomeFor, unitsFor } from "../formula.js";
 
 const r = Router();
 r.use(authenticate);
@@ -99,75 +100,6 @@ r.post("/fees/formulas", require_("accounting.coa"), (req, res) => {
   res.status(201).json({ id, supersedes: current?.id ?? null });
 });
 
-/* ================= Management fee ================= */
-
-/**
- * A percentage of income. Which income counts is the part that causes
- * arguments with owners, so the scope is listed in the formula and the
- * calculation returns what went into it line by line.
- *
- * Collected rather than billed by default: charging a management percentage on
- * rent that has not arrived means the manager is paid on arrears they have not
- * recovered.
- */
-function calculateManagementFee(forPeriod, buildingCode, formula) {
-  const scope = parse(formula.income_scope, []);
-  if (!scope.length) throw Object.assign(new Error("NO_INCOME_SCOPE"), { status: 400 });
-
-  const placeholders = scope.map(() => "?").join(",");
-  let lines, base;
-
-  if (formula.income_basis === "billed") {
-    lines = db.prepare(`SELECT c.gl_code, g.name_en, SUM(c.amount) amount, COUNT(*) n
-      FROM ar_charges c JOIN gl_accounts g ON g.code = c.gl_code
-      WHERE c.period = ? AND c.state <> 'void' AND c.gl_code IN (${placeholders})
-        ${buildingCode ? "AND c.building_code = ?" : ""}
-      GROUP BY c.gl_code`)
-      .all(...(buildingCode ? [forPeriod, ...scope, buildingCode] : [forPeriod, ...scope]));
-  } else {
-    // Collected: receipts in the month, split by what they were applied to.
-    // Money that arrived and was not applied to anything is prepaid rent, and
-    // charging a fee on it now would charge again when it is applied.
-    lines = db.prepare(`SELECT c.gl_code, g.name_en, SUM(a.amount) amount, COUNT(*) n
-      FROM ar_applications a
-      JOIN ar_receipts rc ON rc.id = a.receipt_id
-      JOIN ar_charges c ON c.id = a.charge_id
-      JOIN gl_accounts g ON g.code = c.gl_code
-      WHERE strftime('%Y-%m', rc.received_date) = ? AND c.gl_code IN (${placeholders})
-        ${buildingCode ? "AND rc.building_code = ?" : ""}
-      GROUP BY c.gl_code`)
-      .all(...(buildingCode ? [forPeriod, ...scope, buildingCode] : [forPeriod, ...scope]));
-  }
-
-  base = cents(lines.reduce((t, l) => t + l.amount, 0));
-  const subtotal = cents(base * formula.rate);
-  const gst = formula.gst_applies ? cents(subtotal * formula.gst_rate) : 0;
-
-  const method = [
-    `${formula.label_en} for ${forPeriod}${buildingCode ? `, building ${buildingCode}` : ""}.`,
-    ``,
-    `Income counted (${formula.income_basis === "billed" ? "billed in the period" : "collected in the period"}):`,
-    ...lines.map((l) => `  ${l.gl_code} ${l.name_en}: ${money(l.amount)} (${l.n} item${l.n === 1 ? "" : "s"})`),
-    `  Total: ${money(base)}`,
-    ``,
-    `Fee: ${money(base)} × ${(formula.rate * 100).toFixed(2)}% = ${money(subtotal)}`,
-    formula.gst_applies
-      ? `GST: ${money(subtotal)} × ${(formula.gst_rate * 100).toFixed(0)}% = ${money(gst)}`
-      : `GST: not applied to this fee.`,
-    `Total: ${money(cents(subtotal + gst))}`,
-    ``,
-    formula.income_basis === "collected"
-      ? `Based on what was collected, not billed. Charging a percentage of rent that has not arrived pays the manager on arrears they have not recovered.`
-      : `Based on what was billed. This charges a fee on rent that may not have been collected.`,
-    scope.length
-      ? `Accounts outside the scope — late fees and damage recovery among them — are excluded.`
-      : ``,
-  ].filter(Boolean).join("\n");
-
-  return { base, lines, subtotal, gst, total: cents(subtotal + gst), method,
-           rate_used: formula.rate };
-}
-
 /* ================= Building manager payroll ================= */
 
 /**
@@ -247,6 +179,8 @@ function buildPayrollMethod(forPeriod, formula, units, gross, notes, totals) {
 
 /* ================= Calculating ================= */
 
+/** Any formula, whatever it is built from. The engine handles the shape; this
+ *  just supplies the period and anything the components need. */
 r.get("/fees/calculate", require_("accounting.view"), (req, res) => {
   const p = req.query.period || period();
   const building = req.query.building || null;
@@ -256,22 +190,98 @@ r.get("/fees/calculate", require_("accounting.view"), (req, res) => {
   if (!formula) return res.status(404).json({ code: "NO_FORMULA", for: code, period: p });
 
   try {
-    if (code === "management_fee") {
-      const out = calculateManagementFee(p, building, formula);
-      return res.json({ period: p, building, formula: { ...formula,
-        income_scope: parse(formula.income_scope, []) }, ...out });
-    }
-    if (code === "bm_payroll") {
-      const out = calculatePayroll(p, formula, {
-        engagement: req.query.engagement ?? "contractor",
-        cpp: req.query.cpp ?? 0, ei: req.query.ei ?? 0, tax: req.query.tax ?? 0,
-        gstRegistered: req.query.gst_registered === "1" });
-      return res.json({ period: p, formula, ...out });
-    }
-    res.status(400).json({ code: "UNKNOWN_FEE_CODE" });
+    const hours = req.query.hours ? JSON.parse(req.query.hours) : {};
+    const out = evaluateFormula(formula, { period: p, buildingCode: building, hours });
+    res.json({ period: p, building,
+      formula: { ...formula, income_scope: parse(formula.income_scope, []) }, ...out });
   } catch (e) {
     res.status(e.status ?? 500).json({ code: e.message });
   }
+});
+
+/* ---------- Building the formula ---------- */
+
+r.get("/fees/bases", require_("accounting.view"), (req, res) => {
+  res.json({ bases: Object.entries(BASES).map(([code, b]) => ({ code, ...b })) });
+});
+
+r.get("/fees/formulas/:id/components", require_("accounting.view"), (req, res) => {
+  const components = db.prepare(`SELECT * FROM formula_components WHERE formula_id=?
+    ORDER BY seq`).all(req.params.id);
+  const cap = db.prepare("SELECT * FROM formula_caps WHERE formula_id=?").get(req.params.id);
+  res.json({ components: components.map((c) => ({ ...c,
+    income_scope: parse(c.income_scope, []), tiers: parse(c.tiers, []) })), cap: cap ?? null });
+});
+
+/** Components are replaced as a set rather than edited one by one. Half an
+ *  update applied is a fee nobody can explain. */
+r.put("/fees/formulas/:id/components", require_("accounting.coa"), (req, res) => {
+  const f = db.prepare("SELECT * FROM fee_formulas WHERE id=?").get(req.params.id);
+  if (!f) return res.status(404).json({ code: "FORMULA_NOT_FOUND" });
+
+  const posted = db.prepare(`SELECT period FROM fee_calculations WHERE formula_id=?
+    AND state IN ('posted','paid') ORDER BY period DESC LIMIT 1`).get(f.id);
+  if (posted)
+    return res.status(409).json({ code: "FORMULA_ALREADY_USED", period: posted.period,
+      detail: "This formula has been posted against. Create a new version from a later date instead of editing it." });
+
+  const { components = [], cap } = req.body ?? {};
+  db.transaction(() => {
+    db.prepare("DELETE FROM formula_components WHERE formula_id=?").run(f.id);
+    const ins = db.prepare(`INSERT INTO formula_components (id, formula_id, seq, label,
+      basis, rate, per_unit_rate, flat_amount, hourly_rate, hours, income_scope,
+      income_basis, unit_scope, tiers, gst_applies, expense_gl, note)
+      VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`);
+    components.forEach((c, i) => ins.run(uid("fcp_"), f.id, i + 1, c.label ?? `Part ${i + 1}`,
+      c.basis, c.rate ?? null, c.per_unit_rate ?? null, c.flat_amount ?? null,
+      c.hourly_rate ?? null, c.hours ?? null,
+      JSON.stringify(c.income_scope ?? []), c.income_basis ?? "collected",
+      c.unit_scope ?? "all", JSON.stringify(c.tiers ?? []),
+      c.gst_applies ? 1 : 0, c.expense_gl ?? f.expense_gl, c.note ?? null));
+
+    db.prepare("DELETE FROM formula_caps WHERE formula_id=?").run(f.id);
+    if (cap && (cap.minimum || cap.maximum || cap.max_percent_of_income))
+      db.prepare(`INSERT INTO formula_caps (formula_id, minimum, maximum,
+        max_percent_of_income, note) VALUES (?,?,?,?,?)`)
+        .run(f.id, cap.minimum ?? null, cap.maximum ?? null,
+             cap.max_percent_of_income ?? null, cap.note ?? null);
+  })();
+
+  audit(req, { action: "fee.components", entityType: "fee_formula", entityId: f.id,
+               after: { components: components.length, cap: cap ?? null } });
+  res.json({ ok: true, components: components.length });
+});
+
+/* ---------- The total ---------- */
+
+/** Everything the property pays to the management side, in one figure. Adding
+ *  two numbers from two screens is how somebody gets it wrong. */
+r.get("/remuneration/:period", require_("accounting.view"), (req, res) => {
+  const out = remunerationTotal(req.query.group ?? "management",
+    req.params.period, req.query.building ?? null);
+  if (!out) return res.status(404).json({ code: "GROUP_NOT_FOUND" });
+  res.json(out);
+});
+
+/** Records what the arrangement says. The system cannot read the agreement,
+ *  but it can tell you when the charging disagrees with what was recorded. */
+r.patch("/remuneration/:code", require_("accounting.coa"), (req, res) => {
+  const { wages_included, agreed_note, label_en, label_zh } = req.body ?? {};
+  const g = db.prepare("SELECT * FROM remuneration_groups WHERE code=?").get(req.params.code);
+  if (!g) return res.status(404).json({ code: "GROUP_NOT_FOUND" });
+
+  db.prepare(`UPDATE remuneration_groups SET wages_included=COALESCE(?,wages_included),
+    agreed_note=COALESCE(?,agreed_note), label_en=COALESCE(?,label_en),
+    label_zh=COALESCE(?,label_zh), updated_by=?, updated_at=datetime('now')
+    WHERE code=?`)
+    .run(wages_included === undefined ? null : (wages_included ? 1 : 0),
+         agreed_note ?? null, label_en ?? null, label_zh ?? null, req.user.id, g.code);
+
+  audit(req, { action: "remuneration.update", entityType: "remuneration_group",
+               entityId: g.code,
+               before: { wages_included: g.wages_included, agreed_note: g.agreed_note },
+               after: { wages_included, agreed_note } });
+  res.json({ ok: true });
 });
 
 /** Records the calculation as a draft. Nothing posts until somebody approves
@@ -288,17 +298,19 @@ r.post("/fees/calculations", require_("accounting.post"), (req, res) => {
     return res.status(409).json({ code: "ALREADY_POSTED", period: forPeriod });
 
   try {
-    let out, baseDetail;
-    if (code === "management_fee") {
-      out = calculateManagementFee(forPeriod, building_code ?? null, formula);
-      baseDetail = out.lines;
-    } else {
-      const p2 = calculatePayroll(forPeriod, formula, { engagement, cpp, ei, tax,
-        gstRegistered: !!gst_registered });
-      out = { base: p2.units, subtotal: p2.gross, gst: p2.gst, total: p2.employer_cost,
-              method: p2.method, rate_used: formula.per_unit_rate };
-      baseDetail = p2;
-    }
+    const evaluated = evaluateFormula(formula, {
+      period: forPeriod, buildingCode: building_code ?? null,
+      hours: req.body?.hours ?? {} });
+    const out = {
+      base: evaluated.components[0]?.base ?? 0,
+      subtotal: evaluated.subtotal, gst: evaluated.gst, total: evaluated.total,
+      method: evaluated.method,
+      rate_used: formula.rate ?? formula.per_unit_rate ?? null,
+    };
+    const baseDetail = { components: evaluated.components.map((c) => ({
+      label: c.component.label, basis: c.component.basis, base: c.base,
+      amount: c.amount, gst: c.gst, expense_gl: c.expense_gl, detail: c.detail })),
+      capped: evaluated.capped, cap_notes: evaluated.cap_notes };
 
     const id = existing?.id ?? uid("fc_");
     db.prepare(`INSERT INTO fee_calculations (id, formula_id, code, period, building_code,
@@ -338,8 +350,24 @@ r.post("/fees/calculations/:id/post", require_("accounting.post"), (req, res) =>
         throw Object.assign(new Error("ALREADY_POSTED"), { status: 409 });
       const f = db.prepare("SELECT * FROM fee_formulas WHERE id=?").get(c.formula_id);
 
-      const lines = [{ gl: f.expense_gl, debit: c.subtotal,
-        buildingCode: c.building_code, memo: `${f.label_en} ${c.period}` }];
+      // One debit per component, because a management fee and a wage hit
+      // different expense accounts. Collapsing them into one line makes the
+      // expense report useless for the question "what did management cost".
+      const detail = parse(c.base_detail, null);
+      const lines = [];
+      if (detail?.components?.length) {
+        const byGl = {};
+        for (const comp of detail.components) {
+          const gl = comp.expense_gl ?? f.expense_gl;
+          byGl[gl] = cents((byGl[gl] ?? 0) + comp.amount);
+        }
+        for (const [gl, amount] of Object.entries(byGl))
+          if (amount > 0) lines.push({ gl, debit: amount, buildingCode: c.building_code,
+            memo: `${f.label_en} ${c.period}` });
+      } else {
+        lines.push({ gl: f.expense_gl, debit: c.subtotal,
+          buildingCode: c.building_code, memo: `${f.label_en} ${c.period}` });
+      }
       if (c.gst > 0) lines.push({ gl: f.gst_gl ?? "1210", debit: c.gst,
         memo: "GST input tax credit" });
       lines.push({ gl: f.payable_gl ?? "2400", credit: cents(c.subtotal + c.gst),

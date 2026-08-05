@@ -21,6 +21,23 @@ const uid = (p) => p + Date.now().toString(36) + Math.random().toString(36).slic
 const nowISO = () => new Date().toISOString();
 const thisPeriod = () => new Date().toISOString().slice(0, 7);
 
+/* What a component can be worked out from. These cover the arrangements
+   property agreements actually use — the shape is configuration, not code. */
+const BASES = [
+  ["percent_of_income", "Percentage of income",
+   "A share of what came in. The usual arrangement, and the one owners understand without explanation."],
+  ["per_unit", "Amount per unit",
+   "Scales with the building rather than with how well it is doing. Common for wages, because the work is there whether the suite is let or not."],
+  ["flat", "Flat amount",
+   "The same every month. Often a retainer under a percentage, so a bad month still covers the cost of turning up."],
+  ["per_lease", "Per lease signed",
+   "A leasing fee. Paid on work done, so it rewards filling a suite rather than holding one."],
+  ["hourly", "Hourly",
+   "Rate times hours. Needs the hours entered each period, so it is the one most likely to be forgotten."],
+  ["tiered", "Banded percentage",
+   "A different rate in each band, where the owner wants the rate to fall as income rises."],
+];
+
 const STATE = {
   draft:    { label: "Draft",    color: "#8892A0" },
   approved: { label: "Approved", color: "#C98A15" },
@@ -88,6 +105,8 @@ export default function MonthEnd({ period: initialPeriod, charges, receipts, ent
   }, [feeFormula, charges, receipts, period]);
 
   /* ---------- Payroll ---------- */
+  const [group, setGroup] = useState({ wages_included: false,
+    agreed_note: "Recorded as: the percentage is the management company's fee, and staff wages are charged on top. Confirm against the signed management agreement before the first month is posted — if the percentage was meant to cover wages, charging both pays twice." });
   const [engagement, setEngagement] = useState("contractor");
   const [gstRegistered, setGstRegistered] = useState(false);
   const [deductions, setDeductions] = useState({ cpp: "", ei: "", tax: "" });
@@ -195,6 +214,11 @@ export default function MonthEnd({ period: initialPeriod, charges, receipts, ent
         {msg && <div className="ac-ok-box">{msg}</div>}
       </section>
 
+      <RemunerationTotal period={period} feeCalc={feeCalc} payCalc={payCalc}
+        wagesIncluded={group.wages_included} income={feeCalc?.base ?? 0}
+        agreedNote={group.agreed_note} canPost={canPost}
+        onUpdate={(g) => setGroup({ ...group, ...g })} />
+
       {/* ── Management fee ── */}
       <section className="ac-card">
         <div className="ac-cardh">
@@ -225,7 +249,7 @@ export default function MonthEnd({ period: initialPeriod, charges, receipts, ent
         {!feeFormula ? (
           <div className="ac-empty">No formula set for this period.</div>
         ) : editing === "fee" ? (
-          <FormulaEditor formula={feeFormula} kind="fee" period={period}
+          <FormulaEditor formula={feeFormula} period={period}
             calculations={calculations}
             onCancel={() => setEditing(null)}
             onSave={(f) => { save.formulas([f, ...(formulas ?? []).map((x) =>
@@ -321,7 +345,7 @@ export default function MonthEnd({ period: initialPeriod, charges, receipts, ent
         {!payFormula ? (
           <div className="ac-empty">No formula set for this period.</div>
         ) : editing === "pay" ? (
-          <FormulaEditor formula={payFormula} kind="pay" period={period}
+          <FormulaEditor formula={payFormula} period={period}
             calculations={payroll}
             onCancel={() => setEditing(null)}
             onSave={(f) => { save.formulas([f, ...(formulas ?? []).map((x) =>
@@ -444,20 +468,143 @@ export default function MonthEnd({ period: initialPeriod, charges, receipts, ent
   );
 }
 
+/* ---------- What management costs in total ---------- */
+
+/** The fee and the wages are both money going to the management side. Adding
+ *  two figures from two screens is how somebody gets it wrong, and the total
+ *  is the number an owner asks about.
+ *
+ *  The effective percentage is the useful part: an arrangement that reads as
+ *  4% and lands at 11% once wages are in it is the thing an owner notices a
+ *  year late. */
+function RemunerationTotal({ period, feeCalc, payCalc, wagesIncluded, income,
+                             agreedNote, canPost, onUpdate }) {
+  const [editing, setEditing] = useState(false);
+  const [included, setIncluded] = useState(!!wagesIncluded);
+  const [note, setNote] = useState(agreedNote ?? "");
+
+  const fee = feeCalc?.total ?? 0;
+  const wages = payCalc?.cost ?? 0;
+  const total = cents(fee + wages);
+  const effective = income > 0 ? Number((total / income * 100).toFixed(2)) : null;
+
+  // The system cannot read the agreement. It can say when the charging
+  // disagrees with what somebody recorded the agreement as saying.
+  const doubleCharge = wagesIncluded && wages > 0;
+
+  return (
+    <section className="ac-card">
+      <div className="ac-cardh">
+        <h2>Paid to management this month</h2>
+        {canPost && (
+          <button className="ac-btn ac-btn--sm ac-btn--ghost"
+                  onClick={() => setEditing(!editing)}>
+            What does the agreement say?
+          </button>
+        )}
+      </div>
+
+      <div className="ac-remun">
+        <div className="ac-remun-r">
+          <span>Management fee</span><span className="ac-mono">{money(fee)}</span>
+        </div>
+        <div className="ac-remun-r">
+          <span>
+            Staff wages
+            {wagesIncluded && <em> — recorded as already covered by the percentage</em>}
+          </span>
+          <span className="ac-mono">{money(wages)}</span>
+        </div>
+        <div className="ac-remun-r ac-remun-t">
+          <span>Total</span><span className="ac-mono">{money(total)}</span>
+        </div>
+        {effective != null && (
+          <div className="ac-remun-r ac-remun-pct">
+            <span>Against {money(income)} collected</span>
+            <span className="ac-mono">{effective}% of gross</span>
+          </div>
+        )}
+      </div>
+
+      {doubleCharge && (
+        <div className="ac-err">
+          <strong>Charged twice.</strong> The agreement is recorded as saying the
+          percentage already covers wages, but wages are also being charged this
+          month. Check the agreement before posting — one of these two should not
+          be there.
+        </div>
+      )}
+
+      {effective != null && effective > 10 && !doubleCharge && (
+        <div className="ac-warnbox">
+          {effective}% of gross is high for a residential property of this size.
+          Worth confirming against the signed agreement rather than discovering it
+          at year end.
+        </div>
+      )}
+
+      {editing ? (
+        <div className="ac-panel">
+          <div className="ac-opts">
+            {[[false, "Wages are charged on top of the percentage"],
+              [true, "The percentage already covers wages"]].map(([v, l]) => (
+              <button key={String(v)} className={included === v ? "on" : ""}
+                      onClick={() => setIncluded(v)}>{l}</button>
+            ))}
+          </div>
+          <label className="ac-f">
+            <span>Note <em>what the agreement actually says</em></span>
+            <textarea className="ac-in" rows={2} value={note}
+                      onChange={(e) => setNote(e.target.value)} />
+          </label>
+          <div className="ac-actions">
+            <button className="ac-btn" onClick={() => {
+              onUpdate({ wages_included: included, agreed_note: note.trim() });
+              setEditing(false);
+            }}>Save</button>
+            <button className="ac-btn ac-btn--ghost" onClick={() => setEditing(false)}>
+              Cancel
+            </button>
+          </div>
+        </div>
+      ) : (
+        agreedNote && <p className="ac-note-p">{agreedNote}</p>
+      )}
+    </section>
+  );
+}
+
 /* ---------- Formula editor ---------- */
 
 /** Changing a rate opens a new version from a date rather than editing in
  *  place. Editing would silently restate every month already calculated. */
-function FormulaEditor({ formula, kind, period, calculations, onCancel, onSave }) {
-  const [rate, setRate] = useState(kind === "fee"
-    ? String((formula.rate ?? 0) * 100) : String(formula.per_unit_rate ?? 0));
+/** Changing a formula opens a new version from a date rather than editing in
+ *  place. Editing would silently restate every month already calculated.
+ *
+ *  A formula is a list of parts. That covers a straight percentage, a
+ *  percentage with a floor, a per-unit wage, a retainer plus a percentage, a
+ *  banded rate — without the calculation living in code somebody has to edit
+ *  when the arrangement changes.
+ *
+ *  What it deliberately is not is a free-text expression. A formula somebody
+ *  can type is a formula somebody can typo into a number nobody notices until
+ *  an owner queries it. */
+function FormulaEditor({ formula, period, calculations, onCancel, onSave }) {
+  const [parts, setParts] = useState(() => formula.components?.length
+    ? formula.components.map((c) => ({ ...c }))
+    : [{ label: formula.label_en, basis: formula.basis,
+         rate: formula.rate, per_unit_rate: formula.per_unit_rate,
+         flat_amount: formula.flat_amount,
+         income_scope: formula.income_scope ?? DEFAULT_SCOPE,
+         income_basis: formula.income_basis ?? "collected",
+         unit_scope: formula.unit_scope ?? "all",
+         gst_applies: !!formula.gst_applies, expense_gl: formula.expense_gl }]);
   const [from, setFrom] = useState(nextMonthStart());
-  const [scope, setScope] = useState(formula.income_scope ?? DEFAULT_SCOPE);
-  const [basis, setBasis] = useState(formula.income_basis ?? "collected");
-  const [unitScope, setUnitScope] = useState(formula.unit_scope ?? "all");
-  const [gstApplies, setGstApplies] = useState(!!formula.gst_applies);
+  const [cap, setCap] = useState({ minimum: "", maximum: "", max_percent_of_income: "" });
   const [note, setNote] = useState("");
   const [err, setErr] = useState("");
+
+  const set = (i, patch) => setParts(parts.map((p, j) => j === i ? { ...p, ...patch } : p));
 
   // A month already posted cannot be restated: that figure has been reported
   // and possibly paid.
@@ -467,99 +614,255 @@ function FormulaEditor({ formula, kind, period, calculations, onCancel, onSave }
   const submit = () => {
     setErr("");
     if (posted.length)
-      return setErr(`${posted[0].period} has already been posted. Set the new rate from a later date.`);
-    const value = Number(rate);
-    if (!value || value <= 0) return setErr("Enter a rate.");
-    onSave({ id: uid("ff_"), code: formula.code, label_en: formula.label_en,
-      label_zh: formula.label_zh, basis: formula.basis,
-      rate: kind === "fee" ? cents(value) / 100 : null,
-      per_unit_rate: kind === "fee" ? null : cents(value),
-      income_scope: scope, income_basis: basis, unit_scope: unitScope,
-      gst_applies: gstApplies ? 1 : 0, gst_rate: formula.gst_rate ?? 0.05,
+      return setErr(`${posted[0].period} has already been posted. Set the new version from a later date.`);
+    if (!parts.length) return setErr("A formula needs at least one part.");
+    for (const p of parts) {
+      if (p.basis === "percent_of_income" && !(p.rate > 0))
+        return setErr(`"${p.label}" needs a rate.`);
+      if (p.basis === "per_unit" && !(p.per_unit_rate > 0))
+        return setErr(`"${p.label}" needs an amount per unit.`);
+      if (p.basis === "percent_of_income" && !(p.income_scope ?? []).length)
+        return setErr(`"${p.label}" needs at least one income account.`);
+    }
+
+    onSave({
+      id: uid("ff_"), code: formula.code, label_en: formula.label_en,
+      label_zh: formula.label_zh, basis: parts[0].basis,
+      rate: parts[0].rate ?? null, per_unit_rate: parts[0].per_unit_rate ?? null,
+      income_scope: parts[0].income_scope ?? [],
+      income_basis: parts[0].income_basis ?? "collected",
+      unit_scope: parts[0].unit_scope ?? "all",
+      gst_applies: parts.some((p) => p.gst_applies) ? 1 : 0,
+      gst_rate: formula.gst_rate ?? 0.05,
       expense_gl: formula.expense_gl, gst_gl: formula.gst_gl,
-      payable_gl: formula.payable_gl, effective_from: from, note: note.trim() || null,
-      created_name: "you", created_at: nowISO() });
+      payable_gl: formula.payable_gl, effective_from: from,
+      note: note.trim() || null, created_name: "you", created_at: nowISO(),
+      components: parts.map((p, i) => ({ ...p, seq: i + 1 })),
+      cap: (cap.minimum || cap.maximum || cap.max_percent_of_income) ? {
+        minimum: Number(cap.minimum) || null,
+        maximum: Number(cap.maximum) || null,
+        max_percent_of_income: cap.max_percent_of_income
+          ? Number(cap.max_percent_of_income) / 100 : null } : null,
+    });
   };
 
   return (
     <div className="ac-panel">
+      <div className="ac-parts">
+        {parts.map((p, i) => {
+          const basis = BASES.find(([b]) => b === p.basis);
+          return (
+            <div className="ac-part" key={i}>
+              <div className="ac-part-h">
+                <input className="ac-in ac-in--sm" value={p.label ?? ""}
+                       placeholder="What this part is"
+                       onChange={(e) => set(i, { label: e.target.value })} />
+                <select className="ac-sel ac-in--sm" value={p.basis}
+                        onChange={(e) => set(i, { basis: e.target.value })}>
+                  {BASES.map(([b, l]) => <option key={b} value={b}>{l}</option>)}
+                </select>
+                {parts.length > 1 && (
+                  <button className="ac-x"
+                          onClick={() => setParts(parts.filter((_, j) => j !== i))}>×</button>
+                )}
+              </div>
+              {basis && <p className="ac-hint">{basis[2]}</p>}
+
+              {p.basis === "percent_of_income" && (
+                <>
+                  <div className="ac-row">
+                    <label className="ac-f"><span>Rate (%)</span>
+                      <input className="ac-in" type="number" step="0.01"
+                             value={p.rate != null ? p.rate * 100 : ""}
+                             onChange={(e) => set(i, { rate: Number(e.target.value) / 100 })} /></label>
+                    <label className="ac-f"><span>Based on</span>
+                      <select className="ac-sel" value={p.income_basis ?? "collected"}
+                              onChange={(e) => set(i, { income_basis: e.target.value })}>
+                        <option value="collected">What was collected</option>
+                        <option value="billed">What was billed</option>
+                      </select>
+                      <em className="ac-hint">
+                        Collected is the fairer basis — billed pays a fee on arrears nobody recovered.
+                      </em>
+                    </label>
+                  </div>
+                  <div className="ac-f">
+                    <span>Charged on</span>
+                    <div className="ac-scope">
+                      {INCOME_ACCOUNTS.map(([code, name]) => (
+                        <label key={code}
+                               className={(p.income_scope ?? []).includes(code) ? "on" : ""}>
+                          <input type="checkbox"
+                                 checked={(p.income_scope ?? []).includes(code)}
+                                 onChange={(e) => set(i, { income_scope: e.target.checked
+                                   ? [...(p.income_scope ?? []), code]
+                                   : (p.income_scope ?? []).filter((c) => c !== code) })} />
+                          <span className="ac-mono">{code}</span> {name}
+                        </label>
+                      ))}
+                    </div>
+                    <em className="ac-hint">
+                      Which income counts is what owners argue about. Late fees and damage
+                      recovery are usually left out — a percentage of a penalty rewards
+                      the penalty.
+                    </em>
+                  </div>
+                </>
+              )}
+
+              {p.basis === "per_unit" && (
+                <div className="ac-row">
+                  <label className="ac-f"><span>Per unit ($)</span>
+                    <input className="ac-in" type="number" step="0.01"
+                           value={p.per_unit_rate ?? ""}
+                           onChange={(e) => set(i, { per_unit_rate: Number(e.target.value) })} /></label>
+                  <label className="ac-f"><span>Units counted</span>
+                    <select className="ac-sel" value={p.unit_scope ?? "all"}
+                            onChange={(e) => set(i, { unit_scope: e.target.value })}>
+                      <option value="all">Every unit</option>
+                      <option value="occupied">Occupied and signed</option>
+                      <option value="leased">Signed only</option>
+                      <option value="vacant">Vacant only</option>
+                    </select>
+                    <em className="ac-hint">
+                      All units is the usual basis for a wage — the work is there whether
+                      the suite is let or not.
+                    </em>
+                  </label>
+                </div>
+              )}
+
+              {(p.basis === "flat" || p.basis === "per_lease") && (
+                <label className="ac-f">
+                  <span>{p.basis === "flat" ? "Amount per month ($)" : "Amount per lease ($)"}</span>
+                  <input className="ac-in" type="number" step="0.01" value={p.flat_amount ?? ""}
+                         onChange={(e) => set(i, { flat_amount: Number(e.target.value) })} />
+                </label>
+              )}
+
+              {p.basis === "hourly" && (
+                <div className="ac-row">
+                  <label className="ac-f"><span>Rate per hour ($)</span>
+                    <input className="ac-in" type="number" step="0.01" value={p.hourly_rate ?? ""}
+                           onChange={(e) => set(i, { hourly_rate: Number(e.target.value) })} /></label>
+                  <label className="ac-f"><span>Hours <em>entered each month</em></span>
+                    <input className="ac-in" type="number" step="0.5" value={p.hours ?? ""}
+                           onChange={(e) => set(i, { hours: Number(e.target.value) })} /></label>
+                </div>
+              )}
+
+              {p.basis === "tiered" && (
+                <TierEditor tiers={p.tiers ?? []} onChange={(t) => set(i, { tiers: t })} />
+              )}
+
+              <div className="ac-row">
+                <label className="ac-check">
+                  <input type="checkbox" checked={!!p.gst_applies}
+                         onChange={(e) => set(i, { gst_applies: e.target.checked })} />
+                  <span>GST applies to this part</span>
+                </label>
+                <label className="ac-f" style={{ maxWidth: 220 }}>
+                  <span>Expense account</span>
+                  <select className="ac-sel" value={p.expense_gl ?? "5030"}
+                          onChange={(e) => set(i, { expense_gl: e.target.value })}>
+                    {[["5030", "Property management"], ["5170", "Building manager wages"],
+                      ["5175", "Employer contributions"], ["5900", "Other operating"]]
+                      .map(([c, n]) => <option key={c} value={c}>{c} · {n}</option>)}
+                  </select>
+                </label>
+              </div>
+            </div>
+          );
+        })}
+
+        <button className="ac-btn ac-btn--xs ac-btn--ghost"
+                onClick={() => setParts([...parts, { label: "", basis: "flat",
+                  flat_amount: 0, gst_applies: true, expense_gl: "5030" }])}>
+          + Another part
+        </button>
+      </div>
+
+      {/* A floor and a ceiling belong to the formula, not to a part. A minimum
+          applied per part would guarantee the minimum several times over. */}
+      <div className="ac-capbox">
+        <div className="ac-panel-h">Floor and ceiling <em>optional</em></div>
+        <div className="ac-row">
+          <label className="ac-f"><span>Minimum per month ($)</span>
+            <input className="ac-in" type="number" step="0.01" value={cap.minimum}
+                   onChange={(e) => setCap({ ...cap, minimum: e.target.value })} /></label>
+          <label className="ac-f"><span>Maximum per month ($)</span>
+            <input className="ac-in" type="number" step="0.01" value={cap.maximum}
+                   onChange={(e) => setCap({ ...cap, maximum: e.target.value })} /></label>
+          <label className="ac-f"><span>Or not more than (% of income)</span>
+            <input className="ac-in" type="number" step="0.01"
+                   value={cap.max_percent_of_income}
+                   onChange={(e) => setCap({ ...cap, max_percent_of_income: e.target.value })} />
+            <em className="ac-hint">How most agreements word a ceiling.</em>
+          </label>
+        </div>
+      </div>
+
       <div className="ac-row">
-        <label className="ac-f">
-          <span>{kind === "fee" ? "Rate (%)" : "Per unit ($)"}</span>
-          <input className="ac-in" type="number" step="0.01" value={rate}
-                 onChange={(e) => setRate(e.target.value)} />
-        </label>
-        <label className="ac-f">
-          <span>Effective from</span>
+        <label className="ac-f"><span>Effective from</span>
           <input className="ac-in" type="date" value={from}
                  onChange={(e) => setFrom(e.target.value)} />
           <em className="ac-hint">
-            Earlier months keep the old rate. A change that reached backwards would
+            Earlier months keep the old version. A change reaching backwards would
             restate what has already been paid.
           </em>
         </label>
-      </div>
-
-      {kind === "fee" ? (
-        <>
-          <div className="ac-f">
-            <span>Charged on</span>
-            <div className="ac-scope">
-              {INCOME_ACCOUNTS.map(([code, name]) => (
-                <label key={code} className={scope.includes(code) ? "on" : ""}>
-                  <input type="checkbox" checked={scope.includes(code)}
-                         onChange={(e) => setScope(e.target.checked
-                           ? [...scope, code] : scope.filter((c) => c !== code))} />
-                  <span className="ac-mono">{code}</span> {name}
-                </label>
-              ))}
-            </div>
-            <em className="ac-hint">
-              Which income counts is the part owners argue about. Late fees and damage
-              recovery are usually left out — a percentage of a penalty rewards the penalty.
-            </em>
-          </div>
-          <div className="ac-row">
-            <label className="ac-f"><span>Based on</span>
-              <select className="ac-sel" value={basis} onChange={(e) => setBasis(e.target.value)}>
-                <option value="collected">What was collected</option>
-                <option value="billed">What was billed</option>
-              </select>
-              <em className="ac-hint">
-                Collected is the fairer basis: billed pays a fee on arrears nobody recovered.
-              </em>
-            </label>
-            <label className="ac-check" style={{ alignSelf: "flex-end" }}>
-              <input type="checkbox" checked={gstApplies}
-                     onChange={(e) => setGstApplies(e.target.checked)} />
-              <span>Add GST</span>
-            </label>
-          </div>
-        </>
-      ) : (
-        <label className="ac-f"><span>Units counted</span>
-          <select className="ac-sel" value={unitScope} onChange={(e) => setUnitScope(e.target.value)}>
-            <option value="all">Every unit (330)</option>
-            <option value="occupied">Occupied and signed only</option>
-            <option value="leased">Signed only</option>
-          </select>
-          <em className="ac-hint">
-            All units is the usual basis — a manager looks after an empty suite as much
-            as a full one, arguably more during a turnover.
-          </em>
+        <label className="ac-f" style={{ flex: "2 1 260px" }}>
+          <span>Why it changed <em>the next person will want it</em></span>
+          <input className="ac-in" value={note}
+                 placeholder="Agreed with the owner at the annual review"
+                 onChange={(e) => setNote(e.target.value)} />
         </label>
-      )}
-
-      <label className="ac-f"><span>Why it changed <em>the next person will want it</em></span>
-        <input className="ac-in" value={note}
-               placeholder="Agreed with the owner at the annual review"
-               onChange={(e) => setNote(e.target.value)} /></label>
+      </div>
 
       {err && <div className="ac-err">{err}</div>}
       <div className="ac-actions">
-        <button className="ac-btn" onClick={submit}>Save the new rate</button>
+        <button className="ac-btn" onClick={submit}>Save the new version</button>
         <button className="ac-btn ac-btn--ghost" onClick={onCancel}>Cancel</button>
       </div>
+    </div>
+  );
+}
+
+/** Bands. Each applies only to the part of the income inside it, which is how
+ *  agreements are almost always meant even when loosely worded — a flat rate
+ *  on the whole amount would step sharply at the boundary, and nobody agrees
+ *  to that once they see the number. */
+function TierEditor({ tiers, onChange }) {
+  const list = tiers.length ? tiers : [{ upto: 50000, rate: 0.05 }, { upto: null, rate: 0.03 }];
+  return (
+    <div className="ac-tiers">
+      {list.map((t, i) => (
+        <div className="ac-tier" key={i}>
+          <span className="ac-dim">{i === 0 ? "Up to" : "Then up to"}</span>
+          <input className="ac-in ac-in--sm" type="number"
+                 value={t.upto ?? ""} placeholder="no limit"
+                 onChange={(e) => onChange(list.map((x, j) => j === i
+                   ? { ...x, upto: e.target.value ? Number(e.target.value) : null } : x))} />
+          <span className="ac-dim">at</span>
+          <input className="ac-in ac-in--sm" type="number" step="0.01"
+                 value={t.rate * 100}
+                 onChange={(e) => onChange(list.map((x, j) => j === i
+                   ? { ...x, rate: Number(e.target.value) / 100 } : x))} />
+          <span className="ac-dim">%</span>
+          {list.length > 2 && (
+            <button className="ac-x"
+                    onClick={() => onChange(list.filter((_, j) => j !== i))}>×</button>
+          )}
+        </div>
+      ))}
+      <button className="ac-btn ac-btn--xs ac-btn--ghost"
+              onClick={() => onChange([...list.slice(0, -1),
+                { upto: null, rate: list[list.length - 1].rate }])}>
+        + Another band
+      </button>
+      <p className="ac-hint">
+        The last band has no upper limit, or income above it would be unpriced.
+      </p>
     </div>
   );
 }
@@ -670,4 +973,24 @@ export const MONTH_END_CSS = `
 .ac-dist-r em{font-style:normal;color:var(--dim);font-size:11.5px}
 .ac-dist-t{font-weight:700;background:#FCFDFE;font-size:14px}
 .ac-check{display:flex;gap:9px;align-items:center;font-size:13px;color:var(--ink2);cursor:pointer}
+.ac-remun{display:flex;flex-direction:column;gap:1px;background:var(--rule);
+  border:1px solid var(--rule);border-radius:3px;overflow:hidden}
+.ac-remun-r{display:flex;justify-content:space-between;gap:12px;padding:9px 13px;
+  background:var(--paper);font-size:13px}
+.ac-remun-r em{font-style:normal;color:var(--dim);font-size:11.5px}
+.ac-remun-t{font-weight:700;background:#FCFDFE;font-size:15px}
+.ac-remun-pct{background:#F7F9FB;color:var(--dim);font-size:12.5px}
+.ac-parts{display:flex;flex-direction:column;gap:10px}
+.ac-part{border:1px solid var(--rule);border-radius:4px;padding:12px 14px;background:var(--paper);
+  display:flex;flex-direction:column;gap:8px}
+.ac-part-h{display:flex;gap:7px;align-items:center}
+.ac-part-h .ac-in,.ac-part-h .ac-sel{flex:1 1 140px}
+.ac-capbox{border:1px dashed var(--rule);border-radius:4px;padding:11px 13px;
+  display:flex;flex-direction:column;gap:8px}
+.ac-capbox em{font-style:normal;color:var(--dim);font-weight:400}
+.ac-tiers{display:flex;flex-direction:column;gap:6px}
+.ac-tier{display:flex;gap:7px;align-items:center;font-size:12.5px}
+.ac-tier .ac-in{width:100px}
+.ac-warnbox{font-size:12.5px;color:#6B5410;background:var(--amber);
+  border:1px solid var(--amberline);border-radius:3px;padding:9px 12px;line-height:1.65}
 `;

@@ -257,10 +257,70 @@ income by exactly those amounts.
 
 ---
 
-## Management fee
+## What management is paid
 
-**4% of income collected, plus GST.** Both the rate and what counts as income
-are editable.
+The percentage and the wages are both money the property pays to the
+management side. They post separately — different expense accounts, and one
+carries GST while the other may not — but the console shows the **total** and
+what it works out to as a percentage of gross.
+
+That last figure is the useful one. An arrangement that reads as 4% and lands
+at 11% once wages are in it is the thing an owner notices a year late.
+
+### Which arrangement was agreed
+
+Two possibilities, and the system cannot read the agreement:
+
+| | |
+|---|---|
+| Wages on top | The percentage is the company's fee. Wages are charged separately. Total = both. |
+| Wages included | The percentage covers everything. Charging wages as well pays twice. |
+
+Which one applies is recorded, and the console says something when the
+charging disagrees with it. Confirm it against the signed management agreement
+before the first month is posted.
+
+---
+
+## Building the formula
+
+A formula is a **list of parts**. Each part has its own basis, and the total is
+their sum after any floor or ceiling.
+
+| Basis | For |
+|---|---|
+| Percentage of income | The usual arrangement |
+| Amount per unit | Wages — the work is there whether the suite is let or not |
+| Flat amount | A retainer under a percentage, so a bad month still covers turning up |
+| Per lease signed | A leasing fee, paid on work done rather than on the rent roll |
+| Hourly | Rate × hours, entered each period |
+| Banded percentage | Where the rate falls as income rises |
+
+Parts combine, so "$500 base plus 3% of collected rent, minimum $1,200" is
+configuration rather than a code change.
+
+**GST is per part**, because a management fee usually carries it and a wage
+does not. One rate on the whole total would put GST on a wage.
+
+**Floors and ceilings belong to the formula, not to a part.** A minimum applied
+per part would guarantee the minimum several times over. A ceiling can be
+written as "not more than 6% of gross", which is how agreements usually word
+it.
+
+**Bands apply to the part of the income inside them**, not a flat rate on the
+whole amount at the highest band reached. The latter steps sharply at the
+boundary, and nobody agrees to that once they see the number.
+
+**There is no free-text expression box.** A formula somebody can type is a
+formula somebody can typo into a number nobody notices until an owner queries
+it.
+
+---
+
+## The current arrangement
+
+**4% of income collected, plus GST**, and **$30 per unit** for the building
+manager. Both editable.
 
 **Which income counts is the part owners argue about**, so it is listed rather
 than assumed. The default scope is rent, parking, storage, pet rent and
