@@ -299,6 +299,10 @@ export default function ScheduleConsole() {
                     <div className="sc-time">
                       <strong>{e.time}</strong>
                       <em>{m.dur} min</em>
+                      {EVENT_OWNER[e.type] && session?.role !== EVENT_OWNER[e.type].role
+                        && session?.role !== "admin" && (
+                        <span className="sc-owner">{EVENT_OWNER[e.type].label}</span>
+                      )}
                     </div>
                     <div className="sc-body">
                       <div className="sc-item-h">
@@ -559,6 +563,9 @@ const CSS = `
 .sc-gate-a{display:flex;gap:8px;align-items:center;flex-wrap:wrap}
 .sc-done{display:flex;align-items:center;gap:9px;font-size:12px;padding:7px 0;
   border-top:1px dotted var(--rule);flex-wrap:wrap}
+
+.sc-owner{font-size:10.5px;color:var(--dim);border:1px solid var(--rule);border-radius:8px;
+  padding:0 6px}
 
 /* Confirmations */
 .sc-confirm{display:flex;align-items:center;gap:8px;flex-wrap:wrap;margin-top:6px;

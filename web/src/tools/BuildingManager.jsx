@@ -1,5 +1,6 @@
 import React, { useState, useEffect, useMemo, useCallback } from "react";
 import { ai } from "../lib/ai.js";
+import PurchaseOrders from "./PurchaseOrders.jsx";
 
 /* ============================================================
    BAYDO POINTE — Building Manager console
@@ -98,6 +99,8 @@ export default function BuildingManager() {
   const [notices, setNotices] = useState([]);
   const [windows, setWindows] = useState([]);
   const [reminders, setReminders] = useState([]);
+  const [orders, setOrders] = useState([]);
+  const [releases, setReleases] = useState([]);
   const [loading, setLoading] = useState(true);
   const [saveState, setSaveState] = useState("idle");
   const [tab, setTab] = useState("maint");
@@ -120,6 +123,8 @@ export default function BuildingManager() {
       const nt = await read("baydo:entrynotices"); if (nt) setNotices(nt);
       const ew = await read("baydo:entrywindows"); if (ew) setWindows(ew);
       const rm = await read("baydo:entryreminders"); if (rm) setReminders(rm);
+      const po = await read("baydo:purchaseorders"); if (po) setOrders(po);
+      const kr = await read("baydo:keyreleases"); if (kr) setReleases(kr);
       setLoading(false);
     })();
   }, []);
@@ -138,6 +143,31 @@ export default function BuildingManager() {
   const saveNotices = (v) => { setNotices(v); persist("baydo:entrynotices", v); };
   const saveWindows = (v) => { setWindows(v); persist("baydo:entrywindows", v); };
   const saveReminders = (v) => { setReminders(v); persist("baydo:entryreminders", v); };
+  const saveOrders = (v) => { setOrders(v); persist("baydo:purchaseorders", v); };
+
+  /* Copying a confirmed order into a bill. The order proves what was agreed;
+     the bill is what we owe, and only the bill posts. */
+  const toBill = async (po) => {
+    let bills = [];
+    try {
+      const r = await window.storage.get("acct:invoices");
+      if (r?.value) bills = JSON.parse(r.value);
+    } catch (e) {}
+    const bill = {
+      id: uid("ap_"), vendor_id: po.vendor_id, invoice_no: po.po_number,
+      invoice_date: today(), due_date: today(),
+      building_code: po.unit_number?.slice(0, 3), unit_number: po.unit_number,
+      lines: (po.lines ?? []).map((l) => ({ gl_code: l.gl_code ?? "5010",
+        description: l.description, amount: Number(l.actual ?? l.estimated) })),
+      subtotal: Number(po.actual_amount ?? po.estimated), gst: 0,
+      total: Number(po.actual_amount ?? po.estimated),
+      description: `${po.description} (${po.po_number})`,
+      ticket_id: po.ticket_id, state: "draft", paid_amount: 0, from_po: po.id,
+    };
+    try { await window.storage.set("acct:invoices", JSON.stringify([bill, ...bills])); } catch (e) {}
+    saveOrders(orders.map((x) => x.id === po.id
+      ? { ...x, state: "billed", bill_id: bill.id, bill_invoice_no: bill.invoice_no } : x));
+  };
 
   /* The notice is the legal step and goes out first. A reminder follows closer
      to the time, because a notice read four days ago is not the same as knowing
@@ -322,6 +352,10 @@ export default function BuildingManager() {
         <button className={tab === "notice" ? "on" : ""} onClick={() => setTab("notice")}>
           Notices of entry {noticeNeeded.length > 0 && <i className="bm-b">{noticeNeeded.length}</i>}
         </button>
+        <button className={tab === "po" ? "on" : ""} onClick={() => setTab("po")}>
+          Purchase orders {orders.filter((o) => o.state === "work_done").length > 0
+            && <i className="bm-b">{orders.filter((o) => o.state === "work_done").length}</i>}
+        </button>
         <button className={tab === "keys" ? "on" : ""} onClick={() => setTab("keys")}>
           Key handover {khOpen.length > 0 && <i className="bm-b">{khOpen.length}</i>}
         </button>
@@ -487,10 +521,19 @@ export default function BuildingManager() {
       )}
 
       {/* ═══════ Key handover ═══════ */}
+      {tab === "po" && (
+        <div className="bm-body">
+          <PurchaseOrders session={session} tickets={maint} vendors={[]}
+            orders={orders} onSave={saveOrders} onBill={toBill} />
+        </div>
+      )}
+
       {tab === "keys" && (
         <div className="bm-body">
           <p className="bm-note">
-            Units land here once signing completes. Book a time, hand over each item, and finish the move-in inspection report.
+            Keys can only be booked once the Property Manager has confirmed the lease
+            is signed. Handing over possession against an unsigned lease leaves nothing
+            to enforce, and it is not a mistake that can be undone quietly.
             Booking checks for conflicts, so nothing gets double-booked.
           </p>
 
@@ -948,6 +991,11 @@ const CSS = `
   padding-top:9px}
 .bm-wadd .bm-in,.bm-wadd .bm-sel{width:auto;flex:0 1 auto;min-width:90px}
 .bm-remind{display:flex;gap:5px;flex-wrap:wrap}
+
+.bm-locked{border:1px dashed var(--rule);border-radius:4px;padding:12px 14px;
+  display:flex;flex-direction:column;gap:5px;background:#FBFCFD}
+.bm-locked-h{display:flex;align-items:center;gap:9px;flex-wrap:wrap}
+.bm-locked p{margin:0;line-height:1.65}
 
 @media (max-width:720px){
   .bm-head,.bm-tabs,.bm-body,.bm-foot{padding-left:16px;padding-right:16px}

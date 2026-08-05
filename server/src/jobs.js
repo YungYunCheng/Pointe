@@ -1,3 +1,4 @@
+import fs from "node:fs";
 import { db, uid, nowISO, addDays, daysBetween, prevBusinessDay } from "./db.js";
 import { notify } from "./rbac.js";
 import { makeBackup } from "./routes/admin.js";
@@ -148,14 +149,70 @@ export function outboxHealth() {
   return overdue.length;
 }
 
+/* ---------- Audit retention ----------
+
+   Two different things with two different rules.
+
+   Snapshots are for rolling back a mistake, and a month is long enough
+   for a mistake to surface. They are large, so keeping them forever
+   trades real storage for a case that does not arise.
+
+   Audit entries are the record of who did what. They are small, and the
+   reason they exist is precisely that somebody will ask in two years.
+   Nothing prunes them.
+*/
+const SNAPSHOT_RETENTION_DAYS = 31;
+
+export function pruneSnapshots() {
+  const cutoff = new Date(Date.now() - SNAPSHOT_RETENTION_DAYS * 864e5).toISOString();
+  const old = db.prepare(`SELECT * FROM backups WHERE created_at < ?
+    ORDER BY created_at`).all(cutoff);
+  if (!old.length) return 0;
+
+  // The most recent is always kept, even if it is older than the window.
+  // A gap with nothing to restore from is worse than one stale file.
+  const newest = db.prepare("SELECT id FROM backups ORDER BY created_at DESC LIMIT 1").get();
+  let removed = 0;
+  for (const b of old) {
+    if (b.id === newest?.id) continue;
+    try { if (b.file_path && fs.existsSync(b.file_path)) fs.unlinkSync(b.file_path); }
+    catch (e) { console.error("[retention] could not remove", b.file_path, e.message); }
+    db.prepare("DELETE FROM backups WHERE id=?").run(b.id);
+    removed++;
+  }
+  if (removed) {
+    // Pruning is itself a change to the record and belongs in it.
+    db.prepare(`INSERT INTO audit_log (actor_name, action, entity_type, after_value)
+      VALUES ('system','backup.prune','backup',?)`)
+      .run(JSON.stringify({ removed, older_than_days: SNAPSHOT_RETENTION_DAYS }));
+    console.log(`[retention] pruned ${removed} snapshot(s) older than ${SNAPSHOT_RETENTION_DAYS} days`);
+  }
+  return removed;
+}
+
+/** Audit entries are never pruned. This reports the size so it is a decision
+ *  somebody makes rather than something that happens. */
+export function auditSize() {
+  const r = db.prepare(`SELECT COUNT(*) n, MIN(date(created_at)) first,
+    MAX(date(created_at)) last FROM audit_log`).get();
+  const unattributed = db.prepare(`SELECT COUNT(*) n FROM audit_log
+    WHERE actor_name IS NULL AND actor_user_id IS NULL`).get().n;
+  // An entry with no actor cannot answer the question the log exists for.
+  if (unattributed > 0)
+    console.warn(`[audit] ${unattributed} entries have no actor recorded`);
+  return { ...r, unattributed };
+}
+
 export function startDailyJobs() {
   const run = () => {
     try {
       const a = scanRenewals(), b = scanReminders(), c = scanRefundDeadlines();
       const d = passwordExpiryWarnings();
       const e = outboxHealth();
+      const p = pruneSnapshots();
+      auditSize();
       drainOutbox(100).catch((err) => console.error("[outbox]", err.message));
-      console.log(`[jobs] renewals ${a} / reminders ${b} / refunds ${c} / pw ${d} / overdue ${e} @ ${nowISO()}`);
+      console.log(`[jobs] renewals ${a} / reminders ${b} / refunds ${c} / pw ${d} / overdue ${e} / pruned ${p} @ ${nowISO()}`);
     } catch (e) { console.error("[jobs] failed:", e.message); }
   };
   run();

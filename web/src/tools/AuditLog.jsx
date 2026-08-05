@@ -22,7 +22,17 @@ const WATCH = [
 const LOG_KEY = "baydo:audit";
 const IDX_KEY = "baydo:backups";
 const SNAP_PREFIX = "baydo:backup:";
-const MAX_SNAPSHOTS = 24;
+/* Two different things with two different rules.
+
+   Snapshots are for rolling back a mistake, and a month is long enough for a
+   mistake to surface. They are large, so keeping them forever trades real
+   storage for a case that does not arise.
+
+   Change entries are the record of who did what. They are small, and the
+   reason they exist is precisely that somebody will ask in two years.
+   Nothing prunes them. */
+const SNAPSHOT_RETENTION_DAYS = 31;
+const MAX_SNAPSHOTS = 200;
 const POLL_MS = 60000;
 const SNAP_INTERVAL_MS = 3600000;
 const MAX_LOG = 500;
@@ -374,6 +384,7 @@ export default function AuditConsole() {
                     <span className={`ad-act ad-act--${e.action}`}>{e.action}</span>
                     <strong>{e.label}</strong>
                     <span className="ad-dim">{e.changes.length} field(s)</span>
+              <span className="ad-actor">{e.actor ?? "unattributed"}</span>
                     <span className="ad-mono ad-dim ad-at">{fmt(e.at)}</span>
                     <span className="ad-actor">{e.actor}</span>
                     <span className="ad-caret">{openId === e.id ? "▾" : "▸"}</span>
@@ -433,7 +444,10 @@ export default function AuditConsole() {
       {tab === "backup" && (
         <div className="ad-body">
           <p className="ad-note">
-            One snapshot an hour when something changed, up to {MAX_SNAPSHOTS}. A restore saves the current state first,
+            One snapshot an hour when something changed, kept for {SNAPSHOT_RETENTION_DAYS} days.
+            Change entries are never pruned — those are the record of who did what,
+            and the reason they exist is that somebody asks two years later.
+            A restore saves the current state first,
             so pressing it by mistake is recoverable.
           </p>
 
@@ -617,6 +631,8 @@ const CSS = `
   flex-wrap:wrap}
 .ad-exportbtns{display:flex;gap:8px}
 .ad-btn--xs{padding:3px 8px;font-size:11px}
+.ad-actor{font-size:11px;font-weight:600;color:var(--ink2);background:var(--ground);
+  border-radius:8px;padding:1px 8px}
 .ad-hash{font-family:'IBM Plex Mono',monospace;font-size:10.5px;color:var(--dim);
   word-break:break-all;background:#F7F9FB;border-radius:2px;padding:5px 8px}
 .ad-foot{padding:4px 28px 0;color:var(--dim);font-size:11.5px;max-width:90ch;line-height:1.7}

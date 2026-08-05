@@ -20,6 +20,7 @@ db.exec(fs.readFileSync(path.join(__dirname, "schema-accounting.sql"), "utf8"));
 db.exec(fs.readFileSync(path.join(__dirname, "schema-ops.sql"), "utf8"));
 db.exec(fs.readFileSync(path.join(__dirname, "schema-crm.sql"), "utf8"));
 db.exec(fs.readFileSync(path.join(__dirname, "schema-agreements.sql"), "utf8"));
+db.exec(fs.readFileSync(path.join(__dirname, "schema-ops2.sql"), "utf8"));
 
 /** SQLite has no ADD COLUMN IF NOT EXISTS, so columns added after the first
  *  release go through here. Startup must be repeatable: a schema step that

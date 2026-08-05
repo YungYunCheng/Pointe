@@ -86,6 +86,13 @@ const INTENT_RULES = {
   other:               { lvl: "L1", rule: "R-2099", label: "Other" },
 };
 
+/* Handing a message to a person is not the same as a person seeing it.
+   Escalating queues an email to whoever owns it, with a clock, and tells the
+   tenant a person has it. Somebody may not be at a console for hours, and a
+   tenant waiting in silence is how a question becomes a complaint. */
+const ESCALATION_HOURS = 4;
+const SENSITIVE_RULES = ["R-101", "R-102", "R-103"];
+
 const LEVELS = {
   L3: { label: "Sent automatically", color: "#0E8577", desc: "A lookup. The facts come from the data, so it goes out as drafted." },
   L2: { label: "Sent, spot-checked", color: "#1C6FA6", desc: "Writes to the calendar, so a sample is reviewed daily." },
@@ -155,6 +162,52 @@ export default function AIInbox() {
   }, [msgs]);
 
   const patch = (id, p) => setMsgs((ms) => ms.map((m) => (m.id === id ? { ...m, ...p } : m)));
+
+  /* ---------- Escalation ---------- */
+  const escalate = async (m, rule) => {
+    // For the protected-ground rules the content is not copied into the
+    // notification. The person opens the thread to read it; what travels is
+    // the rule id.
+    const sensitive = SENSITIVE_RULES.includes(rule?.id);
+    const due = new Date(Date.now() + ESCALATION_HOURS * 3600e3).toISOString();
+    const id = "esc_" + Date.now().toString(36);
+
+    let queue = [];
+    try {
+      const r = await window.storage.get("baydo:outbox");
+      if (r?.value) queue = JSON.parse(r.value);
+    } catch (e) {}
+
+    const toStaff = {
+      id: "ob_" + Date.now().toString(36) + "a", kind: "escalation", channel: "email",
+      to: "bowen.wang@themizar.ca", to_name: "Property Manager",
+      subject: `Needs a reply${m.unit ? ` · ${m.unit}` : ""}${rule ? ` · ${rule.id}` : ""}`,
+      body: sensitive
+        ? `A message from ${m.name} needs a person. Rule ${rule.id}. The content is not repeated here — open the thread to read it.\n\nExpected first response by ${due.slice(0, 16).replace("T", " ")}.`
+        : `A message from ${m.name}${m.unit ? ` (${m.unit})` : ""} needs a person.\n\n${m.body}\n\nExpected first response by ${due.slice(0, 16).replace("T", " ")}.`,
+      ref_type: "escalation", ref_id: id, required_by: due,
+      state: "queued", created_at: nowISO(),
+    };
+
+    // The tenant is told a person has it, with a realistic expectation rather
+    // than silence.
+    const zh = /[\u4e00-\u9fff]/.test(m.body);
+    const toTenant = {
+      id: "ob_" + Date.now().toString(36) + "b", kind: "escalation_ack", channel: "email",
+      to: m.from, to_name: m.name,
+      subject: zh ? "已收到你的訊息" : "We have your message",
+      body: zh
+        ? "你的訊息已經轉給我們的同事處理，通常一個工作天內會回覆你。如果情況緊急，請直接打電話到辦公室。"
+        : "Your message has been passed to a colleague and you will normally hear back within one business day. If it is urgent, please call the office rather than waiting here.",
+      ref_type: "escalation", ref_id: id, state: "queued", created_at: nowISO(),
+    };
+
+    try {
+      await window.storage.set("baydo:outbox", JSON.stringify([toStaff, toTenant, ...queue]));
+    } catch (e) {}
+
+    return { id, due_by: due, notified: true, content_copied: !sensitive };
+  };
 
   /* ---------- Pipeline ---------- */
   const process = useCallback(async (m) => {

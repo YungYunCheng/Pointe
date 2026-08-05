@@ -147,6 +147,19 @@ r.get("/leads/funnel", require_("leads.view"), (req, res) => {
 const DUR = { showing: 30, signing: 45, keys: 30, maintenance: 60, followup: 15, review: 10 };
 const BLOCKING = ["showing", "signing", "keys"];
 
+/* Who owns which kind of booking. Showings and key handovers are the Building
+   Manager's work; signings, renewals and follow-ups belong to leasing. Split
+   because with one person in each role, "anyone can book anything" means both
+   diaries fill with the other person's appointments. */
+const EVENT_OWNER = {
+  showing:     "schedule.showings",
+  keys:        "schedule.showings",
+  maintenance: "schedule.showings",
+  signing:     "schedule.leasing",
+  followup:    "schedule.leasing",
+  review:      "schedule.leasing",
+};
+
 r.get("/events", require_("schedule.view"), (req, res) => {
   const { from, to, type, assignee, state } = req.query;
   let sql = "SELECT * FROM events WHERE 1=1";
@@ -173,6 +186,25 @@ r.post("/events", require_("schedule.view"), (req, res) => {
           starts_at, duration_min, ref_id, created_via } = req.body ?? {};
   if (!type || !starts_at) return res.status(400).json({ code: "MISSING_EVENT_FIELDS" });
 
+  const needs = EVENT_OWNER[type];
+  if (needs && !req.user.perms.has(needs))
+    return res.status(403).json({ code: "NOT_YOUR_BOOKING_TYPE", type, needs,
+      detail: needs === "schedule.showings"
+        ? "Viewings and key handovers are booked by the Building Manager."
+        : "Signings and renewals are booked by the Property Manager." });
+
+  // Keys are the one booking with a precondition. Handing over possession
+  // against an unsigned lease leaves nothing to enforce, and it is not a
+  // mistake that can be undone quietly.
+  if (type === "keys") {
+    const released = db.prepare(`SELECT * FROM key_release_approvals
+      WHERE unit_number = ? AND approved_at IS NOT NULL
+      ORDER BY approved_at DESC LIMIT 1`).get(unit_number ?? "");
+    if (!released)
+      return res.status(409).json({ code: "KEYS_NOT_RELEASED", unit: unit_number,
+        detail: "The Property Manager has not confirmed the lease is signed. Keys cannot be booked yet." });
+  }
+
   const mins = Number(duration_min) || DUR[type] || 30;
   const blocking = BLOCKING.includes(type) ? 1 : 0;
 
@@ -197,8 +229,13 @@ r.post("/events", require_("schedule.view"), (req, res) => {
          ref_id ?? null, created_via ?? "staff");
 
   audit(req, { action: "event.create", entityType: "event", entityId: id,
-               after: { type, unit_number, starts_at } });
-  res.status(201).json({ id, duration_min: mins, blocking: !!blocking });
+               after: { type, unit_number, starts_at, by: req.user.name } });
+
+  // Confirming is not optional for anything the tenant has to attend. Booking
+  // a time and not telling them is how a viewing becomes a wasted trip.
+  const needsConfirmation = ["showing", "signing", "keys"].includes(type);
+  res.status(201).json({ id, duration_min: mins, blocking: !!blocking,
+    confirmation_required: needsConfirmation && !!contact_info });
 });
 
 /** Sends the confirmation and records that it is outstanding. A booking

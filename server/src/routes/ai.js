@@ -237,6 +237,38 @@ Rules:
 Write the answer only.`,
   },
 
+  /* Drafts a purchase order from a maintenance ticket. The estimate is a
+     starting figure, not a commitment: whoever attends enters the actual
+     before it becomes a bill, and a difference needs a reason. */
+  purchase_order: {
+    permission: "po.create",
+    maxTokens: 1200,
+    build: ({ ticket, unit, category, priority, vendor, history, accounts }) =>
+`Draft a purchase order for a repair at a residential building in Edmonton, Alberta.
+
+THE TICKET
+Unit: ${unit ?? "common area"}
+Category: ${category ?? "unspecified"}
+Priority: ${priority ?? "normal"}
+Reported: ${ticket}
+${vendor ? `Vendor: ${vendor}` : "Vendor: not yet chosen"}
+${history ? `Notes so far:\n${history}` : ""}
+
+Available expense accounts:
+${accounts}
+
+Rules:
+1. Break the work into line items a vendor would recognise. Labour and parts separately where that makes sense.
+2. Estimates only. Say clearly in the scope that the figures are an estimate and the actual is confirmed after the work.
+3. Do not invent a price you have no basis for. If a line cannot be estimated from what is above, put 0 and say in the scope that it needs a quote.
+4. Pick the expense account that fits from the list. Do not invent a code.
+5. Scope should say what "done" means, so there is something to check the invoice against.
+6. Nothing about the tenant beyond the unit number.
+
+Reply with JSON only, no markdown:
+{"description":"one line","scope":"what the vendor is being asked to do and what done looks like","gl_code":"5010","lines":[{"description":"...","gl_code":"5010","quantity":1,"unit_price":0,"estimated":0}],"needs_quote":false,"note":"anything the person raising this should check"}`,
+  },
+
   /* Answers a prospective tenant on the public site. The only task that can
      reach someone without a person in between, which is why the hard stops
      run before it. */

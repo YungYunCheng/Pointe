@@ -14,6 +14,7 @@ import accountingRoutes from "./routes/accounting.js";
 import opsRoutes from "./routes/ops.js";
 import crmRoutes from "./routes/crm.js";
 import agreementRoutes from "./routes/agreements.js";
+import ops2Routes from "./routes/ops2.js";
 import aiRoutes from "./routes/ai.js";
 import tenantRoutes from "./routes/tenant.js";
 import { startBackupJob, startDailyJobs } from "./jobs.js";
@@ -57,6 +58,7 @@ app.use("/api/accounting", accountingRoutes);
 app.use("/api", opsRoutes);
 app.use("/api", crmRoutes);
 app.use("/api", agreementRoutes);
+app.use("/api", ops2Routes);
 app.use("/api", tenantRoutes);
 app.use("/api", aiRoutes);
 

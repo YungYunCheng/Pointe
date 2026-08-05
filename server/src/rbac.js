@@ -39,6 +39,20 @@ export const PERMISSIONS = {
   "entrynotice.manage": "Notices of entry",
   "keys.manage":        "Key handover",
 
+  // Schedule, split by who owns the work
+  "schedule.view":        "See the whole schedule",
+  "schedule.leasing":     "Book signings, renewals and follow-ups",
+  "schedule.showings":    "Book viewings and key handovers",
+  "keys.release":         "Confirm a lease is signed so keys can be booked",
+
+  // Purchase orders
+  "po.create":            "Raise a purchase order",
+  "po.confirm":           "Confirm the actual amount after the work",
+  "po.bill":              "Turn a confirmed order into a bill",
+
+  // Escalation
+  "escalation.answer":    "Answer a message the AI passed to a person",
+
   // Accounting
   "accounting.view":     "View ledgers, invoices and reports",
   "accounting.post":     "Post journal entries, charges and receipts",
@@ -67,12 +81,18 @@ export const ROLE_PERMISSIONS = {
   property_manager: [
     ...COMMON,
     "inbox.manage", "lease.sign", "documents.approve", "moveout.process", "renewals.decide",
+    "schedule.leasing",    // signings, renewals, early questions
+    "keys.release",        // confirms the lease before keys can be booked
+    "escalation.answer",
     "accounting.view",     // read only: arrears matter to leasing, posting does not
+    "po.bill",             // sees what maintenance is committing the property to
   ],
 
   building_manager: [
     ...COMMON,
     "leads.manage", "showings.manage", "maintenance.manage", "entrynotice.manage", "keys.manage",
+    "schedule.showings",   // viewings and key handovers are this role's work
+    "po.create", "po.confirm",
   ],
 
   // Accounting sees the money and the units it belongs to, and nothing about
@@ -82,6 +102,7 @@ export const ROLE_PERMISSIONS = {
     "units.view", "parking.view", "schedule.view", "notifications.view", "evidence.upload",
     "accounting.view", "accounting.post", "accounting.ap", "accounting.ar",
     "accounting.bank", "accounting.close", "accounting.coa", "accounting.reports",
+    "po.bill",
   ],
 };
 
@@ -120,7 +141,7 @@ export function authenticate(req, res, next) {
   req.user = {
     id: row.id, email: row.email, name: row.full_name, role: row.role_code,
     sessionId: row.sid, mustChange: !!row.must_change_password,
-    perms: new Set(permissionsOf(row.role_code)),
+    perms: effectivePermissions(row.id, row.role_code),
   };
   next();
 }

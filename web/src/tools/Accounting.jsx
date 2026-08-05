@@ -489,6 +489,49 @@ function AR({ schedules, charges, receipts, save, post, canPost, session, coa,
   const [newSched, setNewSched] = useState(false);
   const [runPeriod, setRunPeriod] = useState(thisPeriod());
   const [receiptFor, setReceiptFor] = useState(null);
+
+  /* The tenant's receipt goes out once Accounting has confirmed the money,
+     never on the promise of it. A receipt for a payment that later bounces is
+     worse than no receipt at all. */
+  const issueReceipt = async (rec, applied, balanceAfter) => {
+    const number = `R-${new Date().getFullYear()}-${String(receipts.length + 1).padStart(5, "0")}`;
+    let queue = [];
+    try {
+      const r = await window.storage.get("baydo:outbox");
+      if (r?.value) queue = JSON.parse(r.value);
+    } catch (e) {}
+
+    const body = [
+      `Hello,`, "",
+      `We have received your payment. Receipt ${number}.`, "",
+      `Amount: ${money(rec.amount)}`,
+      `Received: ${rec.received_date}`,
+      `Method: ${rec.method}`,
+      rec.unit_number ? `Suite: ${rec.unit_number}` : "",
+      applied.length ? "" : null,
+      applied.length ? "Applied to:" : null,
+      ...applied.map((a) => `  ${a.period ?? ""} ${a.kind ?? ""}  ${money(a.amount)}`),
+      "",
+      balanceAfter > 0 ? `Balance outstanding: ${money(balanceAfter)}`
+                       : "Nothing is outstanding.",
+      "", "───────────────", "",
+      `已收到你的款項，收據編號 ${number}。`,
+      `金額：${money(rec.amount)}`,
+      `收款日：${rec.received_date}`,
+      balanceAfter > 0 ? `目前尚欠：${money(balanceAfter)}` : "目前無欠款。",
+    ].filter((x) => x !== null && x !== "").join("\n");
+
+    try {
+      await window.storage.set("baydo:outbox", JSON.stringify([{
+        id: uid("ob_"), kind: "rent_receipt", channel: "email",
+        to: rec.tenant_email ?? "", to_name: rec.unit_number,
+        subject: `Receipt ${number} · ${money(rec.amount)}`,
+        body, ref_type: "payment_receipt", ref_id: rec.id,
+        state: "queued", created_at: new Date().toISOString(),
+      }, ...queue]));
+    } catch (e) {}
+    return number;
+  };
   const [err, setErr] = useState("");
   const [msg, setMsg] = useState("");
 
@@ -748,8 +791,14 @@ function AR({ schedules, charges, receipts, save, post, canPost, session, coa,
         <ReceiptDialog charge={receiptFor.id ? receiptFor : null}
           charges={openCharges} receipts={receipts} post={post}
           onClose={() => setReceiptFor(null)}
-          onSave={(rec, applied) => {
-            save.receipts([rec, ...receipts]);
+          onSave={async (rec, applied) => {
+            const remaining = cents(charges.reduce((t, c) => {
+              const a = applied.find((x) => x.charge_id === c.id);
+              const paid = cents(c.paid_amount + (a?.amount ?? 0));
+              return t + Math.max(0, cents(c.amount - paid));
+            }, 0));
+            const number = await issueReceipt(rec, applied, remaining);
+            save.receipts([{ ...rec, receipt_sent: number }, ...receipts]);
             save.charges(charges.map((c) => {
               const a = applied.find((x) => x.charge_id === c.id);
               if (!a) return c;
