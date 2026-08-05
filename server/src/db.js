@@ -18,6 +18,16 @@ db.pragma("foreign_keys = ON");
 db.exec(fs.readFileSync(path.join(__dirname, "schema.sql"), "utf8"));
 db.exec(fs.readFileSync(path.join(__dirname, "schema-accounting.sql"), "utf8"));
 
+/** SQLite has no ADD COLUMN IF NOT EXISTS, so columns added after the first
+ *  release go through here. Startup must be repeatable: a schema step that
+ *  throws on the second run turns every restart into a manual job. */
+function addColumn(table, column, definition) {
+  const has = db.prepare(`PRAGMA table_info(${table})`).all().some((c) => c.name === column);
+  if (!has) db.exec(`ALTER TABLE ${table} ADD COLUMN ${column} ${definition}`);
+}
+for (const t of ["ap_invoices", "ar_receipts", "ar_charges"])
+  addColumn(t, "version", "INTEGER NOT NULL DEFAULT 1");
+
 /** Money rounds to cents at every boundary. Left as raw floats, a rent run
  *  across 330 units drifts by a few cents a month and the bank never matches. */
 export const cents = (n) => Math.round((Number(n) + Number.EPSILON) * 100) / 100;

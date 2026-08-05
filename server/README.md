@@ -207,15 +207,15 @@ stores a `title_key` plus JSON `params`, rendered client-side.
 
 ---
 
-## Yardi
+## Financial system of record
 
-**Yardi is the system of record for money. This service tracks workflow state only.**
+This system holds the books. There is no external accounting package behind it:
+the general ledger, AP, AR, deposits and the period close all live here, and
+`docs/ACCOUNTING.md` describes how.
 
-`leases.yardi_ref` is the join key. Rent, deposit balances and receipts should be read
-from Yardi and displayed. Do not create a second editable copy here — if both sides can
-write, they will disagree.
+`leases.external_ref` exists for a reference to an outside system if one is ever
+needed. Nothing writes to it.
 
-Add `src/yardi.js` with read-only functions when you wire it up.
 
 ---
 

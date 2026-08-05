@@ -1,5 +1,6 @@
 import React, { useState, useEffect, useMemo, useCallback } from "react";
 import Banking from "./AccountingBanking.jsx";
+import { AmendDialog, VersionHistory, ChangeLog, InterestRates } from "./AccountingAmend.jsx";
 
 /* ============================================================
    BAYDO POINTE — Accounting
@@ -114,6 +115,9 @@ export default function Accounting() {
   const [periods, setPeriods] = useState([]);
   const [statements, setStatements] = useState([]);
   const [reports, setReports] = useState([]);
+  const [amendments, setAmendments] = useState([]);
+  const [rates, setRates] = useState([]);
+  const [proposals, setProposals] = useState([]);
   const [loading, setLoading] = useState(true);
 
   const canPost = session?.role === "accounting" || session?.role === "admin";
@@ -135,6 +139,9 @@ export default function Accounting() {
       setPeriods(await read("acct:periods", []));
       setStatements(await read("acct:statements", []));
       setReports(await read("acct:reports", []));
+      setAmendments(await read("acct:amendments", []));
+      setRates(await read("acct:rates", []));
+      setProposals(await read("acct:proposals", []));
       setLoading(false);
     })();
   }, []);
@@ -158,6 +165,9 @@ export default function Accounting() {
     periods: (v) => { setPeriods(v); persist("acct:periods", v); },
     statements: (v) => { setStatements(v); persist("acct:statements", v); },
     reports: (v) => { setReports(v); persist("acct:reports", v); },
+    amendments: (v) => { setAmendments(v); persist("acct:amendments", v); },
+    rates: (v) => { setRates(v); persist("acct:rates", v); },
+    proposals: (v) => { setProposals(v); persist("acct:proposals", v); },
   };
 
   /* ---------- posting ----------
@@ -255,6 +265,8 @@ export default function Accounting() {
     ["banking", "Banking"],
     ["reports", "Reports"],
     ["coa", "Accounts"],
+    ["changelog", "Change log"],
+    ["settings", "Settings"],
   ];
 
   return (
@@ -305,14 +317,17 @@ export default function Accounting() {
       {tab === "dashboard" && <Dashboard {...{ stats, balances, coa, charges, invoices,
         periods, periodStateOf, glName }} />}
       {tab === "ar" && <AR {...{ schedules, charges, receipts, save, post, canPost,
-        session, glName, coa, periodStateOf }} />}
-      {tab === "ap" && <AP {...{ vendors, invoices, save, post, canPost, coa, glName }} />}
+        session, glName, coa, periodStateOf, amendments }} />}
+      {tab === "ap" && <AP {...{ vendors, invoices, save, post, canPost, coa, glName,
+        session, amendments }} />}
       {tab === "search" && <Search {...{ entries, glName, vendors }} />}
       {tab === "banking" && <Banking {...{ statements, entries, receipts, invoices, periods,
         balances, save, canPost, session, coa }} />}
       {tab === "reports" && <Reports {...{ reports, periods, entries, charges, receipts,
         coa, save, canPost, session }} />}
       {tab === "coa" && <ChartOfAccounts {...{ coa, balances, setCoa, canPost }} />}
+      {tab === "changelog" && <ChangeLog {...{ amendments, entries, save, canPost }} />}
+      {tab === "settings" && <InterestRates {...{ rates, proposals, save, canPost, session }} />}
 
       <footer className="ac-foot">
         Accrual basis: revenue is recognised when billed, expenses when incurred.
@@ -465,8 +480,11 @@ function Stat({ l, v, sub, tone, small }) {
 
 /* ══════════════════ AR ══════════════════ */
 
-function AR({ schedules, charges, receipts, save, post, canPost, session, coa, periodStateOf }) {
+function AR({ schedules, charges, receipts, save, post, canPost, session, coa,
+              periodStateOf, amendments }) {
   const [view, setView] = useState("charges");
+  const [amendCharge, setAmendCharge] = useState(null);
+  const [amendReceipt, setAmendReceipt] = useState(null);
   const [newSched, setNewSched] = useState(false);
   const [runPeriod, setRunPeriod] = useState(thisPeriod());
   const [receiptFor, setReceiptFor] = useState(null);
@@ -647,10 +665,13 @@ function AR({ schedules, charges, receipts, save, post, canPost, session, coa, p
                     <span className="ac-mono">{money(c.amount)}</span>
                     <span className="ac-mono">{owing > 0 ? money(owing) : "—"}</span>
                     <span className={`ac-mono ${late ? "ac-bad" : "ac-dim"}`}>{c.due_date}</span>
-                    <span>
-                      {owing > 0 && canPost
-                        ? <button className="ac-btn ac-btn--xs" onClick={() => setReceiptFor(c)}>Receipt</button>
-                        : <span className="ac-tag" style={{ "--c": st.color }}>{st.label}</span>}
+                    <span className="ac-actions">
+                      {owing > 0 && canPost &&
+                        <button className="ac-btn ac-btn--xs" onClick={() => setReceiptFor(c)}>Receipt</button>}
+                      {owing === 0 && <span className="ac-tag" style={{ "--c": st.color }}>{st.label}</span>}
+                      {canPost && <button className="ac-btn ac-btn--xs ac-btn--ghost"
+                                          onClick={() => setAmendCharge(c)}>Amend</button>}
+                      {(c.version ?? 1) > 1 && <span className="ac-pill">v{c.version}</span>}
                     </span>
                   </div>
                 );
@@ -682,12 +703,44 @@ function AR({ schedules, charges, receipts, save, post, canPost, session, coa, p
                   <span className="ac-mono">{r.received_date}</span>
                   <span className="ac-mono">{money(r.amount)}</span>
                   <span>{r.method}</span>
-                  <span className="ac-dim">{r.reference || "—"}</span>
+                  <span className="ac-dim">
+                    {r.reference || "—"}
+                    {(r.version ?? 1) > 1 && <span className="ac-pill">v{r.version}</span>}
+                    {canPost && <button className="ac-btn ac-btn--xs ac-btn--ghost"
+                                        style={{ marginLeft: 8 }}
+                                        onClick={() => setAmendReceipt(r)}>Amend</button>}
+                  </span>
                 </div>
               ))}
             </div>
           )}
         </section>
+      )}
+
+      {amendCharge && (
+        <AmendDialog kind="ar_charge" doc={amendCharge} coa={coa} post={post} session={session}
+          onClose={() => setAmendCharge(null)}
+          onSave={({ patch, amendment, replacementEntryId }) => {
+            save.charges(charges.map((c) => c.id === amendCharge.id
+              ? { ...c, ...patch, version: (c.version ?? 1) + 1,
+                  entry_id: replacementEntryId ?? c.entry_id,
+                  state: cents(c.paid_amount) >= cents(patch.amount) ? "paid"
+                    : cents(c.paid_amount) > 0 ? "partial" : "open" } : c));
+            if (amendment) save.amendments([amendment, ...amendments]);
+            setAmendCharge(null);
+          }} />
+      )}
+
+      {amendReceipt && (
+        <AmendDialog kind="ar_receipt" doc={amendReceipt} coa={coa} post={post} session={session}
+          onClose={() => setAmendReceipt(null)}
+          onSave={({ patch, amendment, replacementEntryId }) => {
+            save.receipts(receipts.map((r) => r.id === amendReceipt.id
+              ? { ...r, ...patch, version: (r.version ?? 1) + 1,
+                  entry_id: replacementEntryId ?? r.entry_id } : r));
+            if (amendment) save.amendments([amendment, ...amendments]);
+            setAmendReceipt(null);
+          }} />
       )}
 
       {receiptFor && (
@@ -864,12 +917,27 @@ function ReceiptDialog({ charge, charges, receipts, post, onClose, onSave }) {
 
 /* ══════════════════ AP ══════════════════ */
 
-function AP({ vendors, invoices, save, post, canPost, coa, glName }) {
+function AP({ vendors, invoices, save, post, canPost, coa, glName, session, amendments }) {
   const [view, setView] = useState("invoices");
   const [newInv, setNewInv] = useState(false);
   const [newVendor, setNewVendor] = useState(false);
   const [payFor, setPayFor] = useState(null);
+  const [amendFor, setAmendFor] = useState(null);
   const [err, setErr] = useState("");
+
+  /* An amendment reverses and reposts. The invoice keeps its number so
+     anything linked to it still resolves, and gains a version. */
+  const applyAmendment = ({ patch, amendment, replacementEntryId }) => {
+    save.invoices(invoices.map((i) => i.id === amendFor.id
+      ? { ...i, ...patch, version: (i.version ?? 1) + (amendment ? 1 : 0),
+          entry_id: replacementEntryId ?? i.entry_id,
+          state: amendment
+            ? (cents(i.paid_amount) >= cents(patch.total) ? "paid"
+               : cents(i.paid_amount) > 0 ? "partial" : "approved")
+            : i.state } : i));
+    if (amendment) save.amendments([amendment, ...amendments]);
+    setAmendFor(null);
+  };
 
   const approve = (inv) => {
     setErr("");
@@ -943,6 +1011,12 @@ function AP({ vendors, invoices, save, post, canPost, coa, glName }) {
                         <button className="ac-btn ac-btn--xs" onClick={() => approve(i)}>Approve</button>}
                       {canPost && owing > 0 && i.state !== "draft" &&
                         <button className="ac-btn ac-btn--xs" onClick={() => setPayFor(i)}>Pay</button>}
+                      {canPost && i.state !== "void" &&
+                        <button className="ac-btn ac-btn--xs ac-btn--ghost"
+                                onClick={() => setAmendFor(i)}>
+                          {i.state === "draft" ? "Edit" : "Amend"}
+                        </button>}
+                      {(i.version ?? 1) > 1 && <span className="ac-pill">v{i.version}</span>}
                     </span>
                   </div>
                 );
@@ -985,6 +1059,11 @@ function AP({ vendors, invoices, save, post, canPost, coa, glName }) {
             })}
           </div>
         </section>
+      )}
+
+      {amendFor && (
+        <AmendDialog kind="ap_invoice" doc={amendFor} coa={coa} post={post} session={session}
+          onClose={() => setAmendFor(null)} onSave={applyAmendment} />
       )}
 
       {payFor && (

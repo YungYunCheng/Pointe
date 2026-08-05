@@ -1,7 +1,7 @@
 # Accounting
 
-Double entry, per building, with a period close. Roughly what Yardi does for
-property and QuickBooks does for bookkeeping, scoped to 330 units.
+Double entry, per building, with a period close. This is the financial system
+of record — there is nothing behind it.
 
 ---
 
@@ -167,7 +167,72 @@ refund is short.
 
 **Owner statements and distributions.** Not built.
 
-**Yardi.** The compose file and earlier notes treat Yardi as the financial
-system of record. This module makes that a decision rather than an assumption:
-one of them owns the numbers. Two systems that both accept a rent receipt will
-disagree within a month.
+---
+
+## Amendments
+
+Nothing posted is edited in place and nothing is deleted.
+
+**A draft** has never touched the ledger, so it edits freely.
+
+**A posted document** amends: the original entry is reversed, a replacement is
+posted, and both stay visible. The document keeps its id and its number — so
+anything linked to it still resolves — and gains a version.
+
+```
+Invoice 4471  v1   $682.50   repairs           entry #118  (reversed)
+                             ↓  amended: coded to the wrong account
+Invoice 4471  v2   $745.00   elevator maint.   entry #131 reversal
+                                               entry #132 replacement
+```
+
+This is what lets someone fix a keying error without unpicking the payments and
+re-entering everything. It is also what an auditor expects: a correction is an
+event, not a gap where a number used to be.
+
+Two things are refused:
+
+**An amendment below what has already been paid.** Refunding an overpayment is a
+decision, not a side effect of correcting a typo.
+
+**An amendment with no reason.** Six months later the reason matters more than
+the number.
+
+Amending a receipt unwinds what it was applied to and reapplies it, so the
+charges it was covering return to open until the new amount is allocated.
+
+### The change log
+
+Every amendment records the fields that moved, computed by comparing snapshots.
+That record does not depend on anyone remembering to describe what they changed.
+
+Beside it, the AI writes one sentence:
+
+> Invoice 4471 from Northgate Plumbing amended from $682.50 to $745.00 and moved
+> from repairs to elevator maintenance, because the original was coded to the
+> wrong account.
+
+The sentence adds nothing to the record. It exists so that reading a month of
+changes does not mean reading JSON. If the AI is unavailable the log still works
+and still holds everything that matters.
+
+---
+
+## Deposit interest
+
+Alberta sets the rate annually under the Security Deposit Interest Rate
+Regulation. Every deposit held earns it and every refund includes it.
+
+The AI looks the figure up and reports where it came from. It does not set it.
+
+A wrong rate here multiplies across every deposit and is not discovered until
+someone moves out and their refund is short — which is exactly the failure a
+model is good at producing and nobody is watching for. So a proposal carries a
+confidence and a source, an unverified one is flagged in red, and a person
+confirms before the accrual has anything to run on.
+
+Rates are stored per year, not as one setting: a deposit held across several
+years accrues at each year's own rate.
+
+Until a rate is confirmed the accrual does nothing, and a notification says so
+rather than letting it fail quietly.

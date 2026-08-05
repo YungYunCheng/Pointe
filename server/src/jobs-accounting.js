@@ -135,6 +135,7 @@ export function startAccountingJobs() {
       const rent = dailyRentRun();
       arrearsSummary();
       monthEndPrompt();
+      checkInterestRate();
       if (rent?.created) console.log(`[accounting] jobs ok @ ${nowISO()}`);
     } catch (e) {
       console.error("[accounting] jobs failed:", e.message);
@@ -142,4 +143,81 @@ export function startAccountingJobs() {
   };
   run();
   setInterval(run, 6 * HOUR);
+}
+
+/* ============================================================
+   AI-assisted accounting
+   ============================================================ */
+
+/** The deposit interest rate is published annually by Alberta. Getting it
+ *  wrong makes every refund wrong, and nobody finds out until a tenant
+ *  leaves — so this proposes with a source and a person confirms. The model
+ *  is told to say it does not know rather than produce a plausible number,
+ *  because a plausible number is exactly the failure that would not be
+ *  caught here. */
+export function interestRatePrompt(year) {
+  return `You are helping a residential property manager in Alberta, Canada find the security deposit interest rate for ${year}.
+
+Under the Residential Tenancies Act, a landlord holding a security deposit must pay interest at the rate prescribed by the Security Deposit Interest Rate Regulation. The rate is set annually.
+
+Report what the rate is for ${year}, and where that comes from.
+
+Rules:
+1. If you are not certain of the figure for ${year}, say so. Set confidence to "unverified" and explain what should be checked. A confident wrong rate here makes every deposit refund wrong, and it will not be noticed until a tenant moves out.
+2. Do not interpolate from other years or estimate. Either you know the published figure or you do not.
+3. Give the rate as a decimal: 0.02 for 2%, 0.0 for zero.
+4. Note that this rate has been set at zero for a long stretch of recent years. If that is what you find, say so plainly rather than treating zero as an error.
+5. Name the source a person can check — the regulation, or the Service Alberta page.
+
+Reply with JSON only, no markdown:
+{"year":${year},"rate":0.0,"confidence":"high|low|unverified","source_text":"what the source says","source_url":"where to verify","reasoning":"one or two sentences, including what a person should confirm"}`;
+}
+
+/** Turns an audit row into a sentence. The computed diff is the record; this
+ *  is so that reading a month of changes does not mean reading JSON. */
+export function changeNarrativePrompt(entry) {
+  return `Describe one accounting change in a single plain sentence, for a change log a bookkeeper will read.
+
+CHANGE
+Action: ${entry.action}
+Record: ${entry.entity_type} ${entry.entity_id ?? ""}
+By: ${entry.actor_name ?? "system"} at ${entry.created_at}
+Before: ${entry.before_value ?? "(nothing)"}
+After: ${entry.after_value ?? "(nothing)"}
+
+Rules:
+1. State what changed and by how much. Use the exact figures given.
+2. Never introduce a number that is not above.
+3. If a reason was recorded, include it. If not, do not invent one.
+4. One sentence. No preamble, no interpretation of whether it was correct.
+
+Example of the register: "Invoice 4471 from Northgate Plumbing amended from $682.50 to $745.00 and moved from repairs to elevator maintenance, because the original was coded to the wrong account."
+
+Write the sentence only.`;
+}
+
+/** Runs after the close, once the numbers are final. Narratives are written
+ *  for amendments first: those are the changes someone will ask about. */
+export function pendingNarratives(limit = 20) {
+  return db.prepare(`SELECT a.* FROM amendments a
+    WHERE a.narrative IS NULL ORDER BY a.amended_at DESC LIMIT ?`).all(limit);
+}
+
+/** Flags a rate that has not been set for the current year. Without it the
+ *  accrual silently does nothing and every refund is short. */
+export function checkInterestRate() {
+  const year = new Date().getFullYear();
+  const rate = db.prepare("SELECT * FROM deposit_interest_rates WHERE year=?").get(year);
+  const pending = db.prepare(`SELECT 1 FROM interest_rate_proposals
+    WHERE year=? AND state='proposed'`).get(year);
+  if (rate && rate.source && !/placeholder/i.test(rate.source)) return null;
+  if (pending) return null;
+
+  const exists = db.prepare(`SELECT 1 FROM notifications
+    WHERE kind='interest_rate' AND date(created_at) > date('now','-30 day')`).get();
+  if (exists) return null;
+
+  notify("accounting", "interest_rate", "INTEREST_RATE_UNSET", { year }, "/accounting/settings");
+  console.log(`[accounting] deposit interest rate for ${year} is not confirmed`);
+  return year;
 }

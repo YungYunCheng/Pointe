@@ -327,3 +327,70 @@ CREATE TABLE IF NOT EXISTS monthly_reports (
   approved_at   TEXT,
   UNIQUE (period, building_code)
 );
+
+-- ============================================================
+-- Amendments
+--
+-- A posted entry is never edited and never deleted. Amending one
+-- reverses the original and posts a replacement, and both stay
+-- visible. The document keeps its id, so anything linked to it
+-- still resolves, and gains a version.
+--
+-- This is what lets someone fix a keying error without unpicking
+-- payments and re-entering the whole thing, while leaving a trail
+-- that shows what was there before.
+-- ============================================================
+
+CREATE TABLE IF NOT EXISTS amendments (
+  id            TEXT PRIMARY KEY,
+  entity_type   TEXT NOT NULL,              -- ap_invoice | ar_receipt | ar_charge | journal | schedule
+  entity_id     TEXT NOT NULL,
+  version_from  INTEGER NOT NULL,
+  version_to    INTEGER NOT NULL,
+  before_value  TEXT NOT NULL,              -- snapshot, so the old state is readable
+  after_value   TEXT NOT NULL,
+  changed       TEXT NOT NULL,              -- the fields that moved, as computed facts
+  reason        TEXT,                       -- required: why, in the amender's words
+  reversal_id   TEXT REFERENCES journal_entries(id),
+  replacement_id TEXT REFERENCES journal_entries(id),
+  narrative     TEXT,                       -- AI written, supplementary, never the record
+  narrative_model TEXT,
+  amended_by    TEXT REFERENCES users(id),
+  amended_name  TEXT,
+  amended_at    TEXT NOT NULL DEFAULT (datetime('now'))
+);
+CREATE INDEX IF NOT EXISTS idx_amend_entity ON amendments(entity_type, entity_id, version_to);
+CREATE INDEX IF NOT EXISTS idx_amend_time ON amendments(amended_at DESC);
+
+
+-- ---------- Deposit interest rate proposals ----------
+-- Alberta publishes this annually. Getting it wrong means every refund is
+-- wrong, and nobody finds out until a tenant leaves. The AI researches and
+-- proposes with a source; a person confirms before it can be used.
+CREATE TABLE IF NOT EXISTS interest_rate_proposals (
+  id           TEXT PRIMARY KEY,
+  year         INTEGER NOT NULL,
+  rate         REAL NOT NULL,
+  source_text  TEXT,                        -- what the AI found, verbatim
+  source_url   TEXT,
+  confidence   TEXT,                        -- high | low | unverified
+  reasoning    TEXT,
+  model        TEXT,
+  state        TEXT NOT NULL DEFAULT 'proposed'
+               CHECK (state IN ('proposed','confirmed','rejected')),
+  confirmed_by TEXT REFERENCES users(id),
+  confirmed_at TEXT,
+  rejected_reason TEXT,
+  created_at   TEXT NOT NULL DEFAULT (datetime('now'))
+);
+CREATE INDEX IF NOT EXISTS idx_irp_year ON interest_rate_proposals(year, state);
+
+-- ---------- Change log narratives ----------
+-- The audit row is the record. This adds a readable sentence beside it, so
+-- a month later "what happened here" does not require reading JSON.
+CREATE TABLE IF NOT EXISTS audit_narratives (
+  audit_id   INTEGER PRIMARY KEY REFERENCES audit_log(id),
+  narrative  TEXT NOT NULL,
+  model      TEXT,
+  created_at TEXT NOT NULL DEFAULT (datetime('now'))
+);

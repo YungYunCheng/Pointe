@@ -14,9 +14,10 @@ import { useT } from "../lib/locale.jsx";
      and says to call. A form that quietly queues an active leak
      behind three other tickets is worse than no form.
 
-   · Rent links out to the accounting system rather than taking a
-     payment here. Yardi is the system of record for money; a second
-     place to record a payment is a second place for it to disagree.
+   · Rent shows what is owed and how it was arrived at, but a payment
+     is recorded once, by accounting, against the charge it settles.
+     A second place to record a payment is a second place for it to
+     disagree with the ledger.
    ============================================================ */
 
 const OFFICE_PHONE = "306-974-1727";
@@ -301,8 +302,9 @@ function Rent({ session }) {
         <strong>{money(session.rent)}</strong><em>{t("suites.perMonth")}</em>
       </div>
       <p className="bt-dim">{t("rent.dueOn", { day: 1 })}</p>
-      {/* Payments live in the accounting system. Recording them here as well
-          would create a second version of the truth about money. */}
+      {/* A payment is recorded once, by accounting, against the charge it
+          settles. Recording it here as well would create a second version of
+          the truth about money. */}
       <a className="bt-btn" href="#" onClick={(e) => e.preventDefault()}>{t("rent.payLink")}</a>
       <p className="bt-hint" style={{ marginTop: 10 }}>{t("rent.external")}</p>
     </div>

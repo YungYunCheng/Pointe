@@ -185,7 +185,7 @@ CREATE TABLE IF NOT EXISTS leases (
   status           TEXT NOT NULL DEFAULT 'active'
                    CHECK (status IN ('draft','active','ended','terminated')),
   last_increase_at TEXT,                    -- an increase requires 365 days since this date
-  yardi_ref        TEXT,                    -- Yardi is the financial system of record
+  external_ref     TEXT,                    -- optional reference to an outside system
   created_by       TEXT REFERENCES users(id),
   created_at       TEXT NOT NULL DEFAULT (datetime('now'))
 );

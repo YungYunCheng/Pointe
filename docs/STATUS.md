@@ -248,8 +248,9 @@ and it is unmeasured. The `turnover` status exists; nothing uses it.
 **8. Showing outcomes do not feed pricing.** A unit shown twelve times without an
 application is telling you something. Nobody is listening.
 
-**9. No deposit interest.** Alberta requires deposits held in trust to earn
-interest. Refunds are currently short by that amount.
+**9. Deposit interest.** Built. The rate is researched by the AI with a cited
+source and confirmed by a person before it can be used — a confident wrong rate
+here makes every refund wrong and is not discovered until a tenant moves out.
 
 ### Legal exposure
 
@@ -270,8 +271,8 @@ These calls belong on the server, which also puts them in the audit log.
 
 ### Should exist before launch
 
-**15. Rent collection and arrears.** Going to Yardi. Define which system owns the
-number before both do.
+**15. Rent collection and arrears.** Built. This system is now the financial
+system of record; there is no external package behind it.
 
 **16. No shadow mode.** The architecture describes running the AI without sending
 for two to four weeks to measure error rates. Worth doing.
