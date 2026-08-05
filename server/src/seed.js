@@ -52,9 +52,9 @@ const HOLIDAYS = [
   ["2026-08-03", "Heritage Day (optional in Alberta)", "Heritage Day（Alberta 選擇性假日）", 0],
 ];
 
-export function ensureSeed() {
+export async function ensureSeed() {
   syncRbac();
-  seedAccounting();
+  await seedAccounting();
   seedAgreements();
   // Contacts created before duplicate detection existed have no normalised
   // columns, and the checks scan those rather than the raw strings.
@@ -102,7 +102,7 @@ export function ensureSeed() {
     password_algo, password_salt, password_hash) VALUES (?,?,?,?,?,?,?,?)`);
   for (const [email, name, role, pw, locale] of USERS) {
     if (db.prepare("SELECT 1 FROM users WHERE email = ?").get(email)) continue;
-    const h = hashPassword(pw);
+    const h = await hashPassword(pw);
     insUser.run(uid("usr_"), email, name, role, locale, h.algo, h.salt, h.hash);
     console.log(`[seed] created account ${email} (${role})`);
   }

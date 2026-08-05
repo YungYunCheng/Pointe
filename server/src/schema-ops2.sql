@@ -154,3 +154,146 @@ CREATE TABLE IF NOT EXISTS key_release_approvals (
   created_at   TEXT NOT NULL DEFAULT (datetime('now')),
   UNIQUE (unit_number, lease_id)
 );
+
+-- ---------- Shadow mode ----------
+-- The AI runs the whole way through and nothing is sent. Two to four weeks
+-- of this before going live is how you find out the error rate instead of
+-- guessing it — and the errors that matter are the ones nobody would have
+-- caught by reading a few samples.
+CREATE TABLE IF NOT EXISTS shadow_runs (
+  id            TEXT PRIMARY KEY,
+  message_id    TEXT,
+  source        TEXT,
+  intent        TEXT,
+  confidence    REAL,
+  level         TEXT,                       -- what it would have done
+  rule_id       TEXT,
+  draft         TEXT,
+  facts_used    TEXT,
+  would_send    INTEGER NOT NULL DEFAULT 0,
+  -- Filled by a person afterwards. Without this the run is a pile of drafts
+  -- nobody scored, which measures nothing.
+  reviewed_by   TEXT REFERENCES users(id),
+  reviewed_name TEXT,
+  verdict       TEXT CHECK (verdict IN ('correct','wrong_intent','wrong_content','should_not_send','missed_stop')),
+  reviewer_note TEXT,
+  reviewed_at   TEXT,
+  created_at    TEXT NOT NULL DEFAULT (datetime('now'))
+);
+CREATE INDEX IF NOT EXISTS idx_shadow_verdict ON shadow_runs(verdict, created_at DESC);
+
+-- ---------- Turnover ----------
+-- Between a tenant leaving and the unit being back on the market is pure
+-- vacancy loss, and it is the number nobody measures because no single
+-- person owns it.
+CREATE TABLE IF NOT EXISTS turnovers (
+  id             TEXT PRIMARY KEY,
+  unit_number    TEXT NOT NULL REFERENCES units(unit_number),
+  moveout_id     TEXT REFERENCES moveouts(id),
+  vacated_at     TEXT NOT NULL,
+  inspected_at   TEXT,
+  work_started_at TEXT,
+  work_done_at   TEXT,
+  listed_at      TEXT,
+  leased_at      TEXT,
+  occupied_at    TEXT,
+  daily_rent     REAL,
+  cost_total     REAL DEFAULT 0,
+  state          TEXT NOT NULL DEFAULT 'vacant'
+                 CHECK (state IN ('vacant','inspecting','working','listed','leased','occupied')),
+  note           TEXT,
+  created_at     TEXT NOT NULL DEFAULT (datetime('now'))
+);
+CREATE INDEX IF NOT EXISTS idx_turnover_state ON turnovers(state, vacated_at);
+
+CREATE TABLE IF NOT EXISTS turnover_tasks (
+  id          TEXT PRIMARY KEY,
+  turnover_id TEXT NOT NULL REFERENCES turnovers(id) ON DELETE CASCADE,
+  label       TEXT NOT NULL,
+  ticket_id   TEXT REFERENCES maintenance(id),
+  po_id       TEXT REFERENCES purchase_orders(id),
+  done        INTEGER NOT NULL DEFAULT 0,
+  done_at     TEXT,
+  done_by     TEXT
+);
+
+-- ---------- Pricing signals ----------
+-- A unit shown twelve times without an application is telling you something.
+CREATE TABLE IF NOT EXISTS pricing_signals (
+  id            TEXT PRIMARY KEY,
+  unit_type     TEXT NOT NULL,
+  period        TEXT NOT NULL,
+  showings      INTEGER NOT NULL DEFAULT 0,
+  applications  INTEGER NOT NULL DEFAULT 0,
+  not_interested INTEGER NOT NULL DEFAULT 0,
+  price_reason  INTEGER NOT NULL DEFAULT 0, -- said no because of price
+  avg_days_vacant REAL,
+  current_rent  REAL,
+  computed_at   TEXT NOT NULL DEFAULT (datetime('now')),
+  UNIQUE (unit_type, period)
+);
+
+-- ---------- GST ----------
+CREATE TABLE IF NOT EXISTS gst_returns (
+  id            TEXT PRIMARY KEY,
+  period_from   TEXT NOT NULL,
+  period_to     TEXT NOT NULL,
+  collected     REAL NOT NULL DEFAULT 0,    -- 2300, GST charged out
+  input_credits REAL NOT NULL DEFAULT 0,    -- 1210, GST paid on purchases
+  net           REAL NOT NULL DEFAULT 0,
+  state         TEXT NOT NULL DEFAULT 'draft'
+                CHECK (state IN ('draft','filed','paid')),
+  filed_at      TEXT,
+  filed_by      TEXT REFERENCES users(id),
+  confirmation  TEXT,
+  entry_id      TEXT REFERENCES journal_entries(id),
+  note          TEXT,
+  created_at    TEXT NOT NULL DEFAULT (datetime('now')),
+  UNIQUE (period_from, period_to)
+);
+
+-- ---------- Fixed assets ----------
+CREATE TABLE IF NOT EXISTS fixed_assets (
+  id             TEXT PRIMARY KEY,
+  name           TEXT NOT NULL,
+  building_code  TEXT REFERENCES buildings(code),
+  asset_class    TEXT,                      -- CCA class, e.g. 1 for buildings
+  cost           REAL NOT NULL,
+  in_service_on  TEXT NOT NULL,
+  useful_life_years REAL,
+  method         TEXT NOT NULL DEFAULT 'straight_line'
+                 CHECK (method IN ('straight_line','declining_balance')),
+  rate           REAL,                      -- for declining balance
+  salvage        REAL DEFAULT 0,
+  asset_gl       TEXT DEFAULT '1500',
+  accum_gl       TEXT DEFAULT '1510',
+  expense_gl     TEXT DEFAULT '5200',
+  disposed_on    TEXT,
+  is_active      INTEGER NOT NULL DEFAULT 1,
+  created_at     TEXT NOT NULL DEFAULT (datetime('now'))
+);
+
+CREATE TABLE IF NOT EXISTS depreciation_runs (
+  id         TEXT PRIMARY KEY,
+  asset_id   TEXT NOT NULL REFERENCES fixed_assets(id),
+  period     TEXT NOT NULL,
+  amount     REAL NOT NULL,
+  entry_id   TEXT REFERENCES journal_entries(id),
+  created_at TEXT NOT NULL DEFAULT (datetime('now')),
+  UNIQUE (asset_id, period)
+);
+
+-- ---------- Owner statements ----------
+CREATE TABLE IF NOT EXISTS owner_statements (
+  id            TEXT PRIMARY KEY,
+  period        TEXT NOT NULL,
+  building_code TEXT REFERENCES buildings(code),
+  figures       TEXT NOT NULL,
+  method        TEXT NOT NULL,
+  distribution  REAL DEFAULT 0,
+  state         TEXT NOT NULL DEFAULT 'draft'
+                CHECK (state IN ('draft','final','sent')),
+  entry_id      TEXT REFERENCES journal_entries(id),
+  created_at    TEXT NOT NULL DEFAULT (datetime('now')),
+  UNIQUE (period, building_code)
+);

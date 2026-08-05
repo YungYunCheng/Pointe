@@ -62,35 +62,13 @@ export function txn(fn) {
 /* ---------- Passwords and tokens ---------- */
 const SCRYPT = { N: 16384, r: 8, p: 1, keylen: 32 };
 
-export function hashPassword(password) {
-  const salt = crypto.randomBytes(16);
-  const hash = crypto.scryptSync(password, salt, SCRYPT.keylen, SCRYPT);
-  return { algo: "scrypt", salt: salt.toString("base64"), hash: hash.toString("base64") };
-}
+/* Password hashing lives in crypto.js: Argon2id where the native module is
+   available, scrypt otherwise, with the algorithm stored alongside the hash so
+   a switch does not invalidate anyone's password. */
+export { hashPassword, verifyPassword, needsRehash, randToken, sha256, fileHash }
+  from "./crypto.js";
 
-export function verifyPassword(password, user) {
-  try {
-    const salt = Buffer.from(user.password_salt, "base64");
-    const expected = Buffer.from(user.password_hash, "base64");
-    const actual = crypto.scryptSync(password, salt, expected.length, SCRYPT);
-    return crypto.timingSafeEqual(actual, expected);
-  } catch { return false; }
-}
 
-export const randToken = () => crypto.randomBytes(32).toString("base64url");
-export const sha256 = (s) => crypto.createHash("sha256").update(s).digest("base64");
-export const fileHash = (buf) => crypto.createHash("sha256").update(buf).digest("hex");
-
-/* ---------- Password policy ---------- */
-export function passwordIssues(pw) {
-  const out = [];
-  if (!pw || pw.length < 10) out.push("MIN_LENGTH_10");
-  if (!/[a-z]/.test(pw)) out.push("NEEDS_LOWERCASE");
-  if (!/[A-Z]/.test(pw)) out.push("NEEDS_UPPERCASE");
-  if (!/\d/.test(pw)) out.push("NEEDS_DIGIT");
-  if (!/[^A-Za-z0-9]/.test(pw)) out.push("NEEDS_SYMBOL");
-  return out;
-}
 
 /* ---------- Business day helpers (used by reminders) ---------- */
 const holidaySet = () =>

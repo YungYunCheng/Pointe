@@ -1,5 +1,5 @@
 import { Router } from "express";
-import { db, uid, nowISO, prevBusinessDay, daysBetween } from "../db.js";
+import { db, uid, nowISO, prevBusinessDay, daysBetween, txn } from "../db.js";
 import { authenticate, require_, audit, notify } from "../rbac.js";
 import { screen, upsertContact, normEmail, normPhone } from "../screening.js";
 import { queue, requestConfirmation } from "../outbox.js";
@@ -554,6 +554,84 @@ r.patch("/key-handovers/:id", require_("keys.manage"), (req, res) => {
   audit(req, { action: "keys.update", entityType: "key_handover", entityId: k.id,
                after: { state: state ?? k.state, scheduled_at } });
   res.json({ ok: true });
+});
+
+/* ---------- Merge ----------
+   The same person enquires, applies, signs and renews, and turns up as
+   several records. Merging keeps one and points the rest at it rather than
+   deleting them: a lead id sitting in an old booking still has to resolve.  */
+
+r.get("/leads/duplicates", require_("leads.view"), (req, res) => {
+  const leads = db.prepare(`SELECT l.*, c.normalised_email, c.normalised_phone
+    FROM leads l LEFT JOIN contacts c ON c.id = l.contact_id`).all();
+
+  const groups = new Map();
+  for (const l of leads) {
+    const key = l.normalised_email || l.normalised_phone;
+    if (!key) continue;
+    if (!groups.has(key)) groups.set(key, []);
+    groups.get(key).push(l);
+  }
+
+  const dupes = [...groups.entries()]
+    .filter(([, rows]) => rows.length > 1)
+    .map(([key, rows]) => ({
+      key,
+      // The oldest is kept: it holds the first contact date, which is what the
+      // response-time figures are measured from.
+      keep: rows.sort((a, b) => String(a.created_at).localeCompare(String(b.created_at)))[0],
+      merge: rows.slice(1),
+      // The furthest-along stage survives the merge. A person who signed a
+      // lease is not "new" because they enquired again about a second unit.
+      final_stage: ["leased", "applied", "viewed", "booked", "contacted", "new", "lost"]
+        .find((st) => rows.some((r) => r.stage === st)),
+    }));
+
+  res.json({ duplicates: dupes, count: dupes.length });
+});
+
+r.post("/leads/merge", require_("leads.manage"), (req, res) => {
+  const { keep_id, merge_ids, stage } = req.body ?? {};
+  if (!keep_id || !merge_ids?.length)
+    return res.status(400).json({ code: "MISSING_MERGE_FIELDS" });
+
+  try {
+    const out = txn(() => {
+      const keep = db.prepare("SELECT * FROM leads WHERE id=?").get(keep_id);
+      if (!keep) throw Object.assign(new Error("LEAD_NOT_FOUND"), { status: 404 });
+
+      let notes = 0, units = new Set(parse(keep.units, []));
+      for (const id of merge_ids) {
+        if (id === keep_id) continue;
+        const l = db.prepare("SELECT * FROM leads WHERE id=?").get(id);
+        if (!l) continue;
+
+        // Notes move rather than being discarded: what somebody was told is
+        // usually the useful part of an old record.
+        const moved = db.prepare("UPDATE lead_notes SET lead_id=? WHERE lead_id=?")
+          .run(keep_id, id);
+        notes += moved.changes;
+        for (const u of parse(l.units, [])) units.add(u);
+
+        db.prepare("UPDATE showing_requests SET lead_id=? WHERE lead_id=?").run(keep_id, id);
+        db.prepare("UPDATE applications SET lead_id=? WHERE lead_id=?").run(keep_id, id);
+
+        db.prepare(`INSERT INTO lead_notes (id, lead_id, body, by_name)
+          VALUES (?,?,?,'merge')`).run(uid("ln_"), keep_id,
+          `Merged from a duplicate record created ${String(l.created_at).slice(0, 10)}` +
+          `${l.source ? ` via ${l.source}` : ""}.`);
+        db.prepare("DELETE FROM leads WHERE id=?").run(id);
+      }
+
+      db.prepare(`UPDATE leads SET units=?, stage=COALESCE(?,stage), last_contact_at=?
+        WHERE id=?`).run(JSON.stringify([...units]), stage ?? null, nowISO(), keep_id);
+      return { kept: keep_id, merged: merge_ids.length, notes_moved: notes };
+    })();
+    audit(req, { action: "lead.merge", entityType: "lead", entityId: keep_id, after: out });
+    res.json(out);
+  } catch (e) {
+    res.status(e.status ?? 500).json({ code: e.message });
+  }
 });
 
 export default r;

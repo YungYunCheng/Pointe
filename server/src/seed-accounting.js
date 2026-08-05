@@ -78,7 +78,7 @@ const ACCOUNTING_USER = {
   password: "Invoice@2026!",
 };
 
-export function seedAccounting() {
+export async function seedAccounting() {
   const ins = db.prepare(`INSERT OR IGNORE INTO gl_accounts
     (code, name_en, name_zh, type, parent_code, normal_side, is_postable, is_trust, is_bank)
     VALUES (?,?,?,?,?,?,?,?,?)`);
@@ -98,7 +98,7 @@ export function seedAccounting() {
     "Placeholder. Set the published rate before accruing.");
 
   if (!db.prepare("SELECT 1 FROM users WHERE email = ?").get(ACCOUNTING_USER.email)) {
-    const h = hashPassword(ACCOUNTING_USER.password);
+    const h = await hashPassword(ACCOUNTING_USER.password);
     db.prepare(`INSERT INTO users (id, email, full_name, role_code, locale,
       password_algo, password_salt, password_hash) VALUES (?,?,?,?,?,?,?,?)`)
       .run(uid("usr_"), ACCOUNTING_USER.email, ACCOUNTING_USER.name, ACCOUNTING_USER.role,

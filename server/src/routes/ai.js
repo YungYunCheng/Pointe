@@ -348,6 +348,14 @@ function publicRate(ip) {
   return hits.length <= 40;
 }
 
+/* When the model is unavailable a fixed message goes out rather than nothing.
+   Silence reads as being ignored, and the tenant has no way to tell the
+   difference between a service outage and being brushed off. */
+const FALLBACK = {
+  en: "Thank you for your message. Someone will reply within one business day. If it is urgent — a leak, no heat, no hot water, or anything unsafe — please call the office rather than waiting here.",
+  zh: "謝謝你的訊息，同事會在一個工作天內回覆。如果是緊急狀況——漏水、沒有暖氣、沒有熱水，或任何安全問題——請直接打電話到辦公室，不要在這裡等。",
+};
+
 r.post("/public/ai/chat", async (req, res) => {
   if (!publicRate(req.ip)) return res.status(429).json({ code: "RATE_LIMITED" });
   const { facts, history, message, language } = req.body ?? {};
@@ -359,9 +367,15 @@ r.post("/public/ai/chat", async (req, res) => {
     const out = await callModel(task, task.build({ facts, history, message, language }));
     db.prepare(`INSERT INTO audit_log (actor_name, action, entity_type, ip)
       VALUES ('public','ai.tenant_chat','ai',?)`).run(req.ip);
-    res.json({ text: out.text, ms: Date.now() - started });
+    res.json({ text: out.text, ms: Date.now() - started, fallback: false });
   } catch (e) {
-    res.status(e.status ?? 500).json({ code: e.message, upstream: e.upstream });
+    db.prepare(`INSERT INTO audit_log (actor_name, action, entity_type, ip, after_value)
+      VALUES ('public','ai.fallback','ai',?,?)`)
+      .run(req.ip, JSON.stringify({ error: e.message }));
+    // 200 with a fallback rather than an error: the tenant gets an answer, and
+    // the failure is in the log where somebody can act on it.
+    res.json({ text: FALLBACK[language === "zh" ? "zh" : "en"],
+               fallback: true, ms: Date.now() - started });
   }
 });
 
@@ -396,8 +410,12 @@ r.post("/ai/:task", async (req, res) => {
   } catch (e) {
     recordCall(req, { taskName: name, refType: req.body?.ref_type, refId: req.body?.ref_id,
                       ok: false, ms: Date.now() - started, error: e.message });
+    // Staff-facing tasks fail loudly. A draft that silently becomes a template
+    // is worse than a button that says the service is down, because somebody
+    // would send it.
     res.status(e.status ?? 500).json({ code: e.message, upstream: e.upstream,
-                                        detail: e.detail });
+                                        detail: e.detail,
+                                        fallback_available: name === "inbox_draft" });
   }
 });
 

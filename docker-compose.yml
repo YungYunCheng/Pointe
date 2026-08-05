@@ -42,6 +42,14 @@ services:
       PUBLIC_TENANT_URL: ${PUBLIC_TENANT_URL:-http://localhost:8081}
       # Held here, never sent to the browser.
       ANTHROPIC_API_KEY: ${ANTHROPIC_API_KEY:-}
+      AI_SHADOW_MODE: ${AI_SHADOW_MODE:-0}
+      # Object storage. Without it, evidence and agreements sit on a volume
+      # that does not survive the container moving host.
+      S3_BUCKET: ${S3_BUCKET:-}
+      S3_REGION: ${S3_REGION:-us-west-2}
+      S3_ENDPOINT: ${S3_ENDPOINT:-}
+      S3_ACCESS_KEY_ID: ${S3_ACCESS_KEY_ID:-}
+      S3_SECRET_ACCESS_KEY: ${S3_SECRET_ACCESS_KEY:-}
       RESEND_API_KEY: ${RESEND_API_KEY:-}
       FROM_EMAIL: ${FROM_EMAIL:-noreply@themizar.ca}
       FROM_NAME: ${FROM_NAME:-Baydo Pointe}
@@ -86,9 +94,32 @@ services:
       - api
     networks: [baydo]
 
+  # TLS in front of both sites. Session cookies are `secure` in production, so
+  # without this sign-in fails silently and looks like a wrong password.
+  caddy:
+    image: caddy:2-alpine
+    container_name: baydo-caddy
+    restart: unless-stopped
+    profiles: ["tls"]
+    environment:
+      DOMAIN: ${DOMAIN:-staff.localhost}
+      TENANT_DOMAIN: ${TENANT_DOMAIN:-localhost}
+      ADMIN_EMAIL: ${ADMIN_EMAIL:-admin@themizar.ca}
+    ports:
+      - "80:80"
+      - "443:443"
+    volumes:
+      - ./infra/caddy/Caddyfile:/etc/caddy/Caddyfile:ro
+      - caddy-data:/data
+      - caddy-config:/config
+    depends_on: [web, tenant]
+    networks: [baydo]
+
 volumes:
   db-data:
   api-data:
+  caddy-data:
+  caddy-config:
 
 networks:
   baydo:

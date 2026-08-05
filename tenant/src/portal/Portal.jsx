@@ -37,10 +37,30 @@ export default function Portal() {
 
   useEffect(() => {
     (async () => {
+      let saved = null;
       try {
         const r = await window.storage.get("baydo:tenant-session");
-        setSession(r?.value ? JSON.parse(r.value) : null);
-      } catch { setSession(null); }
+        saved = r?.value ? JSON.parse(r.value) : null;
+      } catch {}
+      if (!saved?.token) { setSession(saved); return; }
+
+      // A stored session is not proof of a live one. Checking on load means an
+      // expired token sends the tenant to sign in rather than to a page of
+      // empty panels.
+      try {
+        const res = await fetch("/api/tenant/me", {
+          headers: { Authorization: `Bearer ${saved.token}` }, credentials: "include" });
+        if (res.ok) {
+          const d = await res.json();
+          setSession({ ...saved, ...d.tenant, lease: d.lease, parking: d.parking,
+                       balance: d.balance });
+        } else {
+          await window.storage.delete("baydo:tenant-session").catch(() => {});
+          setSession(null);
+        }
+      } catch {
+        setSession(saved);   // offline: work from what we have
+      }
     })();
   }, []);
 
@@ -90,14 +110,49 @@ function SignIn({ onIn }) {
 
   const go = async () => {
     setBusy(true); setErr("");
-    // Demo stand-in. The real call is POST /api/tenant/login, which does not
-    // say whether the email exists — the same reason the staff login does not.
-    await new Promise((r) => setTimeout(r, 400));
     if (!email.trim() || !pw) { setErr(t("common.error")); setBusy(false); return; }
-    const s = { name: email.split("@")[0], email: email.trim(), unit: "378-519",
-                leaseEnd: "2027-08-31", term: "fixed_12", rent: 1850, parking: "Underground / 378" };
-    await window.storage.set("baydo:tenant-session", JSON.stringify(s)).catch(() => {});
-    onIn(s); setBusy(false);
+
+    try {
+      const res = await fetch("/api/tenant/login", {
+        method: "POST", headers: { "Content-Type": "application/json" },
+        credentials: "include",
+        body: JSON.stringify({ email: email.trim(), password: pw }),
+      });
+
+      if (res.status === 423) {
+        const d = await res.json();
+        setErr(t("portal.locked", { until: String(d.locked_until ?? "").slice(11, 16) }));
+        setBusy(false); return;
+      }
+      if (!res.ok) {
+        // The same message whether the account exists or the password was
+        // wrong. Anything else turns the login into an account checker.
+        setErr(t("portal.badCredentials"));
+        setBusy(false); return;
+      }
+
+      const { token, tenant } = await res.json();
+      const session = { ...tenant, token };
+      await window.storage.set("baydo:tenant-session", JSON.stringify(session)).catch(() => {});
+      onIn(session);
+    } catch {
+      setErr(t("common.error"));
+    }
+    setBusy(false);
+  };
+
+  const forgot = async () => {
+    if (!email.trim()) { setErr(t("portal.emailFirst")); return; }
+    setBusy(true); setErr("");
+    try {
+      await fetch("/api/tenant/forgot", {
+        method: "POST", headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ email: email.trim() }),
+      });
+    } catch {}
+    // Identical message either way, for the same reason as the login.
+    setErr(t("portal.resetSent"));
+    setBusy(false);
   };
 
   return (
@@ -117,6 +172,9 @@ function SignIn({ onIn }) {
       {err && <div className="bt-err">{err}</div>}
       <button className="bt-btn" onClick={go} disabled={busy || !email.trim() || !pw}>
         {busy ? t("common.loading") : t("portal.signIn")}
+      </button>
+      <button className="bt-linkbtn" onClick={forgot} disabled={busy}>
+        {t("portal.forgot")}
       </button>
       <p className="bt-hint" style={{ marginTop: 14 }}>{t("portal.firstTime")}</p>
     </div></section>
@@ -345,4 +403,7 @@ const PORTAL_CSS = `
 .bt-item-h{display:flex;align-items:center;gap:8px;flex-wrap:wrap;margin-bottom:6px}
 .bt-item p{margin:0 0 4px;font-size:14.5px;line-height:1.6}
 .bt-tag{font-size:11px;font-weight:700;color:#fff;background:var(--c);border-radius:10px;padding:2px 9px}
+.bt-linkbtn{font:inherit;font-size:13px;background:none;border:0;color:var(--accent);
+  cursor:pointer;padding:4px 0;align-self:flex-start}
+.bt-linkbtn:hover{text-decoration:underline}
 `;

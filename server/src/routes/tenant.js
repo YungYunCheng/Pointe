@@ -349,7 +349,7 @@ r.post("/tenant/login", loginLimit, (req, res) => {
   if (a?.locked_until && new Date(a.locked_until) > new Date())
     return res.status(423).json({ code: "ACCOUNT_LOCKED", locked_until: a.locked_until });
 
-  const ok = a && a.is_active && a.password_hash && verifyPassword(password, a);
+  const ok = a && a.is_active && a.password_hash && await verifyPassword(password, a);
   if (!ok) {
     if (a) {
       const n = a.failed_attempts + 1;

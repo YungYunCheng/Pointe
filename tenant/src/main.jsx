@@ -7,6 +7,7 @@ import TenantChat from "./TenantChat.jsx";
 import Portal from "./portal/Portal.jsx";
 import Booking from "./pages/Booking.jsx";
 import Apply from "./pages/Apply.jsx";
+import { Privacy, ConfirmReply } from "./pages/Privacy.jsx";
 
 /* ============================================================
    BAYDO POINTE — tenant site
@@ -123,7 +124,10 @@ function Footer() {
         </div>
         <div className="bt-foot-fair">
           <p>{t("footer.fairHousing")}</p>
-          <p className="bt-dim">{t("footer.legal")}</p>
+          <p className="bt-dim">
+            {t("footer.legal")}{" "}
+            <Link to="/privacy">{t("common.privacy")}</Link>
+          </p>
         </div>
       </div>
     </footer>
@@ -327,6 +331,8 @@ function Site() {
           <Route path="/building" element={<Building />} />
           <Route path="/book" element={<Booking />} />
           <Route path="/apply" element={<Apply />} />
+          <Route path="/privacy" element={<Privacy />} />
+          <Route path="/confirm" element={<ConfirmReply />} />
           <Route path="/portal/*" element={<Portal />} />
           <Route path="*" element={<Home />} />
         </Routes>
@@ -494,6 +500,17 @@ a{color:inherit}
   border-radius:8px;padding:11px 14px;margin-bottom:14px}
 .bt-ok{font-size:13.5px;color:var(--green);background:#F4FAF8;border:1px solid var(--green);
   border-radius:8px;padding:11px 14px}
+
+.bt-prose{max-width:760px}
+.bt-prose h3{font-family:'Archivo',sans-serif;font-size:16px;margin:26px 0 8px;
+  letter-spacing:-.01em}
+.bt-prose p{color:var(--ink2);line-height:1.8;max-width:68ch}
+.bt-prose ul{margin:0 0 16px;padding-left:20px;color:var(--ink2);line-height:1.8}
+.bt-prose li{margin-bottom:8px;max-width:66ch}
+.bt-table{width:100%;border-collapse:collapse;font-size:14px;margin:12px 0 8px}
+.bt-table th{text-align:left;font-size:12px;text-transform:uppercase;letter-spacing:.05em;
+  color:var(--dim);padding:8px 10px;border-bottom:1.5px solid var(--rule);font-weight:600}
+.bt-table td{padding:9px 10px;border-bottom:1px solid var(--rule);color:var(--ink2)}
 
 @media (max-width:760px){
   .bt-head{padding:0 16px}

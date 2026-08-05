@@ -3,6 +3,7 @@ import { db, uid, nowISO, addDays, daysBetween, prevBusinessDay } from "./db.js"
 import { notify } from "./rbac.js";
 import { makeBackup } from "./routes/admin.js";
 import { drainOutbox, overdueMessages, queue } from "./outbox.js";
+import { run as runRetention } from "./retention.js";
 
 const HOUR = 3600e3;
 const RENEWAL_LEAD_DAYS = 30;
@@ -203,6 +204,17 @@ export function auditSize() {
   return { ...r, unattributed };
 }
 
+/** Retention runs weekly rather than daily. A policy that fires every night
+ *  is a policy nobody watches; once a week it is still timely and somebody
+ *  notices the log entry. */
+export function weeklyRetention() {
+  if (new Date().getDay() !== 0) return null;      // Sundays
+  const done = db.prepare(`SELECT 1 FROM audit_log WHERE action='retention.run'
+    AND date(created_at) = date('now')`).get();
+  if (done) return null;
+  return runRetention({ actor: "system" });
+}
+
 export function startDailyJobs() {
   const run = () => {
     try {
@@ -211,6 +223,7 @@ export function startDailyJobs() {
       const e = outboxHealth();
       const p = pruneSnapshots();
       auditSize();
+      weeklyRetention();
       drainOutbox(100).catch((err) => console.error("[outbox]", err.message));
       console.log(`[jobs] renewals ${a} / reminders ${b} / refunds ${c} / pw ${d} / overdue ${e} / pruned ${p} @ ${nowISO()}`);
     } catch (e) { console.error("[jobs] failed:", e.message); }

@@ -31,7 +31,7 @@ r.post("/users", require_("users.manage"), (req, res) => {
   if (db.prepare("SELECT 1 FROM users WHERE email = ?").get(email))
     return res.status(409).json({ code: "EMAIL_TAKEN" });
 
-  const h = hashPassword(password);
+  const h = await hashPassword(password);
   const id = uid("usr_");
   db.prepare(`INSERT INTO users (id, email, full_name, phone, role_code, locale,
     password_algo, password_salt, password_hash) VALUES (?,?,?,?,?,?,?,?,?)`)

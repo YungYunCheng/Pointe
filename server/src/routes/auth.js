@@ -34,10 +34,10 @@ function recordPasswordChange(userId, oldUser, h) {
 }
 
 /** True when the candidate matches one of the last few. */
-function isReused(userId, password) {
+async function isReused(userId, password) {
   const rows = db.prepare(`SELECT * FROM password_history WHERE user_id=?
     ORDER BY changed_at DESC LIMIT ?`).all(userId, PASSWORD_HISTORY);
-  return rows.some((r) => verifyPassword(password, { password_hash: r.hash,
+  return rows.some((r) => await verifyPassword(password, { password_hash: r.hash,
     password_salt: r.salt, password_algo: r.algo }));
 }
 
@@ -57,7 +57,7 @@ r.post("/login", loginLimit, (req, res) => {
   if (u?.locked_until && new Date(u.locked_until) > new Date())
     return res.status(423).json({ code: "ACCOUNT_LOCKED", locked_until: u.locked_until });
 
-  const ok = u && u.is_active && verifyPassword(password, u);
+  const ok = u && u.is_active && await verifyPassword(password, u);
 
   if (!ok) {
     if (u) {
@@ -174,11 +174,11 @@ r.post("/reset", (req, res) => {
   if (new Date(t.expires_at) < new Date()) return res.status(400).json({ code: "RESET_TOKEN_EXPIRED" });
 
   const u = db.prepare("SELECT * FROM users WHERE id = ?").get(t.user_id);
-  if (verifyPassword(password, u)) return res.status(400).json({ code: "PASSWORD_REUSED" });
-  if (isReused(u.id, password))
+  if (await verifyPassword(password, u)) return res.status(400).json({ code: "PASSWORD_REUSED" });
+  if (await isReused(u.id, password))
     return res.status(400).json({ code: "PASSWORD_RECENTLY_USED", within: PASSWORD_HISTORY });
 
-  const h = hashPassword(password);
+  const h = await hashPassword(password);
   db.transaction(() => {
     recordPasswordChange(u.id, u, h);
     db.prepare(`UPDATE users SET password_algo=?, password_salt=?, password_hash=?,
@@ -199,14 +199,14 @@ r.post("/reset", (req, res) => {
 r.post("/change-password", authenticate, (req, res) => {
   const { current, password } = req.body ?? {};
   const u = db.prepare("SELECT * FROM users WHERE id = ?").get(req.user.id);
-  if (!verifyPassword(current ?? "", u)) return res.status(400).json({ code: "CURRENT_PASSWORD_WRONG" });
+  if (!await verifyPassword(current ?? "", u)) return res.status(400).json({ code: "CURRENT_PASSWORD_WRONG" });
   const issues = passwordIssues(password);
   if (issues.length) return res.status(400).json({ code: "WEAK_PASSWORD", issues });
 
-  if (isReused(u.id, password))
+  if (await isReused(u.id, password))
     return res.status(400).json({ code: "PASSWORD_RECENTLY_USED", within: PASSWORD_HISTORY });
 
-  const h = hashPassword(password);
+  const h = await hashPassword(password);
   db.transaction(() => {
     recordPasswordChange(u.id, u, h);
     db.prepare(`UPDATE users SET password_salt=?, password_hash=?, must_change_password=0,
