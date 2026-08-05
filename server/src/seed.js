@@ -1,5 +1,6 @@
 import { db, uid, hashPassword } from "./db.js";
 import { syncRbac } from "./rbac.js";
+import { seedAccounting } from "./seed-accounting.js";
 
 const BUILDINGS = [
   ["370", "Baydo Pointe 370", "370 Clareview Station Drive NW, Edmonton, AB", 6, 118],
@@ -51,6 +52,7 @@ const HOLIDAYS = [
 
 export function ensureSeed() {
   syncRbac();
+  seedAccounting();
 
   const insB = db.prepare(`INSERT OR IGNORE INTO buildings (id, code, name, address, storeys, unit_count)
                            VALUES (?,?,?,?,?,?)`);

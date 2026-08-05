@@ -9,6 +9,7 @@ export const ROLES = {
   admin:            "Admin",
   property_manager: "Property Manager",
   building_manager: "Building Manager",
+  accounting:       "Accounting",
 };
 
 export const PERMISSIONS = {
@@ -38,6 +39,16 @@ export const PERMISSIONS = {
   "entrynotice.manage": "Notices of entry",
   "keys.manage":        "Key handover",
 
+  // Accounting
+  "accounting.view":     "View ledgers, invoices and reports",
+  "accounting.post":     "Post journal entries, charges and receipts",
+  "accounting.ap":       "Vendor invoices and payments",
+  "accounting.ar":       "Rent charges and receipts",
+  "accounting.bank":     "Upload statements and reconcile",
+  "accounting.close":    "Reconcile and close a period",
+  "accounting.coa":      "Edit the chart of accounts",
+  "accounting.reports":  "Generate and approve monthly reports",
+
   // Property Manager
   "inbox.manage":      "AI inbox",
   "lease.sign":        "Signing and unit locks",
@@ -56,11 +67,21 @@ export const ROLE_PERMISSIONS = {
   property_manager: [
     ...COMMON,
     "inbox.manage", "lease.sign", "documents.approve", "moveout.process", "renewals.decide",
+    "accounting.view",     // read only: arrears matter to leasing, posting does not
   ],
 
   building_manager: [
     ...COMMON,
     "leads.manage", "showings.manage", "maintenance.manage", "entrynotice.manage", "keys.manage",
+  ],
+
+  // Accounting sees the money and the units it belongs to, and nothing about
+  // who the tenants are. Names appear on a receipt because they have to; leads,
+  // applications and messages do not concern this role.
+  accounting: [
+    "units.view", "parking.view", "schedule.view", "notifications.view", "evidence.upload",
+    "accounting.view", "accounting.post", "accounting.ap", "accounting.ar",
+    "accounting.bank", "accounting.close", "accounting.coa", "accounting.reports",
   ],
 };
 

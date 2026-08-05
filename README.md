@@ -54,9 +54,10 @@ Current state, what the AI does, and what is missing: [docs/STATUS.md](docs/STAT
 | admin@themizar.ca | Admin |
 | bowen.wang@themizar.ca | Property Manager |
 | rentals@themizar.ca | Building Manager |
+| invoice@themizar.ca | Accounting |
 
 The seed passwords were shared over chat and every account is flagged
-`must_change_password`. **Rotate all three before this touches production**, and
+`must_change_password`. **Rotate all four before this touches production**, and
 keep them out of the repository.
 
 ---
@@ -97,6 +98,8 @@ All under `web/src/tools/`.
 | `Operations.jsx` | Showing outcomes, move-out, deposits | PM, Admin can roll back |
 | `BuildingManager.jsx` | Maintenance, entry notices, key handover | Building Manager |
 | `AuditLog.jsx` | Change log, backup and restore | Admin only |
+| `Accounting.jsx` | GL, AP, AR, rent runs, transaction search | Accounting; PM reads |
+| `AccountingBanking.jsx` | Statement upload, reconciliation, period close | Accounting |
 | `TenantChat.jsx` | Public chat widget | Prospective tenants |
 
 ---
@@ -133,7 +136,9 @@ has approved. A generated clause can be void or worse, and it reads convincingly
 either way.
 
 **It never states an amount.** Rent, deposits and fees are assembled by the
-system and sent verbatim.
+system and sent verbatim. In accounting this goes further: the monthly report
+figures are computed in SQL from posted entries, and the model is given them
+with an instruction not to recalculate. It writes the commentary, nothing else.
 
 ---
 

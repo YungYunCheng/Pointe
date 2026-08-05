@@ -24,17 +24,20 @@ const Documents       = lazy(() => import("./tools/Documents.jsx"));
 const Operations      = lazy(() => import("./tools/Operations.jsx"));
 const BuildingManager = lazy(() => import("./tools/BuildingManager.jsx"));
 const AuditLog        = lazy(() => import("./tools/AuditLog.jsx"));
+const Accounting      = lazy(() => import("./tools/Accounting.jsx"));
 
-const ALL = "admin property_manager building_manager".split(" ");
+const ALL = "admin property_manager building_manager accounting".split(" ");
+const LEASING = ["admin", "property_manager", "building_manager"];
 const TOOLS = [
   { path: "/units",       label: "Units",       el: LeasingConsole,  roles: ALL },
-  { path: "/schedule",    label: "Schedule",    el: Schedule,        roles: ALL },
+  { path: "/schedule",    label: "Schedule",    el: Schedule,        roles: LEASING },
   { path: "/leads",       label: "Leads",       el: LeadsCrm,        roles: ["admin", "building_manager"] },
   { path: "/site",        label: "On site",     el: BuildingManager, roles: ["admin", "building_manager"] },
   { path: "/inbox",       label: "AI inbox",    el: AiInbox,         roles: ["admin", "property_manager"] },
   { path: "/intake",      label: "Lease intake",el: LeaseIntake,     roles: ["admin", "property_manager"] },
   { path: "/operations",  label: "Operations",  el: Operations,      roles: ["admin", "property_manager"] },
-  { path: "/documents",   label: "Documents",   el: Documents,       roles: ALL },
+  { path: "/documents",   label: "Documents",   el: Documents,       roles: LEASING },
+  { path: "/accounting",  label: "Accounting",  el: Accounting,      roles: ["admin", "accounting", "property_manager"] },
   { path: "/audit",       label: "Audit",       el: AuditLog,        roles: ["admin"] },
 ];
 
@@ -42,8 +45,10 @@ const ROLE_LABEL = {
   admin: "Admin",
   property_manager: "Property Manager",
   building_manager: "Building Manager",
+  accounting: "Accounting",
 };
-const ROLE_COLOR = { admin: "#131C25", property_manager: "#1C6FA6", building_manager: "#7C5CBF" };
+const ROLE_COLOR = { admin: "#131C25", property_manager: "#1C6FA6",
+                     building_manager: "#7C5CBF", accounting: "#0E8577" };
 
 function useSession() {
   const [session, setSession] = useState(undefined);   // undefined = still loading

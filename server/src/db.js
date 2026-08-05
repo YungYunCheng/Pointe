@@ -16,6 +16,11 @@ export const db = new Database(path.join(DATA_DIR, "baydo.db"));
 db.pragma("journal_mode = WAL");
 db.pragma("foreign_keys = ON");
 db.exec(fs.readFileSync(path.join(__dirname, "schema.sql"), "utf8"));
+db.exec(fs.readFileSync(path.join(__dirname, "schema-accounting.sql"), "utf8"));
+
+/** Money rounds to cents at every boundary. Left as raw floats, a rent run
+ *  across 330 units drifts by a few cents a month and the bank never matches. */
+export const cents = (n) => Math.round((Number(n) + Number.EPSILON) * 100) / 100;
 
 export const uid = (p = "") => p + crypto.randomBytes(9).toString("base64url");
 export const nowISO = () => new Date().toISOString();
