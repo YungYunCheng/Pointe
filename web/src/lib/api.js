@@ -133,6 +133,27 @@ export const api = {
   notifications: ()   => request("GET", "/notifications"),
   markRead:      (id) => request("POST", `/notifications/${id}/read`),
 
+  /* ---- agreements ----
+     The library holds files, not templates. Uploading takes multipart, and the
+     file that comes back out is the file that went in. */
+  agreements:      ()              => request("GET", "/agreements"),
+  agreementReadiness: ()           => request("GET", "/agreements/readiness"),
+  uploadAgreement(agreementId, file, meta = {}) {
+    const fd = new FormData();
+    fd.append("file", file);
+    for (const [k, v] of Object.entries(meta)) if (v != null) fd.append(k, v);
+    return request("POST", `/agreements/${agreementId}/versions`, fd);
+  },
+  approveAgreementVersion: (id, note) =>
+    request("POST", `/agreements/versions/${id}/approve`, { approval_note: note }),
+  withdrawAgreementVersion: (id, reason) =>
+    request("POST", `/agreements/versions/${id}/withdraw`, { reason }),
+  agreementFileUrl: (id) => `${BASE}/api/agreements/versions/${id}/file`,
+  issueAgreement:  (payload)       => request("POST", "/agreements/issue", payload),
+  sendAgreement:   (id)            => request("POST", `/agreements/issues/${id}/send`),
+  markAgreementSigned: (id, note)  => request("POST", `/agreements/issues/${id}/signed`, { note }),
+  agreementIssues: (q = "")        => request("GET", `/agreements/issues${q}`),
+
   /* ---- admin ---- */
   users:       ()            => request("GET", "/admin/users"),
   createUser:  (payload)     => request("POST", "/admin/users", payload),

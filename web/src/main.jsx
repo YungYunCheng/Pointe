@@ -25,6 +25,7 @@ const Operations      = lazy(() => import("./tools/Operations.jsx"));
 const BuildingManager = lazy(() => import("./tools/BuildingManager.jsx"));
 const AuditLog        = lazy(() => import("./tools/AuditLog.jsx"));
 const Accounting      = lazy(() => import("./tools/Accounting.jsx"));
+const Agreements      = lazy(() => import("./tools/Agreements.jsx"));
 
 const ALL = "admin property_manager building_manager accounting".split(" ");
 const LEASING = ["admin", "property_manager", "building_manager"];
@@ -36,6 +37,7 @@ const TOOLS = [
   { path: "/inbox",       label: "AI inbox",    el: AiInbox,         roles: ["admin", "property_manager"] },
   { path: "/intake",      label: "Lease intake",el: LeaseIntake,     roles: ["admin", "property_manager"] },
   { path: "/operations",  label: "Operations",  el: Operations,      roles: ["admin", "property_manager"] },
+  { path: "/agreements",  label: "Agreements",  el: Agreements,      roles: LEASING },
   { path: "/documents",   label: "Documents",   el: Documents,       roles: LEASING },
   { path: "/accounting",  label: "Accounting",  el: Accounting,      roles: ["admin", "accounting", "property_manager"] },
   { path: "/audit",       label: "Audit",       el: AuditLog,        roles: ["admin"] },

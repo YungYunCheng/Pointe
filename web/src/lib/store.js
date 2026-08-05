@@ -94,6 +94,11 @@ export const RESOURCES = {
   outbox:       { key: "baydo:outbox",       load: () => api.get("/outbox"),
                   pick: (r) => r.messages },
 
+  agreements:   { key: "baydo:agreements",   load: () => api.get("/agreements"),
+                  pick: (r) => r.agreements },
+  agreementIssues: { key: "baydo:agreementissues",
+                  load: () => api.get("/agreements/issues"), pick: (r) => r.issues },
+
   // Accounting
   coa:          { key: "acct:coa",           load: () => api.get("/accounting/coa"),
                   pick: (r) => r.accounts },

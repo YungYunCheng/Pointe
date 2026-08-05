@@ -24,6 +24,11 @@ const r = Router();
    The task decides the prompt. A caller says what it wants done and
    supplies facts; it does not get to send arbitrary instructions to
    the model under this system's key.
+
+   There is no task that writes or reformats an agreement. Admin
+   uploads the file counsel approved and that file is what the tenant
+   signs — a generated clause can be void and reads exactly as
+   convincingly as a valid one.
    ============================================================ */
 
 const MODEL = "claude-sonnet-4-6";
@@ -105,50 +110,7 @@ Reply with JSON only, no markdown:
 {"extracted":{"field":"value"},"next_question":"the next question, or null","done":false}`,
   },
 
-  /* Lists the blanks in a template and where each value should come from.
-     It never touches the clause text. */
-  template_fields: {
-    permission: "templates.manage",
-    maxTokens: 2000,
-    build: ({ kind, body }) =>
-`Below is a document template used for residential rentals in Alberta. Find every blank that needs filling and decide where each value should come from.
 
-Document type: ${kind}
-
-Template:
-${body}
-
-Sources:
-- backend: pulled from property data (rent, deposit, fees, parking area, unit size, address)
-- tenant: collected from the tenant (names, start date, term, number of occupants, emergency contact)
-- staff: needs human judgement (special conditions, exceptions, signature dates)
-
-Important: never mark a field as one to ask the tenant if it touches a protected ground — household composition, marital status, nationality, religion, age, income, employment or credit. If the template contains such a field, set source to staff and say in the note that it needs legal review.
-
-Output a JSON array only, no markdown:
-[{"key":"snake_case_identifier","label":"Human label","source":"backend|tenant|staff","type":"text|number|date|select","note":"a caution where relevant, or null"}]`,
-  },
-
-  /* Restructures a document for a target format. Formatting only. */
-  document_convert: {
-    permission: "units.view",
-    maxTokens: 4000,
-    build: ({ target, why, body }) =>
-`Restructure this document for ${target}, which is ${why}.
-
-DOCUMENT
-${body}
-
-Rules:
-1. Do not change any clause, figure, date or name. This is a formatting task, not an editing one.
-2. Keep every {{field}} marker exactly as written. They are filled by the system later.
-3. For PDF: clean headings, numbered clauses, a signature block at the end.
-4. For plain text: no markup, short lines, readable on a phone.
-5. For CSV: one row per line item with a header row — only if the document actually contains tabular figures. If it does not, say so instead of inventing a table.
-6. If the document is already in a suitable shape, say so rather than rewriting it.
-
-Output the restructured content only, with no commentary.`,
-  },
 
   /* A notice of entry, in both languages, from fixed facts. */
   entry_notice: {
