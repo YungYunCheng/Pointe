@@ -131,11 +131,30 @@ export default function AIInbox() {
   const [sel, setSel] = useState("m1");
   const [busy, setBusy] = useState(null);
   const [draftEdit, setDraftEdit] = useState("");
+  const [view, setView] = useState("inbox");
+  const [escalations, setEscalations] = useState([]);
+  const [shadowRuns, setShadowRuns] = useState([]);
+  const saveEscalations = async (v) => {
+    setEscalations(v);
+    try { await window.storage.set("baydo:escalations", JSON.stringify(v)); } catch {}
+  };
+  const saveShadow = async (v) => {
+    setShadowRuns(v);
+    try { await window.storage.set("baydo:shadowruns", JSON.stringify(v)); } catch {}
+  };
+  const openEscalations = escalations.filter((e) => e.state === "open");
+
   const [compose, setCompose] = useState({ open: false, channel: "email", body: "" });
 
   /* ---------- 3. Fact lookup: read the property data ---------- */
   useEffect(() => {
     (async () => {
+      const read = async (k, d) => {
+        try { const r = await window.storage.get(k); return r?.value ? JSON.parse(r.value) : d; }
+        catch { return d; }
+      };
+      setEscalations(await read("baydo:escalations", []));
+      setShadowRuns(await read("baydo:shadowruns", []));
       const read = async (k) => {
         try { const r = await window.storage.get(k); return r?.value ? JSON.parse(r.value) : null; }
         catch (e) { return null; }
@@ -291,170 +310,192 @@ export default function AIInbox() {
         </div>
       </header>
 
-      {!facts.hasPricing && (
+      <nav className="ai-tabs">
+        {[["inbox", "Inbox"], ["escalations", "Needs a person"],
+          ["shadow", "Shadow mode"]].map(([k, l]) => (
+          <button key={k} className={view === k ? "on" : ""} onClick={() => setView(k)}>
+            {l}
+            {k === "escalations" && openEscalations.length > 0 &&
+              <i className="ai-b">{openEscalations.length}</i>}
+          </button>
+        ))}
+      </nav>
+
+      {view === "escalations" && (
+        <Escalations items={escalations} session={session}
+          onSave={saveEscalations} />
+      )}
+
+      {view === "shadow" && (
+        <Shadow runs={shadowRuns} session={session} onSave={saveShadow} />
+      )}
+
+      {view === "inbox" && !facts.hasPricing && (
         <div className="ai-banner">
           No rents are set, so the AI cannot look up a price and anything involving money is downgraded for review. That is the fact layer working as intended.
           Set rents under Pricing in the leasing console, then come back.
         </div>
       )}
 
-      {compose.open && (
-        <div className="ai-compose">
-          <select className="ai-select" value={compose.channel}
-                  onChange={(e) => setCompose({ ...compose, channel: e.target.value })}>
-            {Object.entries(CHANNELS).map(([k, v]) => <option key={k} value={k}>{v.label}</option>)}
-          </select>
-          <textarea className="ai-ta" rows={2} value={compose.body} placeholder="Type a tenant message to test the routing and draft…"
-                    onChange={(e) => setCompose({ ...compose, body: e.target.value })} />
-          <button className="ai-btn" onClick={addMessage}>Add to inbox</button>
-        </div>
-      )}
-
-      <div className="ai-stats">
-        {[["Unprocessed", counts.new, null], ["Auto-sent", counts.L3 + counts.L2, LEVELS.L3.color],
-          ["Needs approval", counts.L1, LEVELS.L1.color], ["To a person", counts.L0, LEVELS.L0.color],
-          ["Sent", counts.sent, null]].map(([l, v, c]) => (
-          <div className="ai-stat" key={l}>
-            <div className="ai-stat-l">{l}</div>
-            <div className="ai-stat-v" style={c ? { color: c } : undefined}>{v}</div>
+      {view === "inbox" && (<>
+        {compose.open && (
+          <div className="ai-compose">
+            <select className="ai-select" value={compose.channel}
+                    onChange={(e) => setCompose({ ...compose, channel: e.target.value })}>
+              {Object.entries(CHANNELS).map(([k, v]) => <option key={k} value={k}>{v.label}</option>)}
+            </select>
+            <textarea className="ai-ta" rows={2} value={compose.body} placeholder="Type a tenant message to test the routing and draft…"
+                      onChange={(e) => setCompose({ ...compose, body: e.target.value })} />
+            <button className="ai-btn" onClick={addMessage}>Add to inbox</button>
           </div>
-        ))}
-      </div>
+        )}
 
-      <div className="ai-main">
-        {/* Inbox */}
-        <div className="ai-list">
-          {msgs.map((m) => {
-            const lv = m.level ? LEVELS[m.level] : null;
-            return (
-              <button key={m.id} className={`ai-mi ${sel === m.id ? "on" : ""}`} onClick={() => setSel(m.id)}>
-                <div className="ai-mi-h">
-                  <span className="ai-ch">{CHANNELS[m.channel].icon}</span>
-                  <strong>{m.name}</strong>
-                  {m.state === "sent" ? <span className="ai-pill ai-pill--sent">Sent</span>
-                    : lv ? <span className="ai-pill" style={{ "--p": lv.color }}>{lv.label}</span>
-                    : <span className="ai-pill ai-pill--new">Unprocessed</span>}
-                </div>
-                <div className="ai-mi-b">{m.body}</div>
-              </button>
-            );
-          })}
+        <div className="ai-stats">
+          {[["Unprocessed", counts.new, null], ["Auto-sent", counts.L3 + counts.L2, LEVELS.L3.color],
+            ["Needs approval", counts.L1, LEVELS.L1.color], ["To a person", counts.L0, LEVELS.L0.color],
+            ["Sent", counts.sent, null]].map(([l, v, c]) => (
+            <div className="ai-stat" key={l}>
+              <div className="ai-stat-l">{l}</div>
+              <div className="ai-stat-v" style={c ? { color: c } : undefined}>{v}</div>
+            </div>
+          ))}
         </div>
 
-        {/* Detail */}
-        <div className="ai-detail">
-          {!selected ? <div className="ai-empty">Pick a message on the left.</div> : (
-            <>
-              <div className="ai-sec">
-                <div className="ai-sec-h">Original message</div>
-                <div className="ai-orig">
-                  <div className="ai-dim">
-                    {CHANNELS[selected.channel].label} · {selected.name} · {selected.from}
+        <div className="ai-main">
+          {/* Inbox */}
+          <div className="ai-list">
+            {msgs.map((m) => {
+              const lv = m.level ? LEVELS[m.level] : null;
+              return (
+                <button key={m.id} className={`ai-mi ${sel === m.id ? "on" : ""}`} onClick={() => setSel(m.id)}>
+                  <div className="ai-mi-h">
+                    <span className="ai-ch">{CHANNELS[m.channel].icon}</span>
+                    <strong>{m.name}</strong>
+                    {m.state === "sent" ? <span className="ai-pill ai-pill--sent">Sent</span>
+                      : lv ? <span className="ai-pill" style={{ "--p": lv.color }}>{lv.label}</span>
+                      : <span className="ai-pill ai-pill--new">Unprocessed</span>}
                   </div>
-                  <p>{selected.body}</p>
-                </div>
-              </div>
-
-              {selected.state === "new" && (
-                <button className="ai-btn" onClick={() => process(selected)} disabled={busy === selected.id}>
-                  {busy === selected.id ? "Classifying and drafting…" : "Run the pipeline"}
+                  <div className="ai-mi-b">{m.body}</div>
                 </button>
-              )}
+              );
+            })}
+          </div>
 
-              {selected.level && (
+          {/* Detail */}
+          <div className="ai-detail">
+            {!selected ? <div className="ai-empty">Pick a message on the left.</div> : (
+              <>
                 <div className="ai-sec">
-                  <div className="ai-sec-h">Routing decision</div>
-                  <div className="ai-route" style={{ "--p": LEVELS[selected.level].color }}>
-                    <div className="ai-route-h">
-                      <span className="ai-lvl">{selected.level}</span>
-                      <strong>{LEVELS[selected.level].label}</strong>
-                      <span className="ai-mono ai-dim">Rule {selected.rule}</span>
+                  <div className="ai-sec-h">Original message</div>
+                  <div className="ai-orig">
+                    <div className="ai-dim">
+                      {CHANNELS[selected.channel].label} · {selected.name} · {selected.from}
                     </div>
-                    <div className="ai-dim">{selected.ruleLabel} — {LEVELS[selected.level].desc}</div>
-                    {selected.intent && (
-                      <div className="ai-dim ai-mono" style={{ marginTop: 6 }}>
-                        intent: {selected.intent} · confidence: {selected.confidence}
-                      </div>
-                    )}
-                    {selected.why && <div className="ai-why">{selected.why}</div>}
-                    {selected.warn && <div className="ai-warn">{selected.warn}</div>}
+                    <p>{selected.body}</p>
                   </div>
                 </div>
-              )}
 
-              {selected.factsUsed?.length > 0 && (
-                <div className="ai-sec">
-                  <div className="ai-sec-h">Facts used</div>
-                  <div className="ai-facts">
-                    {selected.factsUsed.map((f, i) => <span className="ai-fact" key={i}>{f}</span>)}
-                  </div>
-                </div>
-              )}
-
-              {selected.state === "blocked" && (
-                <div className="ai-sec">
-                  <div className="ai-sec-h">Handling</div>
-                  <p className="ai-dim">
-                    Rule {selected.rule} assigns this straight to a person with no draft. The audit log keeps the rule id and the time only;
-                    it never copies content that touches a protected ground.
-                  </p>
-                  <button className="ai-btn ai-btn--ghost" onClick={() => patch(selected.id, { state: "sent" })}>
-                    Mark as assigned
+                {selected.state === "new" && (
+                  <button className="ai-btn" onClick={() => process(selected)} disabled={busy === selected.id}>
+                    {busy === selected.id ? "Classifying and drafting…" : "Run the pipeline"}
                   </button>
-                </div>
-              )}
+                )}
 
-              {(selected.state === "ready" || selected.state === "review") && (
-                <div className="ai-sec">
-                  <div className="ai-sec-h">
-                    Draft reply{selected.state === "review" && <em> · needs your approval</em>}
+                {selected.level && (
+                  <div className="ai-sec">
+                    <div className="ai-sec-h">Routing decision</div>
+                    <div className="ai-route" style={{ "--p": LEVELS[selected.level].color }}>
+                      <div className="ai-route-h">
+                        <span className="ai-lvl">{selected.level}</span>
+                        <strong>{LEVELS[selected.level].label}</strong>
+                        <span className="ai-mono ai-dim">Rule {selected.rule}</span>
+                      </div>
+                      <div className="ai-dim">{selected.ruleLabel} — {LEVELS[selected.level].desc}</div>
+                      {selected.intent && (
+                        <div className="ai-dim ai-mono" style={{ marginTop: 6 }}>
+                          intent: {selected.intent} · confidence: {selected.confidence}
+                        </div>
+                      )}
+                      {selected.why && <div className="ai-why">{selected.why}</div>}
+                      {selected.warn && <div className="ai-warn">{selected.warn}</div>}
+                    </div>
                   </div>
-                  <textarea className="ai-ta ai-ta--lg" rows={9} value={draftEdit}
-                            onChange={(e) => setDraftEdit(e.target.value)} />
-                  <div className="ai-acts">
-                    <button className="ai-btn" onClick={() => send(selected, draftEdit)}>
-                      {selected.state === "ready" ? "Send" : "Approve and send"}
-                    </button>
-                    <button className="ai-btn ai-btn--ghost"
-                            onClick={() => patch(selected.id, { state: "blocked", level: "L0",
-                                                               rule: "manual", ruleLabel: "Escalated by staff",
-                                                               why: "A staff member judged this needs handling in person." })}>
-                      Send to a person
-                    </button>
-                    {draftEdit !== selected.draft && <span className="ai-dim">Draft edited</span>}
-                  </div>
-                </div>
-              )}
+                )}
 
-              {selected.state === "sent" && (
-                <div className="ai-sec">
-                  <div className="ai-sec-h">Audit record</div>
-                  <pre className="ai-log">{JSON.stringify({
-                    outbound_id: "out_" + selected.id,
-                    in_reply_to: selected.id,
-                    channel: selected.channel,
-                    routing_decision: selected.level,
-                    rule_id: selected.rule,
-                    intent: selected.intent,
-                    intent_confidence: selected.confidence,
-                    facts_used: selected.factsUsed || [],
-                    model: "claude-sonnet-4-6",
-                    prompt_version: "v1.0",
-                    draft_edited_by_human: !!selected.edited,
-                    sent_at: selected.sentAt ? new Date(selected.sentAt).toISOString() : null,
-                  }, null, 2)}</pre>
-                </div>
-              )}
-            </>
-          )}
+                {selected.factsUsed?.length > 0 && (
+                  <div className="ai-sec">
+                    <div className="ai-sec-h">Facts used</div>
+                    <div className="ai-facts">
+                      {selected.factsUsed.map((f, i) => <span className="ai-fact" key={i}>{f}</span>)}
+                    </div>
+                  </div>
+                )}
+
+                {selected.state === "blocked" && (
+                  <div className="ai-sec">
+                    <div className="ai-sec-h">Handling</div>
+                    <p className="ai-dim">
+                      Rule {selected.rule} assigns this straight to a person with no draft. The audit log keeps the rule id and the time only;
+                      it never copies content that touches a protected ground.
+                    </p>
+                    <button className="ai-btn ai-btn--ghost" onClick={() => patch(selected.id, { state: "sent" })}>
+                      Mark as assigned
+                    </button>
+                  </div>
+                )}
+
+                {(selected.state === "ready" || selected.state === "review") && (
+                  <div className="ai-sec">
+                    <div className="ai-sec-h">
+                      Draft reply{selected.state === "review" && <em> · needs your approval</em>}
+                    </div>
+                    <textarea className="ai-ta ai-ta--lg" rows={9} value={draftEdit}
+                              onChange={(e) => setDraftEdit(e.target.value)} />
+                    <div className="ai-acts">
+                      <button className="ai-btn" onClick={() => send(selected, draftEdit)}>
+                        {selected.state === "ready" ? "Send" : "Approve and send"}
+                      </button>
+                      <button className="ai-btn ai-btn--ghost"
+                              onClick={() => patch(selected.id, { state: "blocked", level: "L0",
+                                                                 rule: "manual", ruleLabel: "Escalated by staff",
+                                                                 why: "A staff member judged this needs handling in person." })}>
+                        Send to a person
+                      </button>
+                      {draftEdit !== selected.draft && <span className="ai-dim">Draft edited</span>}
+                    </div>
+                  </div>
+                )}
+
+                {selected.state === "sent" && (
+                  <div className="ai-sec">
+                    <div className="ai-sec-h">Audit record</div>
+                    <pre className="ai-log">{JSON.stringify({
+                      outbound_id: "out_" + selected.id,
+                      in_reply_to: selected.id,
+                      channel: selected.channel,
+                      routing_decision: selected.level,
+                      rule_id: selected.rule,
+                      intent: selected.intent,
+                      intent_confidence: selected.confidence,
+                      facts_used: selected.factsUsed || [],
+                      model: "claude-sonnet-4-6",
+                      prompt_version: "v1.0",
+                      draft_edited_by_human: !!selected.edited,
+                      sent_at: selected.sentAt ? new Date(selected.sentAt).toISOString() : null,
+                    }, null, 2)}</pre>
+                  </div>
+                )}
+              </>
+            )}
+          </div>
         </div>
-      </div>
 
-      <footer className="ai-foot">
-        Prototype. The AI classifies and drafts; whether anything is sent automatically comes from the hard-coded rules above. That way every automatic send
-        points at a rule id a lawyer can review, rather than at the model’s own judgement. The hard-stop list and the CASL and PIPA handling
-        must be reviewed by a lawyer or a RECA advisor before this goes live.
-      </footer>
+        <footer className="ai-foot">
+          Prototype. The AI classifies and drafts; whether anything is sent automatically comes from the hard-coded rules above. That way every automatic send
+          points at a rule id a lawyer can review, rather than at the model’s own judgement. The hard-stop list and the CASL and PIPA handling
+          must be reviewed by a lawyer or a RECA advisor before this goes live.
+        </footer>
+      </>)}
     </div>
   );
 }
@@ -567,6 +608,232 @@ function checkNumbers(draft, allowed) {
 
 /* ============================ Styles ============================ */
 
+/* ══════════════════ Needs a person ══════════════════ */
+
+/** Handing a message to a person is not the same as a person seeing it. Each
+ *  of these went out as an email with a clock, and this is where the clock is
+ *  visible. Overdue sits at the top, because a tenant waiting in silence is
+ *  how a question becomes a complaint. */
+function Escalations({ items, session, onSave }) {
+  const [answering, setAnswering] = useState(null);
+  const [body, setBody] = useState("");
+
+  const now = new Date().toISOString();
+  const sorted = [...items].sort((a, b) => {
+    const ao = a.state === "open" && a.due_by < now, bo = b.state === "open" && b.due_by < now;
+    if (ao !== bo) return ao ? -1 : 1;
+    return String(a.due_by).localeCompare(String(b.due_by));
+  });
+  const overdue = sorted.filter((e) => e.state === "open" && e.due_by < now);
+
+  return (
+    <div className="ai-list" style={{ padding: "16px 26px" }}>
+      {overdue.length > 0 && (
+        <div className="ai-banner ai-banner--bad">
+          <strong>{overdue.length} past the time we said we would reply.</strong>{" "}
+          The tenant was told one business day. Silence past that point is what
+          turns a question into a complaint.
+        </div>
+      )}
+
+      <p className="ai-note">
+        These are the messages the rules stopped. For the protected-ground rules the
+        content is not repeated in the notification — open the thread to read it.
+      </p>
+
+      {sorted.length === 0 ? (
+        <div className="ai-empty">Nothing waiting on a person.</div>
+      ) : sorted.map((e) => {
+        const late = e.state === "open" && e.due_by < now;
+        return (
+          <article className={`ai-msg ${late ? "ai-msg--late" : ""}`} key={e.id}>
+            <div className="ai-msg-h">
+              <span className={`ai-badge ${late ? "bad" : ""}`}>
+                {e.state === "open" ? (late ? "overdue" : "waiting") : e.state}
+              </span>
+              {e.rule_id && <span className="ai-rule">{e.rule_id}</span>}
+              <strong>{e.tenant_name ?? "A tenant"}</strong>
+              {e.unit_number && <span className="ai-mono">{e.unit_number}</span>}
+              <span className="ai-dim">
+                due {String(e.due_by ?? "").slice(5, 16).replace("T", " ")}
+              </span>
+            </div>
+
+            {e.body_included === false || e.body == null ? (
+              <p className="ai-withheld">
+                The content is not copied here. This rule covers income, accessibility
+                or another protected ground, and the audit record holds the rule
+                reference rather than what was said.
+              </p>
+            ) : (
+              <p className="ai-body">{e.body}</p>
+            )}
+
+            {e.state === "answered" ? (
+              <div className="ai-answered">
+                <strong>Answered</strong> {String(e.answered_at ?? "").slice(0, 16).replace("T", " ")}
+                <p>{e.answer_body}</p>
+              </div>
+            ) : answering === e.id ? (
+              <div className="ai-answerbox">
+                <textarea className="ai-ta" rows={4} value={body} autoFocus
+                          placeholder="Your reply goes to the tenant as written."
+                          onChange={(ev) => setBody(ev.target.value)} />
+                <div className="ai-actions">
+                  <button className="ai-btn" disabled={!body.trim()}
+                          onClick={() => { onSave(items.map((x) => x.id === e.id
+                            ? { ...x, state: "answered", answer_body: body.trim(),
+                                answered_at: new Date().toISOString(),
+                                claimed_name: session?.name } : x));
+                            setAnswering(null); setBody(""); }}>
+                    Send it
+                  </button>
+                  <button className="ai-btn ai-btn--ghost"
+                          onClick={() => { setAnswering(null); setBody(""); }}>Cancel</button>
+                  <span className="ai-dim">
+                    Written by you, sent as written. Nothing rewrites it on the way out.
+                  </span>
+                </div>
+              </div>
+            ) : (
+              <div className="ai-actions">
+                <button className="ai-btn ai-btn--sm" onClick={() => setAnswering(e.id)}>
+                  Answer
+                </button>
+                {e.claimed_name && (
+                  <span className="ai-dim">{e.claimed_name} has this one</span>
+                )}
+              </div>
+            )}
+          </article>
+        );
+      })}
+    </div>
+  );
+}
+
+/* ══════════════════ Shadow mode ══════════════════ */
+
+/** The AI runs the whole way through and nothing is sent. Two to four weeks of
+ *  this is how you find the error rate rather than guessing it.
+ *
+ *  The number that matters is the error rate on what would have sent
+ *  unsupervised. Accuracy across drafts a person reviews anyway flatters the
+ *  result — those get caught either way. */
+function Shadow({ runs, session, onSave }) {
+  const [filter, setFilter] = useState("unreviewed");
+
+  const stats = useMemo(() => {
+    const reviewed = runs.filter((r) => r.verdict);
+    const wouldSend = runs.filter((r) => r.would_send);
+    const wrongAndSent = wouldSend.filter((r) => r.verdict && r.verdict !== "correct");
+    return {
+      total: runs.length, reviewed: reviewed.length,
+      wouldSend: wouldSend.length,
+      errorOnSends: wouldSend.length
+        ? Number((wrongAndSent.length / wouldSend.length * 100).toFixed(1)) : null,
+      overall: reviewed.length
+        ? Number((reviewed.filter((r) => r.verdict === "correct").length
+            / reviewed.length * 100).toFixed(1)) : null,
+      ready: reviewed.length >= 100 && wouldSend.length > 0
+        && wrongAndSent.length / wouldSend.length < 0.02,
+    };
+  }, [runs]);
+
+  const VERDICTS = [
+    ["correct", "Correct"],
+    ["wrong_intent", "Wrong intent"],
+    ["wrong_content", "Wrong content"],
+    ["should_not_send", "Should not have sent"],
+    ["missed_stop", "Missed a hard stop"],
+  ];
+
+  const shown = runs.filter((r) => filter === "all" ? true
+    : filter === "unreviewed" ? !r.verdict : r.verdict === filter);
+
+  return (
+    <div className="ai-list" style={{ padding: "16px 26px" }}>
+      <div className="ai-shadowstats">
+        <div><em>Runs</em><strong>{stats.total}</strong></div>
+        <div><em>Reviewed</em><strong>{stats.reviewed}</strong></div>
+        <div><em>Would have sent</em><strong>{stats.wouldSend}</strong></div>
+        <div className="ai-key">
+          <em>Wrong and would have sent</em>
+          <strong className={stats.errorOnSends > 2 ? "ai-bad" : "ai-ok"}>
+            {stats.errorOnSends == null ? "—" : `${stats.errorOnSends}%`}
+          </strong>
+        </div>
+      </div>
+
+      <p className="ai-note">
+        The last figure is the one that matters. Overall accuracy counts drafts a
+        person reviews anyway, and those get caught either way — what decides whether
+        this can run unsupervised is how often something wrong would have gone out
+        with nobody looking.
+        {stats.reviewed < 100 && " Review at least a hundred before drawing a conclusion."}
+      </p>
+
+      {stats.ready && (
+        <div className="ai-banner ai-banner--ok">
+          Under 2% on what would have sent, across {stats.reviewed} reviewed. That is
+          the threshold. Turning it on is still a decision somebody makes.
+        </div>
+      )}
+
+      <div className="ai-seg">
+        {[["unreviewed", "Not scored"], ...VERDICTS, ["all", "All"]].map(([k, l]) => (
+          <button key={k} className={filter === k ? "on" : ""} onClick={() => setFilter(k)}>
+            {l}
+          </button>
+        ))}
+      </div>
+
+      {shown.length === 0 ? (
+        <div className="ai-empty">
+          {runs.length === 0
+            ? "Nothing recorded. Shadow mode is off — set AI_SHADOW_MODE=1 to start collecting."
+            : "Nothing in this group."}
+        </div>
+      ) : shown.slice(0, 60).map((r) => (
+        <article className="ai-msg" key={r.id}>
+          <div className="ai-msg-h">
+            <span className={`ai-badge ${r.would_send ? "bad" : ""}`}>
+              {r.would_send ? "would have sent" : "would have held"}
+            </span>
+            {r.intent && <span className="ai-rule">{r.intent}</span>}
+            {r.rule_id && <span className="ai-rule">{r.rule_id}</span>}
+            {r.confidence != null && (
+              <span className="ai-dim">confidence {(r.confidence * 100).toFixed(0)}%</span>
+            )}
+            {r.verdict && (
+              <span className={`ai-badge ${r.verdict === "correct" ? "ok" : "bad"}`}>
+                {VERDICTS.find(([v]) => v === r.verdict)?.[1] ?? r.verdict}
+              </span>
+            )}
+          </div>
+          {r.draft && <p className="ai-body">{r.draft}</p>}
+
+          {!r.verdict && (
+            <div className="ai-actions">
+              {VERDICTS.map(([v, l]) => (
+                <button key={v} className="ai-btn ai-btn--sm ai-btn--ghost"
+                        onClick={() => onSave(runs.map((x) => x.id === r.id
+                          ? { ...x, verdict: v, reviewed_name: session?.name,
+                              reviewed_at: new Date().toISOString() } : x))}>
+                  {l}
+                </button>
+              ))}
+            </div>
+          )}
+          {r.reviewed_name && (
+            <div className="ai-dim">Scored by {r.reviewed_name}</div>
+          )}
+        </article>
+      ))}
+    </div>
+  );
+}
+
 const CSS = `
 @import url('https://fonts.googleapis.com/css2?family=IBM+Plex+Sans:wght@400;500;600;700&family=IBM+Plex+Mono:wght@400;500;600&family=Archivo:wght@700;800&display=swap');
 .ai-root{--ink:#131C25;--ink2:#3E4C5A;--dim:#78899A;--paper:#fff;--ground:#E9EDF0;--rule:#D3DBE1;
@@ -595,6 +862,39 @@ const CSS = `
 .ai-btn:focus-visible,.ai-mi:focus-visible,.ai-select:focus-visible,.ai-ta:focus-visible{
   outline:2px solid var(--accent);outline-offset:2px}
 
+.ai-tabs{display:flex;padding:0 26px;background:#fff;border-bottom:1px solid var(--rule)}
+.ai-tabs button{font:inherit;font-weight:600;font-size:13.5px;cursor:pointer;background:none;
+  border:0;padding:12px 16px;color:var(--dim);border-bottom:2px solid transparent;
+  margin-bottom:-1px;display:flex;align-items:center;gap:6px}
+.ai-tabs button.on{color:var(--brand);border-bottom-color:var(--brand)}
+.ai-b{font-style:normal;font-family:'IBM Plex Mono',monospace;font-size:10px;
+  background:var(--red);color:#fff;border-radius:8px;padding:1px 6px}
+.ai-banner--bad{background:#FDF6F7;border-color:var(--red);color:var(--red)}
+.ai-banner--ok{background:#F5FAF8;border-color:var(--green);color:var(--green)}
+.ai-note{color:var(--dim);font-size:12.5px;line-height:1.7;max-width:74ch;margin:0 0 4px}
+.ai-empty{color:var(--dim);font-size:12.5px;padding:30px 0;text-align:center;
+  border:1px dashed var(--rule);border-radius:3px;background:#fff}
+.ai-withheld{font-size:12.5px;color:var(--dim);font-style:italic;line-height:1.7;
+  border-left:2px solid var(--rule);padding-left:11px;margin:4px 0}
+.ai-answerbox{display:flex;flex-direction:column;gap:8px}
+.ai-answered{background:#F5FAF8;border-left:3px solid var(--green);border-radius:3px;
+  padding:9px 12px;font-size:12.5px}
+.ai-answered p{margin:5px 0 0;line-height:1.7;color:var(--ink2)}
+.ai-msg--late{border-left:3px solid var(--red);background:#FFFCFC}
+.ai-shadowstats{display:flex;gap:26px;flex-wrap:wrap;background:#fff;border:1px solid var(--rule);
+  border-radius:4px;padding:14px 16px}
+.ai-shadowstats>div{display:flex;flex-direction:column;gap:2px}
+.ai-shadowstats em{font-style:normal;font-size:10.5px;color:var(--dim);text-transform:uppercase;
+  letter-spacing:.05em;font-family:'IBM Plex Mono',monospace}
+.ai-shadowstats strong{font-family:'IBM Plex Mono',monospace;font-size:20px}
+.ai-key{border-left:2px solid var(--rule);padding-left:22px}
+.ai-bad{color:var(--red)}
+.ai-ok{color:var(--green)}
+.ai-seg{display:flex;flex-wrap:wrap;gap:5px;margin:4px 0}
+.ai-seg button{font:inherit;font-size:12px;cursor:pointer;background:#fff;
+  border:1px solid var(--rule);border-radius:12px;padding:4px 11px;color:var(--dim)}
+.ai-seg button.on{background:var(--brand);color:#fff;border-color:var(--brand)}
+.ai-btn--sm{padding:5px 11px;font-size:12px}
 .ai-banner{background:#FFF8E6;border-bottom:1px solid var(--amberline);padding:11px 28px;
   font-size:12.5px;color:#7A5D14;line-height:1.6}
 .ai-compose{display:flex;gap:10px;padding:14px 28px;background:var(--paper);

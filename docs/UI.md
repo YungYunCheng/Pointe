@@ -84,21 +84,60 @@ number here would be read as an answer.
 
 ---
 
+## The last nine
+
+All built. Where each went:
+
+| | Where |
+|---|---|
+| GST return | Accounting → Month end |
+| Fixed assets and depreciation | Accounting → Month end |
+| Escalation queue | AI inbox → Needs a person |
+| Shadow mode scoring | AI inbox → Shadow mode |
+| Signature event history | Agreements → Signing |
+| Verify a signed copy | Agreements → Signing |
+| Duplicate leads | Leads → Duplicates |
+| Release keys | Operations → Release keys |
+| Contact preferences | Tenant portal → Documents |
+
+A few of these are worth a note.
+
+**The escalation queue sorts overdue first**, and shows the clock rather than a
+count. A tenant was told one business day; silence past that is what turns a
+question into a complaint.
+
+For the protected-ground rules the content is not shown in the list. The
+notification did not repeat it either — what travels is the rule reference.
+
+**Shadow mode reports the error rate on what would have sent**, not overall
+accuracy. Drafts a person reviews anyway get caught either way; what decides
+whether this can run unsupervised is how often something wrong would have gone
+out with nobody looking. The threshold shown is 2% across at least a hundred
+reviewed, and even then turning it on is a decision somebody makes.
+
+**Verifying a copy** hashes the file in the browser and says whether it matches
+something signed here. If somebody produces a lease and says it is the one,
+that is how you find out — and a mismatch means it has been altered since
+signing or was never signed through this system.
+
+**Merging leads keeps the oldest record** because it holds the first contact
+date, which is what the response-time figures are measured from, and takes the
+furthest-along stage. Notes move rather than being discarded.
+
+**Releasing keys** records whether the deposit and first month arrived. Both
+can be skipped, and the screen says plainly why that is a bad idea: once
+somebody has keys, the leverage is gone.
+
+**Contact preferences cover marketing only.** A notice of entry is a legal
+obligation and is not affected. The tenant is told that on the same screen, so
+somebody who turns everything off and then receives an entry notice does not
+think the switch was ignored.
+
+---
+
 ## Still without a screen
 
-**Escalation queue.** Raising one works and the email goes out; there is no
-screen listing open threads with a clock. It belongs in the AI inbox.
-
-**Signature detail.** The list shows progress; the full event history and the
-certificate download are backend-only.
-
-**Lead merge.** Duplicates are found by the API; nothing surfaces them.
-
-**Shadow mode review.** Runs are recorded, but scoring them one by one — which
-is the whole point — has no screen.
-
-**Key release.** The Building Manager sees that keys are not released. The
-Property Manager has no screen to release them; it is an API call.
-
-**Signature verification.** `POST /api/signatures/verify` takes a hash and says
-whether it matches something signed here. No screen.
+Nothing on the feature list. What remains is the wiring: every tool still
+reads browser storage rather than the API, which is the gap in
+`docs/WIRING.md` and the reason locks and queues do not yet hold across two
+browsers.

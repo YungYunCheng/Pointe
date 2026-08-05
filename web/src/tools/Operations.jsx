@@ -135,6 +135,10 @@ export default function Operations() {
   }, []);
 
   const saveOutcomes = (v) => { setOutcomes(v); persist("baydo:showoutcomes", v); };
+  const saveReleases = (v) => { setReleases(v); persist("baydo:keyreleases", v); };
+  const pendingRelease = signedLeases.filter((l) =>
+    !releases.some((r) => r.unit_number === l.unit_number && r.approved_at)).length;
+
   const saveMoveouts = (v) => { setMoveouts(v); persist("baydo:moveouts", v); };
 
   /* ---------- Outcome queue ---------- */
@@ -281,6 +285,9 @@ export default function Operations() {
         <button className={tab === "showings" ? "on" : ""} onClick={() => setTab("showings")}>
           Showing outcomes {showQueue.pend.length > 0 && <i className="op-b">{showQueue.pend.length}</i>}
         </button>
+        <button className={tab === "keys" ? "on" : ""} onClick={() => setTab("keys")}>
+          Release keys {pendingRelease > 0 && <i className="op-b">{pendingRelease}</i>}
+        </button>
         <button className={tab === "moveout" ? "on" : ""} onClick={() => setTab("moveout")}>
           Move-outs {openMo.length > 0 && <i className="op-b">{openMo.length}</i>}
         </button>
@@ -340,6 +347,14 @@ export default function Operations() {
       )}
 
       {/* ═══════ Move-out ═══════ */}
+      {tab === "keys" && (
+        <div className="op-body">
+          <KeyRelease releases={releases} signedLeases={signedLeases}
+            canRelease={["admin", "property_manager"].includes(session?.role)}
+            session={session} onSave={saveReleases} flash={flash} />
+        </div>
+      )}
+
       {tab === "moveout" && (
         <div className="op-body">
           <div className="op-barrow">
@@ -847,6 +862,127 @@ function MoveoutCard({ mo, isAdmin, onConfirm, onUndo, onPatch, onCancel, onVaca
   );
 }
 
+/* ══════════════════ Releasing keys ══════════════════ */
+
+/** The Building Manager cannot book a key handover until this exists.
+ *
+ *  Handing over possession against an unsigned lease leaves nothing to
+ *  enforce, and it is not a mistake that can be undone quietly — once
+ *  somebody is in the suite, getting them out is a legal process.
+ *
+ *  The deposit and first month are recorded here because those are the two
+ *  things that become awkward to collect the moment they have keys. */
+function KeyRelease({ releases, signedLeases, canRelease, session, onSave, flash }) {
+  const [opening, setOpening] = useState(null);
+  const [f, setF] = useState({ deposit: false, rent: false, note: "" });
+
+  const pending = signedLeases.filter((l) =>
+    !releases.some((r) => r.unit_number === l.unit_number && r.approved_at));
+
+  return (
+    <section className="op-card">
+      <div className="op-cardh">
+        <h2>Release keys <span className="op-n">{pending.length}</span></h2>
+      </div>
+
+      <p className="op-note">
+        The Building Manager cannot book a handover until you release it. Handing
+        over possession against an unsigned lease leaves nothing to enforce, and
+        getting somebody out of a suite afterwards is a legal process rather than
+        a phone call.
+      </p>
+
+      {pending.length === 0 ? (
+        <div className="op-empty">
+          Nothing waiting. A signed lease appears here for release.
+        </div>
+      ) : pending.map((l) => (
+        <div className="op-release" key={l.unit_number}>
+          <div className="op-release-h">
+            <strong className="op-mono">{l.unit_number}</strong>
+            <span>{l.tenant_name}</span>
+            <span className="op-dim">
+              Lease signed {String(l.signed_at ?? "").slice(0, 10)} · starts {l.start_date}
+            </span>
+          </div>
+
+          {opening === l.unit_number ? (
+            <div className="op-panel">
+              <label className="op-check">
+                <input type="checkbox" checked={f.deposit}
+                       onChange={(e) => setF({ ...f, deposit: e.target.checked })} />
+                <span>The security deposit has arrived and is in the trust account</span>
+              </label>
+              <label className="op-check">
+                <input type="checkbox" checked={f.rent}
+                       onChange={(e) => setF({ ...f, rent: e.target.checked })} />
+                <span>The first month has arrived</span>
+              </label>
+
+              {(!f.deposit || !f.rent) && (
+                <div className="op-warn">
+                  You can release without these, but collecting either one afterwards
+                  is much harder. Once somebody has keys, the leverage is gone.
+                </div>
+              )}
+
+              <label className="op-f"><span>Note <em>optional</em></span>
+                <input className="op-in" value={f.note}
+                       onChange={(e) => setF({ ...f, note: e.target.value })} /></label>
+
+              <div className="op-actions">
+                <button className="op-btn"
+                        onClick={() => { onSave([...releases, {
+                          id: "kra_" + Date.now().toString(36),
+                          unit_number: l.unit_number, lease_id: l.id,
+                          tenant_name: l.tenant_name,
+                          deposit_received: f.deposit, first_rent_received: f.rent,
+                          lease_signed: true, note: f.note.trim() || null,
+                          approved_name: session?.name,
+                          approved_at: new Date().toISOString() }]);
+                          setOpening(null); setF({ deposit: false, rent: false, note: "" });
+                          flash("Released. The Building Manager can book the handover now."); }}>
+                  Release keys for {l.unit_number}
+                </button>
+                <button className="op-btn op-btn--ghost" onClick={() => setOpening(null)}>
+                  Cancel
+                </button>
+              </div>
+            </div>
+          ) : (
+            canRelease && (
+              <div className="op-actions">
+                <button className="op-btn op-btn--sm" onClick={() => setOpening(l.unit_number)}>
+                  Release
+                </button>
+              </div>
+            )
+          )}
+        </div>
+      ))}
+
+      {releases.filter((r) => r.approved_at).length > 0 && (
+        <details className="op-releasedlog">
+          <summary>{releases.filter((r) => r.approved_at).length} released</summary>
+          {releases.filter((r) => r.approved_at).map((r) => (
+            <div className="op-releasedrow" key={r.id}>
+              <span className="op-mono">{r.unit_number}</span>
+              <span>{r.tenant_name}</span>
+              <span className="op-dim">
+                {r.deposit_received ? "deposit in" : "no deposit"} ·
+                {r.first_rent_received ? " first month in" : " no first month"}
+              </span>
+              <span className="op-dim">
+                {r.approved_name} · {String(r.approved_at).slice(0, 10)}
+              </span>
+            </div>
+          ))}
+        </details>
+      )}
+    </section>
+  );
+}
+
 const CSS = `
 @import url('https://fonts.googleapis.com/css2?family=IBM+Plex+Sans:wght@400;500;600;700&family=IBM+Plex+Mono:wght@400;500;600&family=Archivo:wght@700;800&display=swap');
 .op{--ink:#131C25;--ink2:#3E4C5A;--dim:#78899A;--paper:#fff;--ground:#E9EDF0;--rule:#D3DBE1;
@@ -986,6 +1122,16 @@ const CSS = `
   background:#FFFCF3;border-radius:3px;padding:11px 13px;font-size:12.5px;color:var(--ink2)}
 .op-vacate.done{border-color:var(--green);background:#F6FBF8}
 .op-vacate strong{font-size:13px}
+.op-release{border:1px solid var(--rule);border-radius:4px;padding:12px 14px;
+  margin-bottom:9px;display:flex;flex-direction:column;gap:8px}
+.op-release-h{display:flex;gap:10px;align-items:center;flex-wrap:wrap;font-size:13.5px}
+.op-check{display:flex;gap:9px;align-items:flex-start;font-size:12.5px;color:var(--ink2);
+  cursor:pointer;line-height:1.6}
+.op-check input{margin-top:3px}
+.op-releasedlog{font-size:12.5px;margin-top:6px}
+.op-releasedlog summary{cursor:pointer;color:var(--brand);padding:4px 0}
+.op-releasedrow{display:grid;grid-template-columns:90px 1fr 1fr 1fr;gap:9px;
+  padding:5px 0 5px 11px;border-left:2px solid var(--rule);font-size:12px}
 .op-note-acct{background:#F5FAF8;border:1px solid var(--green);border-left:3px solid var(--green);
   border-radius:3px;padding:11px 14px;font-size:12.5px;color:var(--ink2);line-height:1.7}
 .op-note-acct strong{color:var(--green)}

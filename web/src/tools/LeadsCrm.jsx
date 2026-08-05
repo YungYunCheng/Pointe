@@ -113,6 +113,36 @@ function tokenOverlap(a, b) {
 
 const nameSimilarity = (a, b) => Math.max(editSimilarity(a, b), tokenOverlap(a, b));
 
+/** Finds people who are on file more than once. The same person enquires,
+ *  applies, signs and renews, and turns up as several records — merging keeps
+ *  one and folds the rest into it. */
+export function findDuplicates(leads) {
+  const groups = new Map();
+  for (const l of leads) {
+    const key = normEmail(l.email) || normPhone(l.phone);
+    if (!key) continue;
+    if (!groups.has(key)) groups.set(key, []);
+    groups.get(key).push(l);
+  }
+  const order = ["leased", "applied", "viewed", "booked", "contacted", "new", "lost"];
+  return [...groups.entries()]
+    .filter(([, rows]) => rows.length > 1)
+    .map(([key, rows]) => {
+      const sorted = [...rows].sort((a, b) =>
+        String(a.created_at ?? "").localeCompare(String(b.created_at ?? "")));
+      return {
+        key,
+        // The oldest is kept: it holds the first contact date, which is what
+        // the response-time figures are measured from.
+        keep: sorted[0],
+        merge: sorted.slice(1),
+        // The furthest-along stage survives. Somebody who signed a lease is
+        // not "new" because they enquired again about a second unit.
+        stage: order.find((st) => rows.some((r) => r.stage === st)),
+      };
+    });
+}
+
 export function screenLead({ email, phone, name }, existing, excludeId) {
   const e = normEmail(email), p = normPhone(phone);
 
@@ -337,6 +367,9 @@ export default function CRM() {
           Showings <i>{upcoming.reduce((s, [, a]) => s + a.length, 0)}</i>
         </button>
         <button className={tab === "funnel" ? "on" : ""} onClick={() => setTab("funnel")}>Funnel</button>
+        <button className={tab === "duplicates" ? "on" : ""} onClick={() => setTab("duplicates")}>
+          Duplicates {dupes.length > 0 && <i className="cr-b">{dupes.length}</i>}
+        </button>
       </nav>
 
       {adding && <AddLead existing={leads}
@@ -344,6 +377,53 @@ export default function CRM() {
                           onCancel={() => setAdding(false)} />}
 
       {/* ═══ Leads ═══ */}
+      {tab === "duplicates" && (
+        <div className="cr-body">
+          <p className="cr-note">
+            The same person enquires, applies, signs and renews, and ends up on file
+            more than once. Merging keeps the oldest record — it holds the first
+            contact date, which is what the response-time figures are measured from —
+            and takes the furthest-along stage.
+          </p>
+
+          {dupes.length === 0 ? (
+            <div className="cr-empty">Nobody is on file twice.</div>
+          ) : dupes.map((d) => (
+            <div className="cr-dup" key={d.key}>
+              <div className="cr-dup-h">
+                <strong>{d.keep.name}</strong>
+                <span className="cr-dim">{d.key}</span>
+                <span className="cr-tag">{d.merge.length + 1} records</span>
+                <span className="cr-tag">would become “{d.stage}”</span>
+              </div>
+              <div className="cr-duprows">
+                {[d.keep, ...d.merge].map((r, i) => (
+                  <div className={`cr-duprow ${i === 0 ? "keep" : ""}`} key={r.id}>
+                    <span className="cr-tag">{i === 0 ? "keep" : "fold in"}</span>
+                    <span>{r.name}</span>
+                    <span className="cr-dim">{r.stage}</span>
+                    <span className="cr-dim">{r.source ?? "—"}</span>
+                    <span className="cr-dim">
+                      {String(r.created_at ?? "").slice(0, 10)}
+                    </span>
+                    <span className="cr-dim">{(r.notes ?? []).length} note(s)</span>
+                  </div>
+                ))}
+              </div>
+              <div className="cr-actions">
+                <button className="cr-btn" onClick={() => mergeLeads(d)}>
+                  Merge into one
+                </button>
+                <span className="cr-dim">
+                  Notes move rather than being discarded — what somebody was told is
+                  usually the useful part of an old record.
+                </span>
+              </div>
+            </div>
+          ))}
+        </div>
+      )}
+
       {tab === "pipeline" && (
         <div className="cr-body">
           {overdue.length > 0 && (
@@ -845,6 +925,19 @@ const CSS = `
   border:1px solid var(--amberline);border-radius:3px;padding:10px 13px;line-height:1.65;
   display:flex;flex-direction:column;gap:6px}
 .cr-review p{margin:0;line-height:1.7}
+.cr-b{font-style:normal;font-family:'IBM Plex Mono',monospace;font-size:10px;
+  background:#C98A15;color:#fff;border-radius:8px;padding:1px 6px;margin-left:5px}
+.cr-dup{background:var(--paper);border:1px solid var(--rule);border-radius:4px;
+  padding:13px 15px;margin-bottom:10px;display:flex;flex-direction:column;gap:8px}
+.cr-dup-h{display:flex;gap:10px;align-items:center;flex-wrap:wrap;font-size:13.5px}
+.cr-duprows{display:flex;flex-direction:column;gap:1px;background:var(--rule);
+  border:1px solid var(--rule);border-radius:3px;overflow:hidden}
+.cr-duprow{display:grid;grid-template-columns:70px 1fr 90px 1fr 90px 80px;gap:9px;
+  padding:7px 11px;background:var(--paper);font-size:12.5px;align-items:center}
+.cr-duprow.keep{background:#FCFDFE;font-weight:600}
+.cr-empty{color:var(--dim);font-size:12.5px;padding:30px 0;text-align:center;
+  border:1px dashed var(--rule);border-radius:3px;background:var(--paper)}
+.cr-note{color:var(--dim);font-size:12.5px;line-height:1.7;max-width:74ch;margin:0 0 12px}
 .cr-foot{padding:4px 28px 0;color:var(--dim);font-size:11.5px;max-width:90ch;line-height:1.7}
 
 @media (max-width:760px){

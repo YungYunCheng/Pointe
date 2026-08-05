@@ -140,6 +140,9 @@ export default function Accounting() {
   const [calculations, setCalculations] = useState([]);
   const [payrollRuns, setPayrollRuns] = useState([]);
   const [distributions, setDistributions] = useState([]);
+  const [gstReturns, setGstReturns] = useState([]);
+  const [assets, setAssets] = useState([]);
+  const [depreciationRuns, setDepreciationRuns] = useState([]);
   const [loading, setLoading] = useState(true);
 
   const canPost = session?.role === "accounting" || session?.role === "admin";
@@ -168,6 +171,9 @@ export default function Accounting() {
       setCalculations(await read("acct:calculations", []));
       setPayrollRuns(await read("acct:payroll", []));
       setDistributions(await read("acct:distributions", []));
+      setGstReturns(await read("acct:gst", []));
+      setAssets(await read("acct:assets", []));
+      setDepreciationRuns(await read("acct:depreciation", []));
       setLoading(false);
     })();
   }, []);
@@ -198,6 +204,9 @@ export default function Accounting() {
     calculations: (v) => { setCalculations(v); persist("acct:calculations", v); },
     payroll: (v) => { setPayrollRuns(v); persist("acct:payroll", v); },
     distributions: (v) => { setDistributions(v); persist("acct:distributions", v); },
+    gstReturns: (v) => { setGstReturns(v); persist("acct:gst", v); },
+    assets: (v) => { setAssets(v); persist("acct:assets", v); },
+    depreciationRuns: (v) => { setDepreciationRuns(v); persist("acct:depreciation", v); },
   };
 
   /* ---------- posting ----------
@@ -359,7 +368,8 @@ export default function Accounting() {
       {tab === "coa" && <ChartOfAccounts {...{ coa, balances, setCoa, canPost }} />}
       {tab === "monthend" && <MonthEnd {...{ period: thisPeriod(), charges, receipts,
         entries, invoices, coa, formulas, calculations, payroll: payrollRuns,
-        distributions, save, canPost, session }} />}
+        distributions, gstReturns, assets, depreciationRuns,
+        save, canPost, session }} />}
       {tab === "changelog" && <ChangeLog {...{ amendments, entries, save, canPost }} />}
       {tab === "settings" && <InterestRates {...{ rates, proposals, save, canPost, session }} />}
 

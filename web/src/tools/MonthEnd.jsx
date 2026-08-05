@@ -58,7 +58,8 @@ const INCOME_ACCOUNTS = [
 
 export default function MonthEnd({ period: initialPeriod, charges, receipts, entries,
                                    invoices, coa, formulas, calculations, payroll,
-                                   distributions, save, canPost, session }) {
+                                   distributions, gstReturns, assets, depreciationRuns,
+                                   save, canPost, session }) {
   const [period, setPeriod] = useState(initialPeriod || thisPeriod());
   const [editing, setEditing] = useState(null);
   const [err, setErr] = useState("");
@@ -433,6 +434,12 @@ export default function MonthEnd({ period: initialPeriod, charges, receipts, ent
         )}
       </section>
 
+      <GstReturn period={period} entries={entries} returns={gstReturns}
+        canPost={canPost} session={session} onSave={save.gstReturns} />
+
+      <Assets period={period} assets={assets} runs={depreciationRuns} canPost={canPost}
+        onSaveAssets={save.assets} onSaveRuns={save.depreciationRuns} flash={flash} />
+
       {/* ── Distribution ── */}
       <section className="ac-card">
         <h2>What the owner can take out</h2>
@@ -465,6 +472,235 @@ export default function MonthEnd({ period: initialPeriod, charges, receipts, ent
         )}
       </section>
     </div>
+  );
+}
+
+/* ---------- GST ---------- */
+
+/** Worked out from posted entries: 2300 is what was charged out, 1210 is what
+ *  was paid on purchases, and the difference goes to CRA or comes back.
+ *
+ *  Most residential rent is exempt. If the collected figure looks large,
+ *  something has been coded to 2300 that should not have been — worth saying
+ *  rather than leaving to be noticed on the return. */
+function GstReturn({ period, entries, returns, canPost, session, onSave }) {
+  const [from, setFrom] = useState(`${period}-01`);
+  const [to, setTo] = useState(`${period}-28`);
+  const [confirmation, setConfirmation] = useState("");
+
+  const calc = useMemo(() => {
+    const lines = (entries ?? []).filter((e) => e.state === "posted"
+      && e.entry_date >= from && e.entry_date <= to).flatMap((e) => e.lines ?? []);
+    const collected = cents(lines.filter((l) => l.gl === "2300")
+      .reduce((t, l) => t + l.credit - l.debit, 0));
+    const credits = cents(lines.filter((l) => l.gl === "1210")
+      .reduce((t, l) => t + l.debit - l.credit, 0));
+    return { collected, credits, net: cents(collected - credits) };
+  }, [entries, from, to]);
+
+  const filed = (returns ?? []).find((r) => r.period_from === from && r.period_to === to);
+
+  return (
+    <section className="ac-card">
+      <div className="ac-cardh">
+        <h2>
+          GST
+          {filed && <span className="ac-tag" style={{ "--c": "#0E8577" }}>{filed.state}</span>}
+        </h2>
+        <div className="ac-cardh-r">
+          <input className="ac-in ac-in--sm" type="date" value={from}
+                 onChange={(e) => setFrom(e.target.value)} />
+          <input className="ac-in ac-in--sm" type="date" value={to}
+                 onChange={(e) => setTo(e.target.value)} />
+        </div>
+      </div>
+
+      <div className="ac-tally">
+        <div><span>Collected on sales (2300)</span>
+          <span className="ac-mono">{money(calc.collected)}</span></div>
+        <div><span>Input tax credits (1210)</span>
+          <span className="ac-mono">−{money(calc.credits)}</span></div>
+        <div className="ac-tally-t">
+          <span>{calc.net >= 0 ? "Owed to CRA" : "Refund due back"}</span>
+          <span className="ac-mono">{money(Math.abs(calc.net))}</span>
+        </div>
+      </div>
+
+      {calc.collected > 0 && (
+        <div className="ac-warnbox">
+          Most residential rent is exempt from GST. {money(calc.collected)} has been
+          coded to 2300 — check what it is before filing, because the usual cause is
+          a coding error rather than a taxable supply.
+        </div>
+      )}
+
+      <p className="ac-note-p">
+        Filing posts the settlement, so neither account carries a balance belonging
+        to a period already filed.
+      </p>
+
+      {canPost && !filed && (
+        <div className="ac-actions">
+          <input className="ac-in ac-in--sm" value={confirmation}
+                 placeholder="CRA confirmation number"
+                 onChange={(e) => setConfirmation(e.target.value)} />
+          <button className="ac-btn"
+                  onClick={() => { onSave([{ id: uid("gst_"), period_from: from,
+                    period_to: to, collected: calc.collected, input_credits: calc.credits,
+                    net: calc.net, state: "filed", confirmation: confirmation.trim() || null,
+                    filed_at: nowISO(), filed_by: session?.name }, ...(returns ?? [])]); }}>
+            Record as filed
+          </button>
+        </div>
+      )}
+      {filed?.confirmation && (
+        <div className="ac-dim">CRA confirmation {filed.confirmation} · {filed.filed_by}</div>
+      )}
+    </section>
+  );
+}
+
+/* ---------- Fixed assets ---------- */
+
+/** Straight line or declining balance, monthly. It will not take an asset
+ *  below salvage — unchecked, a long-lived asset ends up with a negative book
+ *  value and the balance sheet stops making sense. */
+function Assets({ period, assets, runs, canPost, onSaveAssets, onSaveRuns, flash }) {
+  const [adding, setAdding] = useState(false);
+  const [f, setF] = useState({ name: "", cost: "", in_service_on: today(),
+    useful_life_years: 25, method: "straight_line", rate: "4", salvage: "0",
+    asset_class: "1" });
+  const set = (p) => setF({ ...f, ...p });
+
+  const withAccum = useMemo(() => (assets ?? []).map((a) => {
+    const mine = (runs ?? []).filter((r) => r.asset_id === a.id);
+    const accum = cents(mine.reduce((t, r) => t + r.amount, 0));
+    return { ...a, accumulated: accum, net_book: cents(a.cost - accum),
+      periods: mine.length, run_this_period: mine.some((r) => r.period === period) };
+  }), [assets, runs, period]);
+
+  const monthly = (a) => {
+    const accum = a.accumulated ?? 0;
+    const remaining = cents(a.cost - (a.salvage ?? 0) - accum);
+    if (remaining <= 0) return 0;
+    const raw = a.method === "declining_balance"
+      ? cents((a.cost - accum) * (a.rate ?? 0.04) / 12)
+      : cents((a.cost - (a.salvage ?? 0)) / (a.useful_life_years || 25) / 12);
+    return Math.min(raw, remaining);
+  };
+
+  const due = withAccum.filter((a) => !a.run_this_period && monthly(a) > 0);
+  const total = cents(due.reduce((t, a) => t + monthly(a), 0));
+
+  return (
+    <section className="ac-card">
+      <div className="ac-cardh">
+        <h2>Depreciation</h2>
+        <div className="ac-cardh-r">
+          <span className="ac-dim">{withAccum.length} asset(s)</span>
+          {canPost && (
+            <button className="ac-btn ac-btn--sm ac-btn--ghost"
+                    onClick={() => setAdding(!adding)}>Add an asset</button>
+          )}
+        </div>
+      </div>
+
+      {adding && canPost && (
+        <div className="ac-panel">
+          <div className="ac-row">
+            <label className="ac-f"><span>What it is</span>
+              <input className="ac-in" value={f.name} placeholder="Roof, 378"
+                     onChange={(e) => set({ name: e.target.value })} /></label>
+            <label className="ac-f"><span>Cost</span>
+              <input className="ac-in" type="number" step="0.01" value={f.cost}
+                     onChange={(e) => set({ cost: e.target.value })} /></label>
+            <label className="ac-f"><span>In service from</span>
+              <input className="ac-in" type="date" value={f.in_service_on}
+                     onChange={(e) => set({ in_service_on: e.target.value })} /></label>
+          </div>
+          <div className="ac-row">
+            <label className="ac-f"><span>Method</span>
+              <select className="ac-sel" value={f.method}
+                      onChange={(e) => set({ method: e.target.value })}>
+                <option value="straight_line">Straight line</option>
+                <option value="declining_balance">Declining balance</option>
+              </select></label>
+            {f.method === "straight_line" ? (
+              <label className="ac-f"><span>Useful life (years)</span>
+                <input className="ac-in" type="number" value={f.useful_life_years}
+                       onChange={(e) => set({ useful_life_years: e.target.value })} /></label>
+            ) : (
+              <label className="ac-f"><span>Rate (% per year)</span>
+                <input className="ac-in" type="number" step="0.5" value={f.rate}
+                       onChange={(e) => set({ rate: e.target.value })} />
+                <em className="ac-hint">CCA class 1 buildings are 4%.</em></label>
+            )}
+            <label className="ac-f"><span>Salvage value</span>
+              <input className="ac-in" type="number" step="0.01" value={f.salvage}
+                     onChange={(e) => set({ salvage: e.target.value })} />
+              <em className="ac-hint">Depreciation stops here, never below.</em></label>
+          </div>
+          <div className="ac-actions">
+            <button className="ac-btn" disabled={!f.name.trim() || !(Number(f.cost) > 0)}
+                    onClick={() => { onSaveAssets([...(assets ?? []),
+                      { id: uid("fa_"), ...f, cost: cents(f.cost),
+                        salvage: cents(f.salvage || 0), rate: Number(f.rate) / 100,
+                        useful_life_years: Number(f.useful_life_years),
+                        expense_gl: "5200", accum_gl: "1510", is_active: true }]);
+                      setAdding(false); setF({ ...f, name: "", cost: "" }); }}>
+              Add
+            </button>
+            <button className="ac-btn ac-btn--ghost" onClick={() => setAdding(false)}>
+              Cancel
+            </button>
+          </div>
+        </div>
+      )}
+
+      {withAccum.length === 0 ? (
+        <div className="ac-empty">No assets recorded.</div>
+      ) : (
+        <div className="ac-table">
+          <div className="ac-tr ac-tr--h" style={{ gridTemplateColumns: "1fr 110px 110px 110px 100px" }}>
+            <span>Asset</span><span>Cost</span><span>Accumulated</span>
+            <span>Net book value</span><span>This month</span>
+          </div>
+          {withAccum.map((a) => (
+            <div className="ac-tr" key={a.id}
+                 style={{ gridTemplateColumns: "1fr 110px 110px 110px 100px" }}>
+              <span>
+                <strong>{a.name}</strong>
+                <span className="ac-dim"> {a.method === "declining_balance"
+                  ? `declining ${(a.rate * 100).toFixed(0)}%`
+                  : `${a.useful_life_years} years`}</span>
+              </span>
+              <span className="ac-mono">{money(a.cost)}</span>
+              <span className="ac-mono ac-dim">{money(a.accumulated)}</span>
+              <span className="ac-mono">{money(a.net_book)}</span>
+              <span className="ac-mono">
+                {a.run_this_period ? <span className="ac-ok">run</span> : money(monthly(a))}
+              </span>
+            </div>
+          ))}
+        </div>
+      )}
+
+      {canPost && due.length > 0 && (
+        <div className="ac-actions">
+          <button className="ac-btn"
+                  onClick={() => { onSaveRuns([...(runs ?? []),
+                    ...due.map((a) => ({ id: uid("dr_"), asset_id: a.id, period,
+                      amount: monthly(a), created_at: nowISO() }))]);
+                    flash(`Depreciation recorded: ${money(total)}.`); }}>
+            Record {money(total)} for {period}
+          </button>
+          <span className="ac-dim">
+            One entry for the month, not one per asset — twenty lines for the same
+            charge makes the account unreadable.
+          </span>
+        </div>
+      )}
+    </section>
   );
 }
 

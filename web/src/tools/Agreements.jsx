@@ -740,6 +740,8 @@ function Signing({ signatures, agreements, canIssue, session, onSave, flash }) {
         </div>
       )}
 
+      <VerifyCopy signatures={signatures.filter((s) => s.signed_sha256)} />
+
       {preparing && canIssue && (
         <PrepareSignature agreements={agreements} session={session}
           onCancel={() => setPreparing(false)}
@@ -793,6 +795,26 @@ function Signing({ signatures, agreements, canIssue, session, onSave, flash }) {
 
                 {rq.signed_sha256 && <div className="ag-hash">{rq.signed_sha256}</div>}
 
+                {rq.events?.length > 0 && (
+                  <details className="ag-events">
+                    <summary>{rq.events.length} events</summary>
+                    {rq.events.map((ev, i) => (
+                      <div className="ag-event" key={i}>
+                        <span className="ag-mono">{stamp(ev.at)}</span>
+                        <strong>{ev.event}</strong>
+                        <span className="ag-dim">{ev.actor_name ?? ""}</span>
+                        {ev.ip_address && <span className="ag-dim ag-mono">{ev.ip_address}</span>}
+                        {ev.detail && <span className="ag-dim">{ev.detail}</span>}
+                      </div>
+                    ))}
+                    <p className="ag-dim">
+                      This is what answers a challenge, not the drawn mark. Who opened
+                      it, when, from where, and that they agreed to sign electronically
+                      before they did.
+                    </p>
+                  </details>
+                )}
+
                 <div className="ag-actions">
                   {canIssue && rq.state === "draft" && (
                     <button className="ag-btn ag-btn--xs"
@@ -835,6 +857,61 @@ function Signing({ signatures, agreements, canIssue, session, onSave, flash }) {
         </div>
       )}
     </div>
+  );
+}
+
+/** Checks a copy against what was signed. If somebody produces a lease and
+ *  says it is the one, this is how you find out — a hash that does not match
+ *  is not a copy of anything signed here. */
+function VerifyCopy({ signatures }) {
+  const [file, setFile] = useState(null);
+  const [hash, setHash] = useState("");
+  const [busy, setBusy] = useState(false);
+
+  const check = async (f) => {
+    setFile(f); setHash(""); if (!f) return;
+    setBusy(true);
+    const buf = await f.arrayBuffer();
+    const digest = await crypto.subtle.digest("SHA-256", buf);
+    setHash([...new Uint8Array(digest)].map((b) => b.toString(16).padStart(2, "0")).join(""));
+    setBusy(false);
+  };
+
+  const match = hash ? signatures.find((s) => s.signed_sha256 === hash) : null;
+
+  return (
+    <section className="ag-card">
+      <div className="ag-panel-h">Check a copy</div>
+      <p className="ag-dim">
+        Drop in a signed document and this says whether it is one of ours. The hash
+        identifies exactly which bytes were signed — a copy that does not match is
+        not a copy of anything signed here.
+      </p>
+      <input className="ag-in" type="file" accept=".pdf"
+             onChange={(e) => check(e.target.files?.[0] ?? null)} />
+      {busy && <span className="ag-dim">Hashing…</span>}
+      {hash && (
+        <>
+          <div className="ag-hash">{hash}</div>
+          {match ? (
+            <div className="ag-verified">
+              <strong>This is the signed document on file.</strong>
+              <span>
+                {" "}{match.reference} · {match.unit_number} · completed {stamp(match.completed_at)}
+              </span>
+            </div>
+          ) : (
+            <div className="ag-notverified">
+              <strong>No signed document on file has this hash.</strong>
+              <span>
+                {" "}It has been altered since signing, or it was never signed through
+                this system. Either way it is not what our records show.
+              </span>
+            </div>
+          )}
+        </>
+      )}
+    </section>
   );
 }
 
@@ -1155,6 +1232,17 @@ const CSS = `
   display:flex;flex-direction:column;gap:7px;background:#FCFDFE}
 .ag-fieldrow{display:grid;grid-template-columns:110px minmax(90px,1fr) 64px 64px 64px 24px;
   gap:6px;align-items:center}
+
+.ag-events{font-size:12.5px}
+.ag-events summary{cursor:pointer;color:var(--brand);padding:4px 0}
+.ag-event{display:flex;gap:9px;flex-wrap:wrap;padding:4px 0 4px 11px;
+  border-left:2px solid var(--rule);font-size:12px}
+.ag-verified{background:#F5FAF8;border:1px solid var(--green);border-radius:3px;
+  padding:10px 13px;font-size:12.5px;color:var(--green);line-height:1.7}
+.ag-verified span{color:var(--ink2)}
+.ag-notverified{background:#FDF6F7;border:1px solid var(--red);border-radius:3px;
+  padding:10px 13px;font-size:12.5px;color:var(--red);line-height:1.7}
+.ag-notverified span{color:var(--ink2)}
 
 @media (max-width:860px){
   .ag-fieldrow{grid-template-columns:1fr}

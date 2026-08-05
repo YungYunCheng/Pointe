@@ -33,6 +33,8 @@ const STATE_COLOR = {
 export default function Portal() {
   const { t } = useT();
   const [session, setSession] = useState(undefined);
+  const [prefs, setPrefs] = useState({ allow_email: true, allow_sms: true,
+                                       allow_marketing: false });
   const [tab, setTab] = useState("home");
 
   useEffect(() => {
@@ -93,7 +95,12 @@ export default function Portal() {
       {tab === "repairs" && <Repairs session={session} />}
       {tab === "notices" && <Notices session={session} />}
       {tab === "rent"    && <Rent session={session} />}
-      {tab === "docs"    && <Docs />}
+      {tab === "docs"    && (<>
+        <Docs />
+        <ContactPreferences prefs={prefs} zh={locale === "zh"}
+          onSave={async (v) => { setPrefs(v);
+            try { await window.storage.set("baydo:tenant-prefs", JSON.stringify(v)); } catch {} }} />
+      </>)}
 
       <style>{PORTAL_CSS}</style>
     </section>
@@ -387,6 +394,57 @@ function Docs() {
   );
 }
 
+/* ══════════════════ How we contact you ══════════════════ */
+
+/** Marketing consent, and only marketing.
+ *
+ *  A notice of entry is a legal obligation and does not depend on a
+ *  preference. Saying so here matters: a tenant who turns everything off and
+ *  then receives an entry notice should not think the switch was ignored. */
+function ContactPreferences({ prefs, onSave, zh }) {
+  const set = (patch) => onSave({ ...prefs, ...patch });
+
+  return (
+    <section className="bt-card">
+      <h3>{zh ? "聯絡方式" : "How we contact you"}</h3>
+
+      <label className="bt-pref">
+        <input type="checkbox" checked={prefs.allow_email !== false}
+               onChange={(e) => set({ allow_email: e.target.checked })} />
+        <span>
+          <strong>Email</strong>
+          <em>{zh ? "收據、通知、文件" : "Receipts, notices, documents"}</em>
+        </span>
+      </label>
+
+      <label className="bt-pref">
+        <input type="checkbox" checked={prefs.allow_sms !== false}
+               onChange={(e) => set({ allow_sms: e.target.checked })} />
+        <span>
+          <strong>{zh ? "簡訊" : "Text message"}</strong>
+          <em>{zh ? "時間提醒、緊急事項" : "Time reminders and anything urgent"}</em>
+        </span>
+      </label>
+
+      <label className="bt-pref">
+        <input type="checkbox" checked={!!prefs.allow_marketing}
+               onChange={(e) => set({ allow_marketing: e.target.checked })} />
+        <span>
+          <strong>{zh ? "社區消息" : "Building news"}</strong>
+          <em>{zh ? "活動、設施更新，與租約無關的內容"
+                 : "Events and amenity updates, nothing to do with your tenancy"}</em>
+        </span>
+      </label>
+
+      <p className="bt-hint">
+        {zh
+          ? "進入單位通知、租金收據這類與租約有關的通知是法定義務，不受這裡的設定影響。關掉一個管道，我們會用另一個送。"
+          : "Notices required by your tenancy — a notice of entry, for instance — are a legal obligation and are not affected by these. Turn a channel off and we use the other one."}
+      </p>
+    </section>
+  );
+}
+
 const PORTAL_CSS = `
 .bt-portal-h{display:flex;justify-content:space-between;align-items:flex-start;gap:16px;flex-wrap:wrap}
 .bt-portal-h h2{margin:0}
@@ -402,6 +460,12 @@ const PORTAL_CSS = `
 .bt-item--row{display:flex;justify-content:space-between;align-items:center;gap:12px}
 .bt-item-h{display:flex;align-items:center;gap:8px;flex-wrap:wrap;margin-bottom:6px}
 .bt-item p{margin:0 0 4px;font-size:14.5px;line-height:1.6}
+.bt-pref{display:flex;gap:11px;align-items:flex-start;padding:10px 0;
+  border-bottom:1px solid var(--rule);cursor:pointer}
+.bt-pref:last-of-type{border-bottom:0}
+.bt-pref input{margin-top:3px}
+.bt-pref strong{display:block;font-size:13.5px}
+.bt-pref em{display:block;font-style:normal;font-size:12px;color:var(--dim);margin-top:1px}
 .bt-tag{font-size:11px;font-weight:700;color:#fff;background:var(--c);border-radius:10px;padding:2px 9px}
 .bt-linkbtn{font:inherit;font-size:13px;background:none;border:0;color:var(--accent);
   cursor:pointer;padding:4px 0;align-self:flex-start}
