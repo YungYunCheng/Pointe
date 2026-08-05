@@ -8,6 +8,7 @@ import Portal from "./portal/Portal.jsx";
 import Booking from "./pages/Booking.jsx";
 import Apply from "./pages/Apply.jsx";
 import { Privacy, ConfirmReply } from "./pages/Privacy.jsx";
+import Sign from "./pages/Sign.jsx";
 
 /* ============================================================
    BAYDO POINTE — tenant site
@@ -333,6 +334,7 @@ function Site() {
           <Route path="/apply" element={<Apply />} />
           <Route path="/privacy" element={<Privacy />} />
           <Route path="/confirm" element={<ConfirmReply />} />
+          <Route path="/sign/:token" element={<Sign />} />
           <Route path="/portal/*" element={<Portal />} />
           <Route path="*" element={<Home />} />
         </Routes>

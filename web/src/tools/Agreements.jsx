@@ -25,6 +25,20 @@ const STATE = {
   withdrawn:  { label: "Withdrawn",            color: "#B23A54" },
 };
 
+/* Where a signature request has got to. "Viewed" matters more than it looks:
+   a tenant who opened the link three days ago and has not signed usually has
+   a question, not a busy week. */
+const SIG_STATE = {
+  draft:     { label: "Not sent",  color: "#8892A0" },
+  sent:      { label: "Sent",      color: "#1C6FA6" },
+  viewed:    { label: "Opened",    color: "#C98A15" },
+  signed:    { label: "Partly signed", color: "#7C5CBF" },
+  completed: { label: "Complete",  color: "#0E8577" },
+  declined:  { label: "Declined",  color: "#B23A54" },
+  expired:   { label: "Expired",   color: "#8892A0" },
+  voided:    { label: "Voided",    color: "#8892A0" },
+};
+
 const ISSUE_STATE = {
   prepared:  { label: "Prepared",  color: "#8892A0" },
   sent:      { label: "Sent",      color: "#1C6FA6" },
@@ -76,6 +90,7 @@ export default function Agreements() {
   const [agreements, setAgreements] = useState(SEED);
   const [issues, setIssues] = useState([]);
   const [tab, setTab] = useState("library");
+  const [signatures, setSignatures] = useState([]);
   const [sel, setSel] = useState(null);
   const [msg, setMsg] = useState("");
   const [loading, setLoading] = useState(true);
@@ -99,6 +114,7 @@ export default function Agreements() {
           .concat(saved.filter((a) => !SEED.some((s) => s.code === a.code))));
       }
       setIssues(await read("baydo:agreementissues", []));
+      setSignatures(await read("baydo:signatures", []));
       setLoading(false);
     })();
   }, []);
@@ -112,6 +128,10 @@ export default function Agreements() {
   const saveIssues = useCallback(async (next) => {
     setIssues(next);
     try { await window.storage.set("baydo:agreementissues", JSON.stringify(next)); } catch {}
+  }, []);
+  const saveSignatures = useCallback(async (next) => {
+    setSignatures(next);
+    try { await window.storage.set("baydo:signatures", JSON.stringify(next)); } catch {}
   }, []);
 
   const readiness = useMemo(() => {
@@ -154,6 +174,12 @@ export default function Agreements() {
         </button>
         <button className={tab === "issued" ? "on" : ""} onClick={() => setTab("issued")}>
           Issued {issues.length > 0 && <i>{issues.length}</i>}
+        </button>
+        <button className={tab === "signing" ? "on" : ""} onClick={() => setTab("signing")}>
+          Signing {signatures.filter((s) => !["completed", "voided", "declined"]
+            .includes(s.state)).length > 0 &&
+            <i>{signatures.filter((s) => !["completed", "voided", "declined"]
+              .includes(s.state)).length}</i>}
         </button>
       </nav>
 
@@ -213,6 +239,11 @@ export default function Agreements() {
             </section>
           </div>
         </div>
+      )}
+
+      {tab === "signing" && (
+        <Signing signatures={signatures} agreements={agreements} canIssue={canIssue}
+                 session={session} onSave={saveSignatures} flash={flash} />
       )}
 
       {tab === "issued" && (
@@ -626,7 +657,7 @@ function Issued({ issues, agreements, canIssue, onSave, flash }) {
                     )}
                     {i.state === "sent" && (
                       <button className="ag-btn ag-btn--xs ag-btn--ghost"
-                              onClick={() => markSigned(i)}>Mark signed</button>
+                              onClick={() => markSigned(i)}>Mark signed by hand</button>
                     )}
                     {i.state === "prepared" && !i.tenant_email && (
                       <span className="ag-dim">No email on file</span>
@@ -639,6 +670,342 @@ function Issued({ issues, agreements, canIssue, onSave, flash }) {
         </div>
       )}
     </div>
+  );
+}
+
+/* ══════════════════ Signing ══════════════════ */
+
+/** Requests out for signature and where each has got to.
+ *
+ *  The one worth acting on is "opened and not signed". Somebody who read it
+ *  three days ago and stopped usually has a question, and asking beats
+ *  reminding. */
+function Signing({ signatures, agreements, canIssue, session, onSave, flash }) {
+  const [filter, setFilter] = useState("open");
+  const [preparing, setPreparing] = useState(false);
+  const [detail, setDetail] = useState(null);
+
+  const shown = signatures.filter((s) => {
+    if (filter === "open") return !["completed", "voided", "declined"].includes(s.state);
+    if (filter === "all") return true;
+    return s.state === filter;
+  });
+
+  const stalled = signatures.filter((s) => s.state === "viewed"
+    && s.viewed_at && Date.now() - new Date(s.viewed_at).getTime() > 2 * 864e5);
+
+  const remind = (rq) => {
+    onSave(signatures.map((x) => x.id === rq.id
+      ? { ...x, reminded_at: nowISO(), reminder_count: (x.reminder_count ?? 0) + 1 } : x));
+    flash(`Reminder queued to ${rq.parties?.[0]?.email ?? "the signer"}.`);
+  };
+
+  const voidIt = (rq, reason) => {
+    onSave(signatures.map((x) => x.id === rq.id
+      ? { ...x, state: "voided", voided_reason: reason } : x));
+    flash("Voided. Anything already signed under it stays retrievable.");
+  };
+
+  return (
+    <div className="ag-body">
+      <div className="ag-cardh">
+        <div className="ag-seg">
+          {[["open", "In progress"], ["completed", "Complete"],
+            ["declined", "Declined"], ["all", "All"]].map(([k, l]) => (
+            <button key={k} className={filter === k ? "on" : ""}
+                    onClick={() => setFilter(k)}>{l}</button>
+          ))}
+        </div>
+        {canIssue && (
+          <button className="ag-btn ag-btn--sm" onClick={() => setPreparing(!preparing)}>
+            Send for signature
+          </button>
+        )}
+      </div>
+
+      <p className="ag-note">
+        The document is signed as it was sent — signatures are drawn on top and
+        nothing in the text moves. Every request carries a certificate recording
+        who signed, when, from where, and the hash of the file before and after.
+        That trail is what answers a challenge; the drawn mark on its own does not.
+      </p>
+
+      {stalled.length > 0 && (
+        <div className="ag-stalled">
+          <strong>{stalled.length} opened and not signed.</strong>
+          <span>
+            {" "}Somebody who read it days ago and stopped usually has a question.
+            A call gets further than another reminder.
+          </span>
+        </div>
+      )}
+
+      {preparing && canIssue && (
+        <PrepareSignature agreements={agreements} session={session}
+          onCancel={() => setPreparing(false)}
+          onCreate={(rq) => { onSave([rq, ...signatures]); setPreparing(false);
+                              flash(`Prepared. Send it when you are ready.`); }} />
+      )}
+
+      {shown.length === 0 ? (
+        <div className="ag-empty">Nothing here.</div>
+      ) : (
+        <div className="ag-issues">
+          {shown.map((rq) => {
+            const st = SIG_STATE[rq.state] ?? SIG_STATE.draft;
+            const signed = (rq.parties ?? []).filter((p) => p.signed_at).length;
+            return (
+              <div className="ag-issue" key={rq.id}>
+                <div className="ag-issue-h">
+                  <span className="ag-tag" style={{ "--c": st.color }}>{st.label}</span>
+                  <strong className="ag-mono">{rq.reference}</strong>
+                  <span className="ag-mono">{rq.unit_number}</span>
+                  <span className="ag-dim">{rq.agreement_name}</span>
+                </div>
+
+                <div className="ag-sigparties">
+                  {(rq.parties ?? []).map((p, i) => (
+                    <div className={`ag-sigparty ${p.signed_at ? "done" : ""}`} key={i}>
+                      <span className="ag-sigorder">{p.sign_order ?? i + 1}</span>
+                      <div>
+                        <strong>{p.full_name}</strong>
+                        <span className="ag-dim"> {p.role}</span>
+                        <div className="ag-dim">
+                          {p.signed_at ? `Signed ${stamp(p.signed_at)}`
+                            : p.viewed_at ? `Opened ${stamp(p.viewed_at)}, not signed`
+                            : "Not opened"}
+                        </div>
+                      </div>
+                    </div>
+                  ))}
+                </div>
+
+                <div className="ag-dim">
+                  {rq.version_label} · sent {stamp(rq.created_at)} by {rq.created_name}
+                  {rq.expires_at && ` · expires ${String(rq.expires_at).slice(0, 10)}`}
+                </div>
+
+                {rq.declined_reason && (
+                  <div className="ag-vnote ag-vnote--bad">
+                    Declined: {rq.declined_reason}
+                  </div>
+                )}
+
+                {rq.signed_sha256 && <div className="ag-hash">{rq.signed_sha256}</div>}
+
+                <div className="ag-actions">
+                  {canIssue && rq.state === "draft" && (
+                    <button className="ag-btn ag-btn--xs"
+                            onClick={() => { onSave(signatures.map((x) => x.id === rq.id
+                              ? { ...x, state: "sent", sent_at: nowISO() } : x));
+                              flash("Sent."); }}>
+                      Send it
+                    </button>
+                  )}
+                  {canIssue && ["sent", "viewed", "signed"].includes(rq.state) && (
+                    <button className="ag-btn ag-btn--xs ag-btn--ghost"
+                            onClick={() => remind(rq)}>Remind</button>
+                  )}
+                  {rq.state === "completed" && (
+                    <>
+                      <button className="ag-btn ag-btn--xs ag-btn--ghost">
+                        Signed copy
+                      </button>
+                      <button className="ag-btn ag-btn--xs ag-btn--ghost">
+                        Certificate
+                      </button>
+                    </>
+                  )}
+                  {canIssue && !["completed", "voided"].includes(rq.state) && (
+                    <button className="ag-btn ag-btn--xs ag-btn--ghost"
+                            onClick={() => { const why = prompt("Why void it?");
+                              if (why?.trim()) voidIt(rq, why.trim()); }}>
+                      Void
+                    </button>
+                  )}
+                  {rq.state === "completed" && (
+                    <span className="ag-dim">
+                      Copy sent to everyone who signed
+                    </span>
+                  )}
+                </div>
+              </div>
+            );
+          })}
+        </div>
+      )}
+    </div>
+  );
+}
+
+/** Preparing a request. Fields are placed by page and position, which is the
+ *  part that needs care: a signature box over a clause hides the clause. */
+function PrepareSignature({ agreements, session, onCancel, onCreate }) {
+  const withVersion = agreements.filter((a) => a.versions?.some((v) => v.state === "approved"));
+  const [agreementId, setAgreementId] = useState(withVersion[0]?.id ?? "");
+  const [f, setF] = useState({ unit_number: "", tenant_name: "", tenant_email: "",
+    landlord_name: session?.name ?? "", landlord_email: "", message: "",
+    rent: "", deposit: "", start_date: "", locale: "en", countersign: true });
+  const [fields, setFields] = useState([
+    { party_index: 0, kind: "signature", label: "Tenant signature", page: 1, x: 72, y: 120,
+      width: 200, height: 48 },
+    { party_index: 0, kind: "date", label: "Date", page: 1, x: 320, y: 120,
+      width: 120, height: 24 },
+  ]);
+  const set = (p) => setF({ ...f, ...p });
+
+  const agreement = agreements.find((a) => a.id === agreementId);
+  const version = agreement?.versions?.find((v) => v.state === "approved");
+  const ok = agreementId && f.unit_number.trim() && f.tenant_name.trim()
+    && f.tenant_email.trim();
+
+  return (
+    <section className="ag-card">
+      <div className="ag-panel-h">Send for signature</div>
+
+      {withVersion.length === 0 ? (
+        <div className="ag-empty">
+          No approved agreement to send. Admin has to upload and approve one first.
+        </div>
+      ) : (
+        <>
+          <div className="ag-row">
+            <label className="ag-f"><span>Agreement</span>
+              <select className="ag-in" value={agreementId}
+                      onChange={(e) => setAgreementId(e.target.value)}>
+                {withVersion.map((a) => <option key={a.id} value={a.id}>{a.name}</option>)}
+              </select></label>
+            <label className="ag-f"><span>Unit</span>
+              <input className="ag-in" value={f.unit_number} placeholder="378-519"
+                     onChange={(e) => set({ unit_number: e.target.value })} /></label>
+          </div>
+
+          {version && (
+            <div className="ag-usingv">
+              Using <strong>{version.version_label}</strong> · {version.filename}
+              <span className="ag-hash">{version.sha256}</span>
+            </div>
+          )}
+
+          <div className="ag-row">
+            <label className="ag-f"><span>Tenant</span>
+              <input className="ag-in" value={f.tenant_name}
+                     onChange={(e) => set({ tenant_name: e.target.value })} /></label>
+            <label className="ag-f"><span>Their email</span>
+              <input className="ag-in" type="email" value={f.tenant_email}
+                     onChange={(e) => set({ tenant_email: e.target.value })} /></label>
+            <label className="ag-f"><span>Language</span>
+              <select className="ag-in" value={f.locale}
+                      onChange={(e) => set({ locale: e.target.value })}>
+                <option value="en">English</option>
+                <option value="zh">繁體中文</option>
+              </select></label>
+          </div>
+
+          <label className="ag-check">
+            <input type="checkbox" checked={f.countersign}
+                   onChange={(e) => set({ countersign: e.target.checked })} />
+            <span>
+              I countersign after the tenant
+              <em> — the usual order. A countersignature on a document the tenant
+              has not signed means nothing.</em>
+            </span>
+          </label>
+
+          <div className="ag-particulars">
+            <div className="ag-panel-h">What you are telling them</div>
+            <p className="ag-dim">
+              These go in the covering message and on the signing page, not into
+              the document. Captured now, so a price change next month cannot
+              rewrite what this tenant was told.
+            </p>
+            <div className="ag-row">
+              <label className="ag-f"><span>Rent</span>
+                <input className="ag-in" type="number" step="0.01" value={f.rent}
+                       onChange={(e) => set({ rent: e.target.value })} /></label>
+              <label className="ag-f"><span>Deposit</span>
+                <input className="ag-in" type="number" step="0.01" value={f.deposit}
+                       onChange={(e) => set({ deposit: e.target.value })} /></label>
+              <label className="ag-f"><span>Start date</span>
+                <input className="ag-in" type="date" value={f.start_date}
+                       onChange={(e) => set({ start_date: e.target.value })} /></label>
+            </div>
+          </div>
+
+          <label className="ag-f"><span>Note to the tenant <em>optional</em></span>
+            <input className="ag-in" value={f.message}
+                   placeholder="Anything they should know before signing"
+                   onChange={(e) => set({ message: e.target.value })} /></label>
+
+          <div className="ag-fieldbox">
+            <div className="ag-panel-h">Where the signatures go</div>
+            <p className="ag-dim">
+              Page and position, in points from the bottom-left of the page.
+              Check the placement against the document — a signature box over a
+              clause hides the clause.
+            </p>
+            {fields.map((fl, i) => (
+              <div className="ag-fieldrow" key={i}>
+                <select className="ag-in" value={fl.kind}
+                        onChange={(e) => setFields(fields.map((x, j) =>
+                          j === i ? { ...x, kind: e.target.value } : x))}>
+                  {["signature", "initials", "date", "text", "checkbox"].map((k) =>
+                    <option key={k} value={k}>{k}</option>)}
+                </select>
+                <input className="ag-in" placeholder="Label" value={fl.label ?? ""}
+                       onChange={(e) => setFields(fields.map((x, j) =>
+                         j === i ? { ...x, label: e.target.value } : x))} />
+                <input className="ag-in" type="number" placeholder="Page" value={fl.page}
+                       onChange={(e) => setFields(fields.map((x, j) =>
+                         j === i ? { ...x, page: Number(e.target.value) } : x))} />
+                <input className="ag-in" type="number" placeholder="x" value={fl.x}
+                       onChange={(e) => setFields(fields.map((x, j) =>
+                         j === i ? { ...x, x: Number(e.target.value) } : x))} />
+                <input className="ag-in" type="number" placeholder="y" value={fl.y}
+                       onChange={(e) => setFields(fields.map((x, j) =>
+                         j === i ? { ...x, y: Number(e.target.value) } : x))} />
+                {fields.length > 1 && (
+                  <button className="ag-x"
+                          onClick={() => setFields(fields.filter((_, j) => j !== i))}>×</button>
+                )}
+              </div>
+            ))}
+            <button className="ag-btn ag-btn--xs ag-btn--ghost"
+                    onClick={() => setFields([...fields, { party_index: 0, kind: "signature",
+                      label: "", page: 1, x: 72, y: 200, width: 200, height: 48 }])}>
+              + Another field
+            </button>
+          </div>
+
+          <div className="ag-actions">
+            <button className="ag-btn" disabled={!ok}
+                    onClick={() => onCreate({
+                      id: uid("sr_"),
+                      reference: "SIG-" + Math.random().toString(16).slice(2, 10).toUpperCase(),
+                      agreement_id: agreementId, agreement_name: agreement?.name,
+                      version_id: version?.id, version_label: version?.version_label,
+                      source_sha256: version?.sha256, unit_number: f.unit_number,
+                      locale: f.locale, message: f.message,
+                      particulars: { rent: Number(f.rent) || null,
+                        deposit: Number(f.deposit) || null, start_date: f.start_date || null },
+                      parties: [
+                        { role: "tenant", full_name: f.tenant_name, email: f.tenant_email,
+                          sign_order: 1 },
+                        ...(f.countersign ? [{ role: "landlord", full_name: f.landlord_name,
+                          email: f.landlord_email, sign_order: 2 }] : []),
+                      ],
+                      fields, state: "draft", created_name: session?.name,
+                      created_at: nowISO(),
+                      expires_at: new Date(Date.now() + 14 * 864e5).toISOString(),
+                    })}>
+              Prepare it
+            </button>
+            <button className="ag-btn ag-btn--ghost" onClick={onCancel}>Cancel</button>
+            <span className="ag-dim">Nothing goes out until you send it.</span>
+          </div>
+        </>
+      )}
+    </section>
   );
 }
 
@@ -771,7 +1138,26 @@ const CSS = `
 
 .ag-foot{padding:6px 26px 0;color:var(--dim);font-size:11.5px;max-width:92ch;line-height:1.75}
 
+.ag-sigparties{display:flex;flex-direction:column;gap:6px;border-left:2px solid var(--rule);
+  padding-left:11px;margin:4px 0}
+.ag-sigparty{display:flex;gap:9px;align-items:flex-start;font-size:12.5px}
+.ag-sigparty.done .ag-sigorder{background:var(--green);color:#fff}
+.ag-sigorder{flex:0 0 18px;height:18px;border-radius:50%;background:var(--ground);
+  display:flex;align-items:center;justify-content:center;font-size:10.5px;font-weight:700;
+  color:var(--dim);margin-top:1px}
+.ag-stalled{background:var(--amber);border:1px solid var(--amberline);border-radius:4px;
+  padding:11px 14px;font-size:12.5px;color:#6B5410;line-height:1.7}
+.ag-check{display:flex;gap:9px;align-items:flex-start;font-size:12.5px;color:var(--ink2);
+  line-height:1.6;cursor:pointer}
+.ag-check input{margin-top:3px}
+.ag-check em{font-style:normal;color:var(--dim)}
+.ag-fieldbox{border:1px solid var(--rule);border-radius:4px;padding:12px 14px;
+  display:flex;flex-direction:column;gap:7px;background:#FCFDFE}
+.ag-fieldrow{display:grid;grid-template-columns:110px minmax(90px,1fr) 64px 64px 64px 24px;
+  gap:6px;align-items:center}
+
 @media (max-width:860px){
+  .ag-fieldrow{grid-template-columns:1fr}
   .ag-split{grid-template-columns:1fr}
   .ag-head,.ag-tabs,.ag-body,.ag-block,.ag-foot{padding-left:16px;padding-right:16px}
 }
