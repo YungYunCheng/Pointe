@@ -269,6 +269,325 @@ Reply with JSON only, no markdown:
 {"description":"one line","scope":"what the vendor is being asked to do and what done looks like","gl_code":"5010","lines":[{"description":"...","gl_code":"5010","quantity":1,"unit_price":0,"estimated":0}],"needs_quote":false,"note":"anything the person raising this should check"}`,
   },
 
+
+  /* ---------- Accounting ---------- */
+
+  /* Matches a bank line to something in the ledger by reading its
+     description. Amount and date alone cannot separate three tenants who
+     each paid $1,450 on the first. */
+  bank_match: {
+    permission: "accounting.bank",
+    maxTokens: 2000,
+    build: ({ transactions, receipts, invoices, vendors, units }) =>
+`Match bank statement lines to records in a property ledger.
+
+BANK LINES (unmatched)
+${transactions}
+
+POSSIBLE MATCHES
+Receipts from tenants:
+${receipts}
+
+Vendor invoices awaiting payment:
+${invoices}
+
+Known vendors and how they appear on statements:
+${vendors}
+
+Unit numbers in this property: ${units}
+
+Rules:
+1. Match on the description as well as the amount. Bank descriptions are abbreviated and upper case: "NORTHGATE PLBG EDM" is Northgate Plumbing, "E-TFR 378519" carries a unit number.
+2. Only propose a match where the amount agrees to the cent. A close amount is not a match, it is a different transaction.
+3. Where several records share an amount, use the description to choose. If the description does not separate them, return no match rather than guessing — a wrong match is harder to find than an unmatched line.
+4. Set confidence to "high" only where the description names the counterparty or a unit. Everything else is "low".
+5. Never invent a record id. Use only the ids given.
+
+Reply with JSON only, no markdown:
+{"matches":[{"transaction_id":"...","record_type":"ar_receipt|ap_invoice","record_id":"...","confidence":"high|low","reason":"what in the description made this the match"}],"unmatched":[{"transaction_id":"...","why":"what would be needed to identify it"}]}`,
+  },
+
+  /* Reads a vendor invoice into a draft bill. The invoice sits beside the
+     draft while somebody checks it, which is what makes this safe. */
+  invoice_extract: {
+    permission: "accounting.ap",
+    maxTokens: 2000,
+    build: ({ text, vendors, accounts }) =>
+`Read this vendor invoice and pull out what is needed to enter it.
+
+INVOICE
+${text}
+
+KNOWN VENDORS
+${vendors}
+
+EXPENSE ACCOUNTS
+${accounts}
+
+Rules:
+1. Copy figures exactly as printed. Do not recalculate a total, and do not correct one that looks wrong — flag it instead.
+2. If the invoice total does not equal the lines plus tax, say so in "discrepancy". That is usually a reading error on your part, occasionally the vendor's, and either way a person needs to look.
+3. Match the vendor to the known list where you can. If it is not on the list, return the name as printed and set vendor_id to null.
+4. GST is separate from the line amounts. Do not fold it in.
+5. Choose an expense account from the list. Never invent a code.
+6. Anything you cannot read, return as null. A null is checkable; a guess is not.
+
+Reply with JSON only, no markdown:
+{"vendor_name":"...","vendor_id":null,"invoice_no":"...","invoice_date":"YYYY-MM-DD","due_date":null,"lines":[{"description":"...","amount":0,"gl_code":"5010"}],"subtotal":0,"gst":0,"total":0,"unit_number":null,"discrepancy":null,"confidence":"high|medium|low","unreadable":["what you could not make out"]}`,
+  },
+
+  /* Works out which column is which in a bank export. Every bank ships a
+     different shape, and the opening-plus-movement-equals-closing check
+     catches a wrong mapping immediately. */
+  csv_mapping: {
+    permission: "accounting.bank",
+    maxTokens: 900,
+    build: ({ sample }) =>
+`Work out the column layout of this bank statement export.
+
+FIRST FEW ROWS
+${sample}
+
+Rules:
+1. Identify which column holds the date, the description, money out, money in, and the running balance.
+2. Some banks use one signed amount column instead of separate debit and credit. Say which.
+3. Report the date format as it appears: YYYY-MM-DD, DD/MM/YYYY, MM/DD/YYYY. Getting this backwards puts every transaction in the wrong month, and 03/04 is ambiguous — if you cannot tell from the rows, say so.
+4. Say whether the first row is a header.
+5. Note anything that will not parse: a thousands separator, a currency symbol, brackets for negatives.
+
+Reply with JSON only, no markdown:
+{"has_header":true,"date_col":0,"description_col":1,"debit_col":2,"credit_col":3,"balance_col":4,"single_amount_col":null,"date_format":"YYYY-MM-DD","date_format_certain":true,"cleanup":["what needs stripping before parsing"],"note":null}`,
+  },
+
+  /* Flags payables worth a second look. Output is "look at these", never
+     "this is fraud" — the difference matters because the second one gets
+     acted on. */
+  ap_anomaly: {
+    permission: "accounting.ap",
+    maxTokens: 2000,
+    build: ({ recent, history, vendors }) =>
+`Look over recent vendor invoices and flag anything worth a second look.
+
+RECENT INVOICES
+${recent}
+
+WHAT THIS PROPERTY USUALLY PAYS
+${history}
+
+VENDORS
+${vendors}
+
+Look for:
+- The same vendor invoiced twice in a month for a similar amount
+- An invoice number out of sequence for that vendor, or reused
+- An amount well outside what this property usually pays for that kind of work
+- A vendor with no history whose first invoice is large
+- A round number where that vendor normally invoices to the cent
+- An invoice dated before the work was scheduled
+
+Rules:
+1. Flag things to look at. Do not call anything fraud, an error, or wrong — you cannot see the invoice, the contract or the conversation.
+2. Say what specifically looks off and what would settle it.
+3. A large invoice is not by itself unusual. A large invoice from a vendor who has only ever sent small ones is.
+4. Return nothing rather than padding the list. A flag that turns out to be routine costs attention, and attention is what makes the real ones get looked at.
+
+Reply with JSON only, no markdown:
+{"flags":[{"invoice_id":"...","what":"one line","why":"what specifically looks off","check":"what would settle it","severity":"high|medium|low"}]}`,
+  },
+
+  /* Commentary on how the month moved against the last one. The figures
+     are computed in SQL; this explains movement, it does not recalculate. */
+  variance_commentary: {
+    permission: "accounting.reports",
+    maxTokens: 1200,
+    build: ({ period, current, previous, movements }) =>
+`Explain how ${period} moved against the previous period for a residential property in Edmonton.
+
+THIS PERIOD
+${JSON.stringify(current, null, 2)}
+
+PREVIOUS PERIOD
+${JSON.stringify(previous, null, 2)}
+
+THE LARGEST MOVEMENTS, WITH WHAT DROVE THEM
+${movements}
+
+Rules:
+1. Never recalculate anything. Every figure you use must appear above.
+2. Explain the movements that matter and say what drove them where the data shows it. Where it does not, say the cause is not visible rather than suggesting one.
+3. A one-off does not mean a trend. An elevator repair is not a rising maintenance cost.
+4. Three short paragraphs at most. No bullet points.
+5. End with the single line item most worth watching next month, and why.
+
+Write the commentary only. No heading, no preamble, no markdown.`,
+  },
+
+  /* ---------- On site ---------- */
+
+  /* Sorts a repair into a category and suggests who to send. It does not
+     set urgency: that is a rule, and it is a person, because whether a
+     leak is a drip or a flow is something you have to see. */
+  maintenance_triage: {
+    permission: "maintenance.manage",
+    maxTokens: 1200,
+    build: ({ description, unit, history, vendors, categories }) =>
+`Sort this repair report and suggest who should attend.
+
+REPORTED
+${description}
+
+Unit: ${unit ?? "common area"}
+${history ? `Previous work on this unit:\n${history}` : ""}
+
+CATEGORIES
+${categories}
+
+VENDORS AND WHAT THEY DO
+${vendors}
+
+Rules:
+1. Pick a category from the list. Do not invent one.
+2. Suggest vendors from the list who do this kind of work. If none fit, say so rather than picking the closest.
+3. Say whether somebody has to go inside the suite, because that decides whether a notice of entry is needed.
+4. Do not set urgency. Whether a leak is a drip or a flow is something a person has to see, and getting it wrong in either direction is expensive.
+5. If the description suggests a safety issue — gas, electrical, structural, no heat in winter — say so in "safety_note" so a person reads it first. That is a flag for attention, not a priority setting.
+6. If this unit has had similar work before, say so. A third visit for the same thing is usually a different problem from the first two.
+
+Reply with JSON only, no markdown:
+{"category":"...","suggested_vendors":["..."],"entry_required":true,"likely_parts":["..."],"safety_note":null,"repeat_issue":null,"note":"anything the person dispatching should know"}`,
+  },
+
+  /* Lays three quotes side by side. Comparison only — the decision is not
+     arithmetic, and the cheapest quote is often the one that excludes the
+     most. */
+  quote_comparison: {
+    permission: "po.create",
+    maxTokens: 1800,
+    build: ({ scope, quotes }) =>
+`Compare these quotes for the same job at a residential building.
+
+THE JOB
+${scope}
+
+QUOTES
+${quotes}
+
+Rules:
+1. Set out what each quote includes and, more importantly, what it excludes. The cheapest quote is often the one that excludes the most.
+2. Note differences in lead time, warranty, and whether disposal, permits or making good are included.
+3. Where a quote is silent on something another covers, say so — silence is not inclusion.
+4. Do not recommend one. Say what each is strong and weak on and let a person weigh it.
+5. If the quotes are not actually for the same scope, say that first. Comparing prices for different work is worse than not comparing at all.
+
+Reply with JSON only, no markdown:
+{"same_scope":true,"scope_note":null,"comparison":[{"vendor":"...","amount":0,"includes":["..."],"excludes":["..."],"lead_time":"...","warranty":"...","strong_on":"...","weak_on":"..."}],"watch_for":["what to ask before deciding"]}`,
+  },
+
+  /* ---------- Needs confirmation ---------- */
+
+  /* Turns a question into read-only SQL. The query is shown alongside the
+     answer, always — a query nobody can see is an answer nobody can check. */
+  nl_query: {
+    permission: "accounting.view",
+    maxTokens: 1200,
+    build: ({ question, schema }) =>
+`Write one read-only SQL query answering this question about a property ledger.
+
+QUESTION
+${question}
+
+SCHEMA (these tables only)
+${schema}
+
+Rules:
+1. SELECT only. No INSERT, UPDATE, DELETE, DROP, ALTER, ATTACH or PRAGMA.
+2. Use only the tables and columns given. Never assume a column exists.
+3. Amounts are stored as numbers. Filter journal entries on state='posted' — a draft or reversed entry is not part of the answer.
+4. Where the question mentions a building, filter on building_code. Getting this wrong silently returns the whole property, and the number will look plausible.
+5. Say plainly what the query counts and what it leaves out. That sentence is what a person checks against, not the SQL.
+6. If the question cannot be answered from this schema, say so and return sql as null. A query that answers a nearby question is worse than none.
+
+Reply with JSON only, no markdown:
+{"sql":"SELECT ...","explains":"what this counts, in one sentence","excludes":"what it does not count","assumptions":["anything you had to assume"],"answerable":true}`,
+  },
+
+  /* Pulls key terms out of a signed lease. Populates a draft; the file
+     stays the authority. */
+  lease_abstract: {
+    permission: "lease.sign",
+    maxTokens: 2000,
+    build: ({ text, unit }) =>
+`Pull the key terms out of this signed residential tenancy agreement. Alberta.
+
+${unit ? `Unit: ${unit}` : ""}
+
+DOCUMENT
+${text}
+
+Rules:
+1. Copy what the document says. Do not interpret, summarise or tidy up wording.
+2. Every field gets its own confidence. A date you read clearly is "high"; one you inferred from context is "low".
+3. Anything not stated, return as null. A null is checkable; a guess that reads as certain is not.
+4. Do not extract anything about the tenant beyond their name and the number of occupants. Household composition, employment and income are not indexed here even when the document mentions them.
+5. If the document contains a term that looks unusual for an Alberta residential tenancy, note it in "unusual" rather than leaving it to be found later.
+
+Reply with JSON only, no markdown:
+{"fields":{"tenant_names":{"value":[],"confidence":"high"},"start_date":{"value":null,"confidence":"high"},"end_date":{"value":null,"confidence":"high"},"term_type":{"value":"fixed|periodic","confidence":"high"},"rent":{"value":null,"confidence":"high"},"rent_due_day":{"value":null,"confidence":"high"},"security_deposit":{"value":null,"confidence":"high"},"pet_deposit":{"value":null,"confidence":"high"},"parking_stall":{"value":null,"confidence":"low"},"occupants":{"value":null,"confidence":"low"},"utilities_included":{"value":[],"confidence":"low"}},"unusual":[],"note":null}`,
+  },
+
+  /* Estimates what a turnover will cost, from this property's own history.
+     A range, never a figure — a single number gets treated as a quote. */
+  turnover_estimate: {
+    permission: "units.status.edit",
+    maxTokens: 1200,
+    build: ({ unit, unitType, condition, history }) =>
+`Estimate what this turnover will cost and how long it will take, using this property's own history.
+
+THE UNIT
+${unit}${unitType ? ` · ${unitType}` : ""}
+Condition noted at inspection: ${condition ?? "not recorded"}
+
+PREVIOUS TURNOVERS AT THIS PROPERTY
+${history}
+
+Rules:
+1. Use only the history given. Do not bring in figures from anywhere else.
+2. Give a range, not a single number. A single figure gets treated as a quote and then argued with.
+3. Say how many past turnovers the range is based on. Fewer than ten is a small sample and you should say so plainly rather than presenting a confident range.
+4. If the condition noted suggests work outside the usual turnover, call that out separately — it is the part that makes an estimate wrong.
+5. Days and cost are different questions. A cheap turnover can still sit empty for six weeks waiting on one trade.
+
+Reply with JSON only, no markdown:
+{"cost_low":0,"cost_high":0,"days_low":0,"days_high":0,"based_on":0,"sample_adequate":true,"outside_usual":[],"note":"what would move this either way"}`,
+  },
+
+  /* Drafts an arrears sequence. Collections only — nothing about ending a
+     tenancy, which is a legal process with its own notice periods. */
+  arrears_sequence: {
+    permission: "accounting.ar",
+    maxTokens: 1800,
+    build: ({ unit, tenant, owing, daysLate, history, locale }) =>
+`Draft the next message in an arrears sequence for a residential tenant in Alberta.
+
+Unit: ${unit}
+Tenant: ${tenant}
+Outstanding: ${owing}
+Days past due: ${daysLate}
+${history ? `Previously sent:\n${history}` : "Nothing sent yet."}
+
+Rules:
+1. Say what is owed and when it was due. Nothing else about their circumstances.
+2. Tone follows the days: a reminder at five, a clearer request at fifteen, a direct one at thirty. None of them are threatening at any stage.
+3. Never mention eviction, termination, RTDRS, or a lawyer. Ending a tenancy is a legal process with its own notice periods and forms, and a collections message that gestures at it is both ineffective and a problem later.
+4. Never suggest a reason for the arrears, and never ask for one. Somebody who has lost work does not need to explain that to get a payment date.
+5. Offer to arrange a payment date. Most arrears end that way rather than in a process.
+6. Write in ${locale === "zh" ? "Traditional Chinese" : "English"}.
+7. Short. Six lines at most.
+
+Reply with JSON only, no markdown:
+{"stage":"reminder|request|direct","subject":"...","body":"...","note_for_staff":"anything the person sending should know"}`,
+  },
+
   /* Answers a prospective tenant on the public site. The only task that can
      reach someone without a person in between, which is why the hard stops
      run before it. */

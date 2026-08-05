@@ -18,6 +18,7 @@ import ops2Routes from "./routes/ops2.js";
 import lifecycleRoutes from "./routes/lifecycle.js";
 import signingRoutes from "./routes/signing.js";
 import feeRoutes from "./routes/fees.js";
+import proposalRoutes from "./routes/proposals.js";
 import aiRoutes from "./routes/ai.js";
 import tenantRoutes from "./routes/tenant.js";
 import { startBackupJob, startDailyJobs } from "./jobs.js";
@@ -65,6 +66,7 @@ app.use("/api", ops2Routes);
 app.use("/api", lifecycleRoutes);
 app.use("/api", signingRoutes);
 app.use("/api", feeRoutes);
+app.use("/api", proposalRoutes);
 app.use("/api", tenantRoutes);
 app.use("/api", aiRoutes);
 

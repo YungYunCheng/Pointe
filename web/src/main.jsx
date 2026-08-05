@@ -29,10 +29,12 @@ const Accounting      = lazy(() => import("./tools/Accounting.jsx"));
 const Agreements      = lazy(() => import("./tools/Agreements.jsx"));
 const Portfolio       = lazy(() => import("./tools/Portfolio.jsx"));
 const AdminConsole    = lazy(() => import("./tools/AdminConsole.jsx"));
+const Confirmations   = lazy(() => import("./tools/Confirmations.jsx"));
 
 const ALL = "admin property_manager building_manager accounting".split(" ");
 const LEASING = ["admin", "property_manager", "building_manager"];
 const TOOLS = [
+  { path: "/confirmations", label: "Confirmations", el: Confirmations, roles: ALL },
   { path: "/units",       label: "Units",       el: LeasingConsole,  roles: ALL },
   { path: "/schedule",    label: "Schedule",    el: Schedule,        roles: LEASING },
   { path: "/leads",       label: "Leads",       el: LeadsCrm,        roles: ["admin", "building_manager"] },
