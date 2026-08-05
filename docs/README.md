@@ -4,6 +4,9 @@
 |---|---|
 | `STATUS.md` | Every function, what the AI does and does not do, and the gaps in order |
 | `STATUS.zh-Hant.md` | The same document in Chinese, for the manager |
+| `STATUS-v2.zh-Hant.md` | Second pass, after accounting and the gap closures |
+| `ACCOUNTING.md` | Double entry, deposits in trust, amendments, the close |
+| `OPERATIONS-GAPS.md` | What was built for each item raised against the first inventory |
 | `STATUS.zh-Hant.md` | The same inventory in Chinese, for the manager |
 | `inventory-and-gaps.md` | Everything built, what the AI does, and what is missing — start here |
 | `erd.mermaid` | 43 entities: identity, property, pricing, parking, messaging, scheduling, documents, leases |
