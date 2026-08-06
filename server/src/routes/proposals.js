@@ -60,16 +60,23 @@ export const PROPOSAL_KINDS = {
     describe: "What each includes and excludes, side by side. No recommendation: the cheapest quote is often the one that excludes the most.",
   },
   nl_query: {
-    label: "Question answered from the ledger", roles: ["admin"], ttlDays: 7,
+    // Accounting asks most of these, so they confirm their own. Admin can
+    // stand in like anywhere else.
+    label: "Question answered from the ledger", roles: ["accounting"], ttlDays: 7,
     describe: "The SQL is shown with the answer. A query nobody can see is an answer nobody can check.",
   },
   lease_abstract: {
-    label: "Lease terms extracted", roles: ["admin"], ttlDays: 30,
+    // Two people: the Property Manager knows what was agreed, Admin owns the
+    // library the file came from. A wrong end date propagates into every
+    // renewal reminder after it.
+    label: "Lease terms extracted", roles: ["property_manager", "admin"], ttlDays: 30,
     describe: "Populates a draft. The signed file stays the authority — this is an index of it, not a replacement.",
     movesMoney: true,
   },
   turnover_estimate: {
-    label: "Turnover cost estimated", roles: ["admin"], ttlDays: 30,
+    // The Building Manager has seen the suite. An estimate confirmed without
+    // that is an estimate from a spreadsheet.
+    label: "Turnover cost estimated", roles: ["building_manager", "admin"], ttlDays: 30,
     describe: "A range from this property's own history, with the sample size shown. Fewer than ten past turnovers is not enough to be confident about.",
   },
   arrears_sequence: {

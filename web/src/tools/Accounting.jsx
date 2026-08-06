@@ -143,6 +143,7 @@ export default function Accounting() {
   const [gstReturns, setGstReturns] = useState([]);
   const [assets, setAssets] = useState([]);
   const [depreciationRuns, setDepreciationRuns] = useState([]);
+  const [arrearsFiles, setArrearsFiles] = useState([]);
   const [loading, setLoading] = useState(true);
 
   const canPost = session?.role === "accounting" || session?.role === "admin";
@@ -174,6 +175,7 @@ export default function Accounting() {
       setGstReturns(await read("acct:gst", []));
       setAssets(await read("acct:assets", []));
       setDepreciationRuns(await read("acct:depreciation", []));
+      setArrearsFiles(await read("acct:arrears", []));
       setLoading(false);
     })();
   }, []);
@@ -207,6 +209,7 @@ export default function Accounting() {
     gstReturns: (v) => { setGstReturns(v); persist("acct:gst", v); },
     assets: (v) => { setAssets(v); persist("acct:assets", v); },
     depreciationRuns: (v) => { setDepreciationRuns(v); persist("acct:depreciation", v); },
+    arrears: (v) => { setArrearsFiles(v); persist("acct:arrears", v); },
   };
 
   /* ---------- posting ----------
@@ -304,6 +307,7 @@ export default function Accounting() {
     ["banking", "Banking"],
     ["reports", "Reports"],
     ["coa", "Accounts"],
+    ["arrears", "Arrears files"],
     ["monthend", "Month end"],
     ["changelog", "Change log"],
     ["settings", "Settings"],
@@ -366,6 +370,8 @@ export default function Accounting() {
       {tab === "reports" && <Reports {...{ reports, periods, entries, charges, receipts,
         coa, save, canPost, session }} />}
       {tab === "coa" && <ChartOfAccounts {...{ coa, balances, setCoa, canPost }} />}
+      {tab === "arrears" && <ArrearsFiles {...{ charges, files: arrearsFiles,
+        canPost, session, save, flash: (t) => setSaveState("saved") }} />}
       {tab === "monthend" && <MonthEnd {...{ period: thisPeriod(), charges, receipts,
         entries, invoices, coa, formulas, calculations, payroll: payrollRuns,
         distributions, gstReturns, assets, depreciationRuns,
@@ -1715,6 +1721,336 @@ function ChartOfAccounts({ coa, balances, setCoa, canPost }) {
   );
 }
 
+
+/* ══════════════════ Arrears files ══════════════════ */
+
+/* Alberta's service rules set when something counts as received, and that date
+   is what a notice period runs from. Named constants because they are legal
+   figures — confirm each with your lawyer before relying on a deemed date. */
+const DEEMED_SERVICE_DAYS = {
+  personal: 0, posted_on_door: 0, email: 0, sms: 0, courier: 1, post: 5,
+};
+
+const ARREARS_STEPS = {
+  reminder: { label: "Reminder", after: 5,
+    why: "Rent is late. Most arrears end here, and a reminder that reads as an accusation is what stops that happening." },
+  request: { label: "Request", after: 15,
+    why: "Clearer, still not threatening. This is where a payment arrangement usually gets made." },
+  direct: { label: "Direct request", after: 30,
+    why: "States the position and asks for a date. Still collections — nothing here mentions ending the tenancy." },
+  notice: { label: "Notice served", after: null,
+    why: "The statutory form, from the agreement library. Nothing generates it — a notice with the wrong wording fails the application whatever the arrears show." },
+  filing: { label: "Application filed", after: null, why: "Recorded for completeness." },
+};
+
+/* These leave no delivery report, so the record has to be made by whoever did
+   it. An application turns on this more often than on the debt. */
+const NEEDS_PROOF = ["personal", "posted_on_door", "post"];
+
+/** Every demand for rent, with how it was served.
+ *
+ *  A message queue answers "did we send it". This answers what was owed, what
+ *  was demanded, when, and how it reached them — which is what an application
+ *  to end a tenancy actually needs. */
+function ArrearsFiles({ charges, files, canPost, session, save, flash }) {
+  const [open, setOpen] = useState(null);
+  const [adding, setAdding] = useState(null);
+
+  const overdue = useMemo(() => {
+    const byUnit = {};
+    for (const c of charges) {
+      if (!["open", "partial"].includes(c.state)) continue;
+      if (c.due_date >= today()) continue;
+      byUnit[c.unit_number] ||= { unit: c.unit_number, owed: 0, oldest: c.due_date, n: 0 };
+      byUnit[c.unit_number].owed = cents(byUnit[c.unit_number].owed
+        + (c.amount - c.paid_amount));
+      byUnit[c.unit_number].n++;
+      if (c.due_date < byUnit[c.unit_number].oldest)
+        byUnit[c.unit_number].oldest = c.due_date;
+    }
+    return Object.values(byUnit).sort((a, b) => b.owed - a.owed);
+  }, [charges]);
+
+  const withoutFile = overdue.filter((o) =>
+    !files.some((f) => f.unit_number === o.unit && f.state !== "cleared"));
+
+  const openFile = (unit) => {
+    const o = overdue.find((x) => x.unit === unit);
+    save.arrears([{ id: uid("arf_"), unit_number: unit, tenant_name: "Tenant",
+      opened_on: today(), opening_owed: o.owed, current_owed: o.owed, peak_owed: o.owed,
+      state: "open", steps: [], payments: [], created_at: nowISO() }, ...files]);
+    flash(`File opened for ${unit}.`);
+  };
+
+  return (
+    <div className="ac-body">
+      <p className="ac-note-p">
+        Every demand for rent recorded, with how it was served and when it counts as
+        received. A message queue answers whether it was sent; this answers what an
+        application to end a tenancy needs — what was owed, what was asked for, when,
+        and how it reached them.
+      </p>
+
+      {withoutFile.length > 0 && (
+        <section className="ac-card">
+          <h2>Overdue with no file <span className="ac-n">{withoutFile.length}</span></h2>
+          <p className="ac-note-p">
+            Opening a file starts the record. Doing it late means the early demands
+            are not in it, and those are the ones that show the tenant had notice.
+          </p>
+          <div className="ac-table">
+            <div className="ac-tr ac-tr--h" style={{ gridTemplateColumns: "100px 110px 90px 110px 90px" }}>
+              <span>Unit</span><span>Owed</span><span>Charges</span>
+              <span>Oldest due</span><span /></div>
+            {withoutFile.map((o) => (
+              <div className="ac-tr" key={o.unit}
+                   style={{ gridTemplateColumns: "100px 110px 90px 110px 90px" }}>
+                <span className="ac-mono ac-strong">{o.unit}</span>
+                <span className="ac-mono">{money(o.owed)}</span>
+                <span className="ac-mono ac-dim">{o.n}</span>
+                <span className="ac-mono ac-dim">{o.oldest}</span>
+                <span>
+                  {canPost && (
+                    <button className="ac-btn ac-btn--xs" onClick={() => openFile(o.unit)}>
+                      Open a file
+                    </button>
+                  )}
+                </span>
+              </div>
+            ))}
+          </div>
+        </section>
+      )}
+
+      {files.length === 0 ? (
+        <section className="ac-card"><div className="ac-empty">No files open.</div></section>
+      ) : files.map((f) => {
+        const steps = f.steps ?? [];
+        const last = steps[steps.length - 1];
+        const daysOpen = daysBetween(f.opened_on, today());
+        const next = Object.entries(ARREARS_STEPS)
+          .find(([k, v]) => v.after != null && !steps.some((s) => s.step === k));
+        const dueNow = next && daysOpen >= next[1].after;
+        const gaps = steps.filter((s) => NEEDS_PROOF.includes(s.method) && !s.evidence_key);
+
+        return (
+          <section className={`ac-card ${f.state === "notice_served" ? "ac-card--bad" : ""}`}
+                   key={f.id}>
+            <div className="ac-cardh">
+              <h2>
+                {f.unit_number}
+                <span className="ac-tag" style={{ "--c": f.state === "cleared" ? "#0E8577"
+                  : f.state === "arrangement" ? "#1C6FA6"
+                  : f.state === "notice_served" ? "#B23A54" : "#C98A15" }}>
+                  {f.state.replace("_", " ")}
+                </span>
+              </h2>
+              <div className="ac-cardh-r">
+                <span className="ac-mono ac-strong">{money(f.current_owed)}</span>
+                <span className="ac-dim">{daysOpen} days open · {steps.length} demands</span>
+              </div>
+            </div>
+
+            {f.arrangement_note && (
+              <div className="ac-arrbox">
+                <strong>Arrangement from {f.arrangement_from}:</strong> {f.arrangement_note}
+                <p>
+                  A tenant keeping to an agreed schedule is not in the same position as
+                  one who has not answered. An application that ignores an arrangement
+                  it made is a weak one.
+                </p>
+              </div>
+            )}
+
+            {steps.length > 0 && (
+              <div className="ac-steps2">
+                {steps.map((s) => (
+                  <div className="ac-step2" key={s.id}>
+                    <div className="ac-step2-h">
+                      <span className="ac-mono ac-dim">{s.seq}</span>
+                      <strong>{ARREARS_STEPS[s.step]?.label ?? s.step}</strong>
+                      <span className="ac-mono">{s.served_on}</span>
+                      <span className="ac-dim">by {s.method}</span>
+                      <span className="ac-mono">{money(s.owed_at_time)} owed then</span>
+                      {s.deemed_served_on !== s.served_on && (
+                        <span className="ac-dim">deemed {s.deemed_served_on}</span>
+                      )}
+                    </div>
+                    {NEEDS_PROOF.includes(s.method) && !s.evidence_key && (
+                      <div className="ac-noproof">
+                        No proof attached. {s.method === "post" ? "Ordinary mail"
+                          : s.method === "personal" ? "Personal service"
+                          : "A notice on the door"} leaves no delivery report — add a
+                        photograph or a signed note of service.
+                      </div>
+                    )}
+                    {s.delivery_state === "bounced" && (
+                      <div className="ac-noproof">
+                        Bounced. It did not reach them, and a demand that did not arrive
+                        is not a demand.
+                      </div>
+                    )}
+                  </div>
+                ))}
+              </div>
+            )}
+
+            {gaps.length > 0 && (
+              <div className="ac-err">
+                {gaps.length} demand{gaps.length === 1 ? "" : "s"} served without proof.
+                Better found now than by an adjudicator.
+              </div>
+            )}
+
+            {canPost && f.state !== "cleared" && (
+              adding === f.id ? (
+                <AddStep file={f} step={next?.[0] ?? "direct"}
+                  onCancel={() => setAdding(null)}
+                  onSave={(step) => {
+                    save.arrears(files.map((x) => x.id === f.id
+                      ? { ...x, steps: [...(x.steps ?? []), step],
+                          state: step.step === "notice" ? "notice_served" : x.state } : x));
+                    setAdding(null);
+                    flash(step.needs_proof
+                      ? "Recorded. Add the proof of service before it matters."
+                      : "Recorded.");
+                  }} />
+              ) : (
+                <div className="ac-actions">
+                  <button className="ac-btn ac-btn--sm" onClick={() => setAdding(f.id)}>
+                    Record a demand
+                  </button>
+                  {dueNow && (
+                    <span className="ac-dim">
+                      {ARREARS_STEPS[next[0]].label} would be the next step
+                      ({next[1].after} days). Nothing sends itself — a demand that went
+                      out because a timer fired is a demand nobody chose to make.
+                    </span>
+                  )}
+                </div>
+              )
+            )}
+
+            <details className="ac-method">
+              <summary>The bundle</summary>
+              <p className="ac-note-p">
+                Everything about this file in order: what was owed and when, every demand
+                with how it was served and when it counts as received, every payment, and
+                where the file is weak.
+              </p>
+              <p className="ac-note-p">
+                <strong>It is evidence, not a notice.</strong> The statutory notice to end
+                a tenancy is a prescribed form with its own wording and period. It comes
+                from the agreement library where a lawyer approved it — nothing here
+                generates one, for the same reason nothing here generates a lease.
+              </p>
+              <p className="ac-note-p">
+                Service dates use the deemed-service days configured in this system.
+                Confirm those against the Act before relying on one: an application for
+                non-payment fails on service far more often than on the debt.
+              </p>
+            </details>
+          </section>
+        );
+      })}
+    </div>
+  );
+}
+
+/** Recording a demand. The figure owed is captured now rather than read later —
+ *  six months on, "what was owed when we sent that" cannot be recomputed from a
+ *  ledger that has moved since. */
+function AddStep({ file, step: initial, onCancel, onSave }) {
+  const [step, setStep] = useState(initial);
+  const [method, setMethod] = useState("email");
+  const [servedOn, setServedOn] = useState(today());
+  const [body, setBody] = useState("");
+  const [witness, setWitness] = useState("");
+  const [err, setErr] = useState("");
+
+  const deemed = (() => {
+    const d = new Date(servedOn + "T12:00:00");
+    d.setDate(d.getDate() + (DEEMED_SERVICE_DAYS[method] ?? 0));
+    return d.toISOString().slice(0, 10);
+  })();
+  const needsProof = NEEDS_PROOF.includes(method);
+
+  return (
+    <div className="ac-panel">
+      <div className="ac-row">
+        <label className="ac-f"><span>Which step</span>
+          <select className="ac-sel" value={step} onChange={(e) => setStep(e.target.value)}>
+            {Object.entries(ARREARS_STEPS).map(([k, v]) => (
+              <option key={k} value={k}>{v.label}</option>
+            ))}
+          </select></label>
+        <label className="ac-f"><span>How it was served</span>
+          <select className="ac-sel" value={method} onChange={(e) => setMethod(e.target.value)}>
+            {[["email", "Email"], ["sms", "Text"], ["personal", "Handed to them"],
+              ["posted_on_door", "Posted on the door"], ["post", "Ordinary mail"],
+              ["courier", "Courier"]].map(([k, l]) => <option key={k} value={k}>{l}</option>)}
+          </select></label>
+        <label className="ac-f"><span>Served on</span>
+          <input className="ac-in" type="date" value={servedOn}
+                 onChange={(e) => setServedOn(e.target.value)} /></label>
+      </div>
+
+      <p className="ac-note-p">{ARREARS_STEPS[step]?.why}</p>
+
+      {deemed !== servedOn && (
+        <div className="ac-deemed">
+          Deemed received <strong>{deemed}</strong> — {DEEMED_SERVICE_DAYS[method]} days
+          after service by this method. A notice period runs from that date, not from
+          the day it was sent.
+        </div>
+      )}
+
+      {step === "notice" && (
+        <div className="ac-err">
+          The statutory notice comes from the agreement library, approved. Record here
+          that it was served and how — do not type one out. A notice with the wrong
+          wording fails the application whatever the arrears show.
+        </div>
+      )}
+
+      {needsProof && (
+        <div className="ac-warnbox">
+          This method leaves no delivery report. Photograph the notice on the door, keep
+          the courier receipt, or have somebody witness it. An application for
+          non-payment turns on service more often than on the debt.
+        </div>
+      )}
+
+      {["personal", "posted_on_door"].includes(method) && (
+        <label className="ac-f"><span>Witnessed by <em>strongly recommended</em></span>
+          <input className="ac-in" value={witness}
+                 onChange={(e) => setWitness(e.target.value)} /></label>
+      )}
+
+      <label className="ac-f">
+        <span>What was said {step === "notice" ? "" : "· goes to the tenant as written"}</span>
+        <textarea className="ac-in" rows={4} value={body}
+                  onChange={(e) => setBody(e.target.value)} />
+      </label>
+
+      {err && <div className="ac-err">{err}</div>}
+      <div className="ac-actions">
+        <button className="ac-btn" disabled={!body.trim()}
+                onClick={() => onSave({ id: uid("ars_"),
+                  seq: (file.steps?.length ?? 0) + 1, step, method,
+                  served_on: servedOn, deemed_served_on: deemed,
+                  owed_at_time: file.current_owed, body: body.trim(),
+                  witness: witness.trim() || null,
+                  delivery_state: ["email", "sms"].includes(method) ? "queued" : "delivered",
+                  needs_proof: needsProof, created_at: nowISO() })}>
+          Record it
+        </button>
+        <button className="ac-btn ac-btn--ghost" onClick={onCancel}>Cancel</button>
+      </div>
+    </div>
+  );
+}
+
 /* ══════════════════ Styles ══════════════════ */
 
 export const CSS = MONTH_END_CSS + `
@@ -1927,6 +2263,17 @@ export const CSS = MONTH_END_CSS + `
   font-size:13px;border-bottom:1px solid #F0F3F5}
 .ac-coa-r>span:last-child{text-align:right}
 
+.ac-arrbox{background:#F2F7FB;border-left:3px solid var(--accent);border-radius:3px;
+  padding:11px 13px;font-size:12.5px;color:var(--ink2);line-height:1.7}
+.ac-arrbox p{margin:5px 0 0;color:var(--dim)}
+.ac-steps2{display:flex;flex-direction:column;gap:1px;background:var(--rule);
+  border:1px solid var(--rule);border-radius:3px;overflow:hidden}
+.ac-step2{background:var(--paper);padding:9px 12px;display:flex;flex-direction:column;gap:4px}
+.ac-step2-h{display:flex;gap:11px;align-items:baseline;flex-wrap:wrap;font-size:12.5px}
+.ac-noproof{font-size:12px;color:#6B5410;background:var(--amber);border-radius:3px;
+  padding:6px 10px;line-height:1.65}
+.ac-deemed{font-size:12.5px;color:var(--accent);background:#F4F9FD;border-radius:3px;
+  padding:9px 12px;line-height:1.7}
 .ac-foot{padding:6px 26px 0;color:var(--dim);font-size:11.5px;max-width:92ch;line-height:1.75}
 
 @media (max-width:820px){

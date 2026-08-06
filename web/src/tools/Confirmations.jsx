@@ -57,16 +57,19 @@ export const KINDS = {
     why: "What each includes and excludes. No recommendation: the cheapest quote is often the one excluding the most.",
   },
   nl_query: {
-    label: "Question answered from the ledger", roles: ["admin"], ttl: 7, area: "Admin",
+    label: "Question answered from the ledger", roles: ["accounting"], ttl: 7,
+    area: "Accounting",
     why: "The SQL is shown with the answer. A query nobody can see is an answer nobody can check.",
   },
   lease_abstract: {
-    label: "Lease terms extracted", roles: ["admin"], ttl: 30, area: "Admin", money: true,
-    why: "Populates a draft. The signed file stays the authority — this is an index of it.",
+    label: "Lease terms extracted", roles: ["property_manager", "admin"], ttl: 30,
+    area: "Leasing", money: true,
+    why: "Populates a draft. The signed file stays the authority — this is an index of it. Two people because a wrong end date propagates into every renewal reminder after it.",
   },
   turnover_estimate: {
-    label: "Turnover cost estimated", roles: ["admin"], ttl: 30, area: "Admin",
-    why: "A range from this property's own history, with the sample size shown.",
+    label: "Turnover cost estimated", roles: ["building_manager", "admin"], ttl: 30,
+    area: "On site",
+    why: "A range from this property's own history, with the sample size shown. The Building Manager has seen the suite — an estimate confirmed without that is an estimate from a spreadsheet.",
   },
   arrears_sequence: {
     label: "Arrears message", roles: ["property_manager", "admin"], ttl: 7, area: "Leasing",

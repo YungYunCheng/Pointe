@@ -44,6 +44,10 @@ const AGREEMENTS = [
    "Notice periods come from the RTA. Have this one checked carefully before it is used.",
    ["termination"]],
 
+  ["notice_nonpayment", "14-Day Notice — Non-payment of Rent", "欠租十四日通知", 105,
+   "A prescribed form with its own wording and notice period. Nothing generates this: an application for non-payment fails on the notice or on service far more often than on the debt. Upload the version your lawyer approved.",
+   ["arrears"]],
+
   ["emergency_contact", "Emergency Contact Form", "緊急聯絡資料表", 110, null, ["always"]],
 ];
 
