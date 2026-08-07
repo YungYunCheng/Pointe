@@ -230,10 +230,15 @@ export default function TenantChat() {
     // 2. Otherwise answer from the property data
     setBusy(true);
     try {
-      const reply = await publicAi({ facts: factSheet(), message: body,
-        history: msgs.slice(-6).map((m) => `${m.role === "tenant" ? "Tenant" : "You"}: ${m.text}`).join("
-"),
-        language: detected });
+  const reply = await publicAi({
+    facts: factSheet(),
+    message: body,
+    history: msgs
+      .slice(-6)
+      .map((m) => `${m.role === "tenant" ? "Tenant" : "You"}: ${m.text}`)
+      .join("\n"),
+    language: detected
+    });
       if (reply) push({ role: "bot", text: reply, auto: true });
       else { push({ role: "bot", text: tt.offlineErr }); }
     } catch (e) {
