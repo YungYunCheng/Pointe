@@ -147,28 +147,41 @@ export default function AIInbox() {
   const [compose, setCompose] = useState({ open: false, channel: "email", body: "" });
 
   /* ---------- 3. Fact lookup: read the property data ---------- */
-  useEffect(() => {
-    (async () => {
-      const read = async (k, d) => {
-        try { const r = await window.storage.get(k); return r?.value ? JSON.parse(r.value) : d; }
-        catch { return d; }
-      };
-      setEscalations(await read("baydo:escalations", []));
-      setShadowRuns(await read("baydo:shadowruns", []));
-      const read = async (k) => {
-        try { const r = await window.storage.get(k); return r?.value ? JSON.parse(r.value) : null; }
-        catch (e) { return null; }
-      };
-      const pricing = await read("baydo:pricing");
-      const overrides = (await read("baydo:overrides")) || {};
-      const parking = await read("baydo:parking");
-      setFacts(buildFacts(pricing, overrides, parking));
-      setLoading(false);
-    })();
-  }, []);
+  /* ---------- 3. Fact lookup: read the property data ---------- */
+useEffect(() => {
+  const loadData = async () => {
+    const read = async (key, defaultValue = null) => {
+      try {
+        const result = await window.storage.get(key);
 
-  const selected = msgs.find((m) => m.id === sel);
-  useEffect(() => { setDraftEdit(selected?.draft || ""); }, [sel, selected?.draft]);
+        return result?.value
+          ? JSON.parse(result.value)
+          : defaultValue;
+      } catch (error) {
+        return defaultValue;
+      }
+    };
+
+    const savedEscalations = await read("baydo:escalations", []);
+    const savedShadowRuns = await read("baydo:shadowruns", []);
+    const pricing = await read("baydo:pricing");
+    const overrides = await read("baydo:overrides", {});
+    const parking = await read("baydo:parking");
+
+    setEscalations(savedEscalations);
+    setShadowRuns(savedShadowRuns);
+    setFacts(buildFacts(pricing, overrides, parking));
+    setLoading(false);
+  };
+
+  loadData();
+}, []);
+
+const selected = msgs.find((m) => m.id === sel);
+useEffect(() => {
+  setDraftEdit(selected?.draft || "");
+}, [sel, selected?.draft]);
+
 
   const counts = useMemo(() => {
     const c = { new: 0, L3: 0, L2: 0, L1: 0, L0: 0, sent: 0 };
