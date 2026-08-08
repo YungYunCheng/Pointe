@@ -1,0 +1,24 @@
+{
+  "name": "baydo-pointe-api",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "description": "Baydo Pointe API on Cloudflare Workers \u2014 one backend, both front ends",
+  "scripts": {
+    "dev": "wrangler dev",
+    "deploy": "wrangler deploy",
+    "upload": "wrangler versions upload",
+    "tail": "wrangler tail",
+    "types": "wrangler types",
+    "check": "node scripts/check.mjs",
+    "predeploy": "node scripts/check.mjs && node scripts/check-sql.mjs",
+    "check:sql": "node scripts/check-sql.mjs"
+  },
+  "dependencies": {
+    "hono": "^4.6.14",
+    "postgres": "^3.4.5"
+  },
+  "devDependencies": {
+    "wrangler": "^3.99.0"
+  }
+}

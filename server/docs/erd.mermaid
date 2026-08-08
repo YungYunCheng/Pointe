@@ -1,0 +1,433 @@
+erDiagram
+    %% ═══════════ 身分與權限 ═══════════
+    ROLES ||--o{ USERS : "指派"
+    USERS ||--o{ SESSIONS : "登入"
+    USERS ||--o{ PASSWORD_RESET_TOKENS : "申請重設"
+    USERS ||--o{ AUDIT_LOG : "操作"
+    ROLES ||--o{ ROLE_PERMISSIONS : ""
+    PERMISSIONS ||--o{ ROLE_PERMISSIONS : ""
+
+    ROLES {
+        uuid id PK
+        text code UK "admin / agent"
+        text name
+    }
+    PERMISSIONS {
+        uuid id PK
+        text code UK "pricing.edit / parking.quota.edit"
+        text description
+    }
+    ROLE_PERMISSIONS {
+        uuid role_id FK
+        uuid permission_id FK
+    }
+    USERS {
+        uuid id PK
+        citext email UK
+        text full_name
+        text phone
+        uuid role_id FK
+        text password_algo "argon2id"
+        text password_salt
+        text password_hash
+        bool must_change_password
+        bool is_active
+        int failed_attempts
+        timestamptz locked_until
+        timestamptz last_login_at
+    }
+    SESSIONS {
+        uuid id PK
+        uuid user_id FK
+        text token_hash UK
+        timestamptz expires_at
+        inet ip
+        timestamptz revoked_at
+    }
+    PASSWORD_RESET_TOKENS {
+        uuid id PK
+        uuid user_id FK
+        text token_hash UK
+        timestamptz expires_at
+        timestamptz used_at
+    }
+    AUDIT_LOG {
+        uuid id PK
+        uuid actor_user_id FK
+        text action
+        text entity_type
+        uuid entity_id
+        jsonb before_value
+        jsonb after_value
+        timestamptz created_at
+    }
+
+    %% ═══════════ 物業 ═══════════
+    BUILDINGS ||--o{ UNITS : "包含"
+    UNIT_TYPES ||--o{ UNITS : "屬於"
+    BUILDINGS ||--o{ PARKING_POOLS : ""
+    BUILDINGS ||--o{ STORAGE_LOCKERS : ""
+    BUILDINGS ||--o{ BUILDING_AMENITIES : ""
+    AMENITIES ||--o{ BUILDING_AMENITIES : ""
+
+    BUILDINGS {
+        uuid id PK
+        text code UK "370 / 374 / 378"
+        text name
+        text address
+        int storeys
+        int unit_count
+    }
+    UNIT_TYPES {
+        uuid id PK
+        text code UK "1A / 2A (M) / 3A"
+        text bedroom_label "2房2衛"
+        numeric area_sqft
+        numeric balcony_sqft
+        bool is_mirrored
+    }
+    UNITS {
+        uuid id PK
+        uuid building_id FK
+        uuid unit_type_id FK
+        text unit_number "378-519"
+        int floor
+        text status "available/held/leased"
+        date available_from
+        numeric rent_override
+        text notes
+    }
+    AMENITIES {
+        uuid id PK
+        text name "健身房 / 寵物清洗間"
+    }
+    BUILDING_AMENITIES {
+        uuid building_id FK
+        uuid amenity_id FK
+    }
+
+    %% ═══════════ 定價 ═══════════
+    PRICING_PROFILES ||--o{ UNIT_TYPE_RENTS : ""
+    PRICING_PROFILES ||--|| FEE_SETTINGS : ""
+    UNIT_TYPES ||--o{ UNIT_TYPE_RENTS : ""
+    USERS ||--o{ PRICING_PROFILES : "建立"
+
+    PRICING_PROFILES {
+        uuid id PK
+        text name
+        date effective_from
+        date effective_to
+        uuid created_by FK
+    }
+    UNIT_TYPE_RENTS {
+        uuid id PK
+        uuid pricing_profile_id FK
+        uuid unit_type_id FK
+        numeric base_rent
+    }
+    FEE_SETTINGS {
+        uuid id PK
+        uuid pricing_profile_id FK
+        text deposit_mode "one_month / fixed"
+        numeric deposit_fixed
+        numeric cat_deposit
+        numeric dog_deposit
+        numeric pet_rent
+        text pet_limit
+        numeric parking_underground
+        numeric parking_surface
+        numeric storage_fee
+        numeric application_fee
+        text utilities_included
+    }
+
+    %% ═══════════ 車位與儲藏室 ═══════════
+    PARKING_POOLS ||--o{ PARKING_ALLOCATIONS : ""
+    UNITS ||--o{ PARKING_ALLOCATIONS : ""
+    UNITS ||--o{ STORAGE_LOCKERS : "配予"
+
+    PARKING_POOLS {
+        uuid id PK
+        uuid building_id FK
+        text code UK "u370 / surface"
+        text label
+        int total_stalls
+        int tandem_stalls
+        int accessible_stalls
+        bool is_surface
+    }
+    PARKING_ALLOCATIONS {
+        uuid id PK
+        uuid pool_id FK
+        uuid unit_id FK
+        uuid lease_id FK
+        text status "assigned / waiting"
+        timestamptz requested_at "先到先得排序依據"
+        timestamptz assigned_at
+        timestamptz released_at
+        uuid created_by FK
+    }
+    STORAGE_LOCKERS {
+        uuid id PK
+        uuid building_id FK
+        uuid unit_id FK
+        text code
+        text status
+    }
+
+    %% ═══════════ 客戶與訊息 ═══════════
+    CONTACTS ||--o{ THREADS : ""
+    THREADS ||--o{ MESSAGES : ""
+    MESSAGES ||--o| MESSAGE_CLASSIFICATIONS : ""
+    MESSAGES ||--o| DRAFTS : ""
+    MESSAGES ||--o{ BLOCKED_EVENTS : ""
+    INTENTS ||--o{ MESSAGE_CLASSIFICATIONS : ""
+    ROUTING_RULES ||--o{ OUTBOUND_LOG : ""
+    ROUTING_RULES ||--o{ BLOCKED_EVENTS : ""
+    DRAFTS ||--o| OUTBOUND_LOG : ""
+    USERS ||--o{ THREADS : "指派"
+
+    CONTACTS {
+        uuid id PK
+        text full_name
+        citext email
+        text phone
+        text locale
+        text consent_basis "implied_inquiry"
+        timestamptz consent_expires_at
+    }
+    THREADS {
+        uuid id PK
+        uuid contact_id FK
+        text channel "email/webform/sms/whatsapp"
+        text state
+        uuid assigned_to_user_id FK
+        uuid unit_interest_id FK
+        timestamptz last_message_at
+    }
+    MESSAGES {
+        uuid id PK
+        uuid thread_id FK
+        text direction "inbound / outbound"
+        text body
+        jsonb meta
+        timestamptz received_at
+    }
+    INTENTS {
+        uuid id PK
+        text code UK "availability / rent_quote"
+        text label
+        text automation_level "L3/L2/L1/L0"
+    }
+    MESSAGE_CLASSIFICATIONS {
+        uuid id PK
+        uuid message_id FK
+        uuid intent_id FK
+        numeric confidence
+        text model
+        text prompt_version
+    }
+    ROUTING_RULES {
+        uuid id PK
+        text code UK "R-2041 / R-101"
+        jsonb condition
+        text action
+        text version
+        date effective_from
+        uuid approved_by FK
+        timestamptz approved_at
+    }
+    DRAFTS {
+        uuid id PK
+        uuid message_id FK
+        text body
+        jsonb facts_used "事實快照，可回溯報價依據"
+        text status
+    }
+    OUTBOUND_LOG {
+        uuid id PK
+        uuid draft_id FK
+        uuid rule_id FK
+        text routing_decision
+        bool edited_by_human
+        uuid sent_by_user_id FK
+        timestamptz sent_at
+    }
+    BLOCKED_EVENTS {
+        uuid id PK
+        uuid message_id FK
+        uuid rule_id FK
+        timestamptz blocked_at
+        text note "不儲存受保護特徵原文"
+    }
+
+    %% ═══════════ 排程與任務 ═══════════
+    USERS ||--o{ SLOTS : "可預約時段"
+    SLOTS ||--o| EVENTS : ""
+    UNITS ||--o{ EVENTS : ""
+    CONTACTS ||--o{ EVENTS : ""
+    EVENTS ||--o{ REMINDERS : ""
+    EVENTS ||--o| TASKS : ""
+    USERS ||--o{ TASKS : "負責"
+
+    SLOTS {
+        uuid id PK
+        uuid user_id FK
+        timestamptz starts_at
+        timestamptz ends_at
+        text kind "showing / signing"
+        text state
+    }
+    EVENTS {
+        uuid id PK
+        text type "showing/signing/followup"
+        uuid unit_id FK
+        uuid contact_id FK
+        uuid slot_id FK
+        timestamptz starts_at
+        int duration_min
+        text state
+        text created_via "ai_auto / staff"
+    }
+    TASKS {
+        uuid id PK
+        text type
+        text title
+        uuid event_id FK
+        uuid owner_user_id FK
+        timestamptz scheduled_at
+        text state
+        text source_ref
+    }
+    REMINDERS {
+        uuid id PK
+        uuid event_id FK
+        text audience "tenant / staff"
+        date send_on "事件日的前一個工作日"
+        timestamptz sent_at
+        text channel
+    }
+    HOLIDAYS {
+        uuid id PK
+        date holiday_date UK
+        text name
+        bool is_observed "Heritage Day 可選"
+    }
+
+    %% ═══════════ 文件與簽署 ═══════════
+    DOCUMENT_TEMPLATES ||--o{ TEMPLATE_FIELDS : ""
+    DOCUMENT_TEMPLATES ||--o{ DOCUMENT_INSTANCES : ""
+    DOCUMENT_INSTANCES ||--o{ DOCUMENT_VALUES : ""
+    DOCUMENT_INSTANCES ||--o| DOCUMENT_APPROVALS : ""
+    DOCUMENT_INSTANCES ||--o{ SIGNATURES : ""
+    USERS ||--o{ DOCUMENT_APPROVALS : "簽核"
+    UNITS ||--o{ DOCUMENT_INSTANCES : ""
+    CONTACTS ||--o{ DOCUMENT_INSTANCES : ""
+
+    DOCUMENT_TEMPLATES {
+        uuid id PK
+        text name
+        text kind "lease/parking/pet/inspection"
+        text status "missing/draft/approved/retired"
+        text version "2026-08 律師版"
+        text storage_uri
+        uuid approved_by FK
+        timestamptz approved_at
+    }
+    TEMPLATE_FIELDS {
+        uuid id PK
+        uuid template_id FK
+        text field_key
+        text label
+        text source "backend / tenant / staff"
+        text data_type
+        jsonb options
+        bool is_required
+    }
+    DOCUMENT_INSTANCES {
+        uuid id PK
+        uuid template_id FK
+        uuid unit_id FK
+        uuid contact_id FK
+        uuid lease_id FK
+        text state "pending/approved/sent/signed"
+        uuid created_by FK
+    }
+    DOCUMENT_VALUES {
+        uuid id PK
+        uuid instance_id FK
+        text field_key
+        text value
+        text filled_by "system / ai / staff"
+    }
+    DOCUMENT_APPROVALS {
+        uuid id PK
+        uuid instance_id FK
+        uuid approved_by FK
+        timestamptz approved_at
+        jsonb package_snapshot "核准當下的完整條件"
+        timestamptz link_sent_at
+        timestamptz link_expires_at
+    }
+    SIGNATURES {
+        uuid id PK
+        uuid instance_id FK
+        text signer_type "agent / tenant"
+        uuid signer_user_id FK
+        uuid signer_contact_id FK
+        timestamptz signed_at
+        inet ip
+        text provider_envelope_id
+    }
+
+    %% ═══════════ 租約 ═══════════
+    UNITS ||--o{ LEASES : ""
+    LEASES ||--o{ LEASE_TENANTS : ""
+    CONTACTS ||--o{ LEASE_TENANTS : ""
+    LEASES ||--o{ LEASE_ADDONS : ""
+    LEASES ||--o{ INSPECTIONS : ""
+    CONTACTS ||--o{ FEE_DISCLOSURES : ""
+    UNITS ||--o{ FEE_DISCLOSURES : ""
+
+    LEASES {
+        uuid id PK
+        uuid unit_id FK
+        date start_date
+        date end_date
+        text term_type "fixed_12 / fixed_6 / periodic"
+        numeric rent
+        numeric deposit
+        int occupants
+        text status
+        uuid created_by FK
+    }
+    LEASE_TENANTS {
+        uuid lease_id FK
+        uuid contact_id FK
+        bool is_primary
+    }
+    LEASE_ADDONS {
+        uuid id PK
+        uuid lease_id FK
+        text type "parking / storage / pet"
+        uuid reference_id
+        numeric monthly_fee
+    }
+    FEE_DISCLOSURES {
+        uuid id PK
+        uuid contact_id FK
+        uuid unit_id FK
+        numeric monthly_total
+        numeric upfront_total
+        jsonb line_items
+        timestamptz disclosed_at
+        timestamptz acknowledged_at
+    }
+    INSPECTIONS {
+        uuid id PK
+        uuid lease_id FK
+        text type "move_in / move_out"
+        timestamptz scheduled_at
+        timestamptz completed_at
+        uuid document_instance_id FK
+    }
