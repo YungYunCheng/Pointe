@@ -435,33 +435,6 @@ export default function AuthConsole() {
             </>
           )}
         </div>
-
-        <div className="au-db">
-          <button className="au-dbh" onClick={() => setShowDb(!showDb)}>
-            <span>{showDb ? "▾" : "▸"}</span> Data tables (JSON)
-            <em>users {users.length} · tokens {tokens.length}</em>
-          </button>
-          {showDb && (
-            <>
-              <p className="au-note">
-                No plaintext passwords: only the algorithm, iteration count, salt and hash.
-                These columns map straight onto the users table in the API.
-              </p>
-              <pre className="au-json">{JSON.stringify(users, null, 2)}</pre>
-              <pre className="au-json">{JSON.stringify(tokens, null, 2)}</pre>
-              <button className="au-link au-link--danger" onClick={resetDb}>
-                Wipe and reseed accounts
-              </button>
-            </>
-          )}
-        </div>
-
-        <div className="au-warn">
-          <strong>This is a prototype, not a production auth system.</strong>
-          Everything lives in the browser, so anyone with developer tools can edit it.
-          Point this at the backend API instead: verification on the server, Argon2id hashing,
-          reset codes stored hashed and delivered by email, and a role check on every endpoint.
-        </div>
       </div>
     </div>
   );
