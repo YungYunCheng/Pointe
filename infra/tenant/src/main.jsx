@@ -1,6 +1,6 @@
 import React, { useState, useEffect, useMemo, useCallback } from "react";
 import { createRoot } from "react-dom/client";
-import { BrowserRouter, Routes, Route, NavLink, Link } from "react-router-dom";
+import { BrowserRouter, Routes, Route, NavLink, Link, Navigate, useLocation } from "react-router-dom";
 import { LOCALES } from "./lib/i18n.js";
 import { LocaleProvider, useT } from "./lib/locale.jsx";
 import TenantChat from "./TenantChat.jsx";
@@ -9,9 +9,6 @@ import Booking from "./pages/Booking.jsx";
 import Apply from "./pages/Apply.jsx";
 import { Privacy, ConfirmReply } from "./pages/Privacy.jsx";
 import Sign from "./pages/Sign.jsx";
-import { Claim, SignUp, VerifySignup } from "./pages/Claim.jsx";
-import { TenantAuthProvider, useTenantAuth, GatedLink } from "./lib/auth.jsx";
-import Renewal from "./pages/Renewal.jsx";
 
 /* ============================================================
    BAYDO POINTE — tenant site
@@ -262,23 +259,14 @@ function Suites() {
                         : <strong className="bt-ask">{t("suites.askRate")}</strong>}
               </div>
               {r.earliest && <div className="bt-dim">{t("suites.earliest", { date: date(r.earliest) })}</div>}
-              {/* Both need somebody signed in. A viewing is half an hour in
-                  a diary and an application is a decision somebody has to
-                  make, and neither works without a real person attached.
-                  Browsing stays open — deciding whether this is worth a visit
-                  should not cost an email address. */}
               <div className="bt-card-a">
-                <GatedLink to={`/book?type=${encodeURIComponent(r.code)}`}
-                           className="bt-btn bt-btn--sm"
-                           hint={t("gate.hint")}>
+                <Link to={`/book?type=${encodeURIComponent(r.code)}`} className="bt-btn bt-btn--sm">
                   {t("suites.book")}
-                </GatedLink>
+                </Link>
                 {r.free > 0 && (
-                  <GatedLink to={`/apply?type=${encodeURIComponent(r.code)}`}
-                             className="bt-btn bt-btn--sm bt-btn--ghost"
-                             hint={t("gate.hint")}>
+                  <Link to={`/apply?type=${encodeURIComponent(r.code)}`} className="bt-btn bt-btn--sm bt-btn--ghost">
                     {t("suites.apply")}
-                  </GatedLink>
+                  </Link>
                 )}
               </div>
             </article>
@@ -332,6 +320,36 @@ function Building() {
   );
 }
 
+/* ---------- account gate for viewing / application ---------- */
+function RequireTenantSession({ children }) {
+  const location = useLocation();
+  const [ready, setReady] = useState(false);
+  const [signedIn, setSignedIn] = useState(false);
+
+  useEffect(() => {
+    let live = true;
+    (async () => {
+      try {
+        const r = await window.storage.get("baydo:tenant-session");
+        const saved = r?.value ? JSON.parse(r.value) : null;
+        if (live) setSignedIn(Boolean(saved?.token));
+      } catch {
+        if (live) setSignedIn(false);
+      } finally {
+        if (live) setReady(true);
+      }
+    })();
+    return () => { live = false; };
+  }, []);
+
+  if (!ready) return <div className="bt-loading">Checking account…</div>;
+  if (!signedIn) {
+    const next = `${location.pathname}${location.search}`;
+    return <Navigate to={`/portal?next=${encodeURIComponent(next)}`} replace />;
+  }
+  return children;
+}
+
 /* ---------- app ---------- */
 function Site() {
   return (
@@ -342,16 +360,11 @@ function Site() {
           <Route path="/" element={<Home />} />
           <Route path="/suites" element={<Suites />} />
           <Route path="/building" element={<Building />} />
-          <Route path="/book" element={<Booking />} />
-          <Route path="/apply" element={<Apply />} />
+          <Route path="/book" element={<RequireTenantSession><Booking /></RequireTenantSession>} />
+          <Route path="/apply" element={<RequireTenantSession><Apply /></RequireTenantSession>} />
           <Route path="/privacy" element={<Privacy />} />
           <Route path="/confirm" element={<ConfirmReply />} />
           <Route path="/sign/:token" element={<Sign />} />
-          <Route path="/signup" element={<SignUp />} />
-          <Route path="/verify" element={<VerifySignup />} />
-          <Route path="/renewal" element={<Renewal />} />
-          <Route path="/claim" element={<Claim />} />
-          <Route path="/reset" element={<Claim />} />
           <Route path="/portal/*" element={<Portal />} />
           <Route path="*" element={<Home />} />
         </Routes>
@@ -369,7 +382,6 @@ document.head.appendChild(style);
 createRoot(document.getElementById("root")).render(
   <React.StrictMode>
     <LocaleProvider>
-      <TenantAuthProvider>
       <BrowserRouter><Site /></BrowserRouter>
     </LocaleProvider>
   </React.StrictMode>
@@ -434,12 +446,6 @@ a{color:inherit}
 .bt-btn:hover{background:#000}
 .bt-btn--ghost{background:#fff;color:var(--ink);border-color:var(--rule)}
 .bt-btn--ghost:hover{background:var(--tint);border-color:var(--ink)}
-/* A quiet dot on anything that needs an account, so the requirement is
-   visible before the click. A button that looks available and then asks for
-   one is a small betrayal, and the second time somebody meets it they stop
-   trusting the rest of the page. */
-.bt-lockdot{display:inline-block;width:5px;height:5px;border-radius:50%;
-  background:currentColor;opacity:.45;margin-left:7px;vertical-align:middle}
 .bt-btn--sm{font-size:13px;padding:9px 16px}
 .bt-btn:disabled{opacity:.4;cursor:not-allowed}
 
@@ -536,13 +542,6 @@ a{color:inherit}
 .bt-prose p{color:var(--ink2);line-height:1.8;max-width:68ch}
 .bt-prose ul{margin:0 0 16px;padding-left:20px;color:var(--ink2);line-height:1.8}
 .bt-prose li{margin-bottom:8px;max-width:66ch}
-.bt-claimfor{display:flex;gap:26px;flex-wrap:wrap;border:1px solid var(--rule);
-  border-radius:6px;padding:12px 15px;margin-bottom:6px}
-.bt-claimfor>div{display:flex;flex-direction:column;gap:2px}
-.bt-claimfor em{font-style:normal;font-size:10.5px;color:var(--dim);
-  text-transform:uppercase;letter-spacing:.06em}
-.bt-claimfor strong{font-family:'IBM Plex Mono',monospace;font-size:15px}
-.bt-warn{color:#B26A3A}
 .bt-table{width:100%;border-collapse:collapse;font-size:14px;margin:12px 0 8px}
 .bt-table th{text-align:left;font-size:12px;text-transform:uppercase;letter-spacing:.05em;
   color:var(--dim);padding:8px 10px;border-bottom:1.5px solid var(--rule);font-weight:600}
