@@ -1,0 +1,741 @@
+import { Router } from "express";
+import { db, uid, nowISO } from "../db.js";
+import { authenticate, require_, audit } from "../rbac.js";
+
+const r = Router();
+
+/* ============================================================
+   AI proxy
+
+   Every model call goes through here rather than from the browser.
+   Three reasons, in order of how badly each one bites:
+
+   The API key. Called from the browser it ends up in the bundle,
+   which means anyone who opens developer tools has it.
+
+   The audit trail. A draft that went to a tenant should be traceable
+   to a request, a person and a moment. A call made from a laptop
+   leaves nothing behind.
+
+   The prompt. Held on the server it is one thing that can be reviewed
+   and changed. Shipped to the browser it is whatever version that
+   user last loaded.
+
+   The task decides the prompt. A caller says what it wants done and
+   supplies facts; it does not get to send arbitrary instructions to
+   the model under this system's key.
+
+   There is no task that writes or reformats an agreement. Admin
+   uploads the file counsel approved and that file is what the tenant
+   signs — a generated clause can be void and reads exactly as
+   convincingly as a valid one.
+   ============================================================ */
+
+const MODEL = "claude-sonnet-4-6";
+const API = "https://api.anthropic.com/v1/messages";
+
+/* Per-user, per-hour. Not a security boundary — it is there so a loop in a
+   component cannot quietly spend a month's budget in an afternoon. */
+const RATE_PER_HOUR = 120;
+const recent = new Map();
+
+function withinRate(userId) {
+  const now = Date.now();
+  const hits = (recent.get(userId) ?? []).filter((t) => now - t < 3600e3);
+  hits.push(now);
+  recent.set(userId, hits);
+  return hits.length <= RATE_PER_HOUR;
+}
+
+/* ---------- Tasks ----------
+   Each is a fixed prompt with a fixed shape of input. Adding a capability
+   means adding a task here, where it can be read. */
+
+const TASKS = {
+  /* Classifies a tenant message and drafts a reply. The facts block is the
+     only source: anything not in it must be declined rather than guessed. */
+  inbox_draft: {
+    permission: "inbox.manage",
+    maxTokens: 1500,
+    build: ({ facts, message, channel, intents }) =>
+`You draft replies for the Baydo Pointe leasing team in Alberta, Canada. Below is the property data as it stands right now. It is your only source of facts.
+
+${facts}
+
+Tenant message (channel: ${channel ?? "email"}):
+${message}
+
+Rules:
+1. Every amount, date, count and unit number in the reply must appear in the facts above. Never calculate, estimate or fill a gap.
+2. If something is marked as not set, or is absent, do not invent it. Name what is missing in missing_info and say in the draft that you will confirm and come back to them.
+3. Never promise to hold a unit, negotiate, quote lease terms, or answer questions about who qualifies.
+4. For a viewing or signing request, confirm only that a slot is being booked and a confirmation will follow. Never invent a specific time.
+5. Reply in the language the tenant wrote in: Traditional Chinese for a Chinese message, English for an English one. Keep SMS under 300 characters.
+6. Professional and warm, not salesy. End by noting this is an automated reply and a person is available.
+7. After any amount, note that the signed lease governs.
+
+intent must be one of: ${(intents ?? []).join(", ")}
+
+Reply with JSON only, no markdown:
+{"intent":"...","confidence":0.0,"facts_used":["which facts you used"],"missing_info":null or "what is missing","draft":"the full reply"}`,
+  },
+
+  /* Asks the next intake question. Protected grounds are excluded in the
+     prompt and checked again by rule after the response comes back. */
+  intake_question: {
+    permission: "lease.sign",
+    maxTokens: 900,
+    build: ({ fields, known, reply }) =>
+`You help a leasing agent collect the details needed before a lease is prepared. This is a residential tenancy in Alberta, Canada.
+
+Required fields:
+${fields}
+
+Known so far:
+${known}
+
+The tenant's latest reply:
+${reply || "(nothing yet — ask the first question)"}
+
+Rules:
+1. Extract any field you can confirm from the reply into extracted. If it is not certain, leave it out.
+2. Option fields must match the listed strings exactly. Never invent one.
+3. Ask about one unconfirmed field at a time, in the language the tenant used.
+4. Never ask about household composition, children, marital status, nationality, immigration status, religion, race, age, gender, income, employment, credit or any assistance program. The number of occupants is fine, because that is an occupancy standard. Who they are is not.
+5. Do not explain lease terms, negotiate, or promise anything.
+6. Never state an amount. The costs are assembled by the system and sent separately. If they ask, say the full breakdown is coming.
+7. When every field is confirmed, set next_question to null and done to true.
+
+Reply with JSON only, no markdown:
+{"extracted":{"field":"value"},"next_question":"the next question, or null","done":false}`,
+  },
+
+
+
+  /* A notice of entry, in both languages, from fixed facts. */
+  entry_notice: {
+    permission: "entrynotice.manage",
+    maxTokens: 1200,
+    build: ({ unit, layout, tenant, date, from, to, purpose, issued }) =>
+`You manage residential property in Alberta, Canada. Write a notice of entry for a tenant who still lives in the unit.
+
+Purpose: ${purpose}.
+
+Facts. Use only these, add nothing:
+- Unit: ${unit}${layout ? ` (${layout})` : ""}
+- Tenant: ${tenant || "the tenant"}
+- Date of entry: ${date}
+- Time window: ${from} to ${to}
+- Accompanied by property staff
+- Notice issued: ${issued}
+
+Requirements:
+1. Write it twice, English first then Traditional Chinese, with identical content. This goes to a tenant, so both languages are required.
+2. State the date, the time window, the purpose and who will accompany.
+3. Polite and brief. No sales language, and do not ask the tenant to tidy up.
+4. Say the tenant can reply to arrange a different time if this one is difficult.
+5. Do not cite or claim any statute or section number.
+6. No filler beyond a heading. Under 200 words across both languages.
+
+Output the notice text only, with no commentary and no markdown.`,
+  },
+
+  /* Commentary on a monthly report. The figures are computed in SQL and
+     passed in; the model is told not to recalculate them. */
+  report_narrative: {
+    permission: "accounting.reports",
+    maxTokens: 1200,
+    build: ({ building, figures, method }) =>
+`You write the commentary on a monthly property report for building ${building} at Baydo Pointe, a residential rental in Edmonton, Alberta.
+
+The figures below were computed from posted, reconciled ledger entries. They are final.
+
+FIGURES
+${JSON.stringify(figures, null, 2)}
+
+HOW EACH FIGURE WAS DERIVED
+${method}
+
+Rules:
+1. Never recalculate, adjust or round anything. Quote the figures exactly as given.
+2. Never introduce a number that is not in the figures above.
+3. Say what the numbers show and what is worth attention. Do not speculate about causes you cannot see in the data.
+4. If arrears or collection moved in a direction worth noticing, say so plainly.
+5. No recommendations about rent levels, and nothing about individual tenants.
+6. Four short paragraphs at most. Plain English, no jargon, no bullet points.
+7. End with one sentence naming the single thing most worth looking at next month.
+
+Write the commentary only. No heading, no preamble, no markdown.`,
+  },
+
+  /* One sentence describing a change, from the recorded diff. */
+  change_narrative: {
+    permission: "accounting.post",
+    maxTokens: 300,
+    build: ({ summary, entity, entityId, by, at, reason, changed }) =>
+`Describe one accounting change in a single plain sentence, for a change log a bookkeeper will read.
+
+CHANGE
+What: ${summary}
+Record: ${entity} ${entityId}
+By: ${by} at ${at}
+Reason given: ${reason ?? "(none recorded)"}
+Fields that moved: ${JSON.stringify(changed ?? [], null, 2)}
+
+Rules:
+1. State what changed and by how much, using the exact figures above.
+2. Never introduce a number that is not above.
+3. Include the recorded reason. If none was recorded, say so rather than inventing one.
+4. One sentence. No preamble, and no judgement about whether it was correct.
+
+Write the sentence only.`,
+  },
+
+  /* Looks up the deposit interest rate. Told to admit uncertainty, because
+     a confident wrong rate here is not discovered until a refund is short. */
+  interest_rate: {
+    permission: "accounting.post",
+    maxTokens: 1200,
+    tools: [{ type: "web_search_20250305", name: "web_search" }],
+    build: ({ year }) =>
+`Find the security deposit interest rate for ${year} in Alberta, Canada.
+
+Under the Residential Tenancies Act, a landlord holding a security deposit must pay interest at the rate set by the Security Deposit Interest Rate Regulation. The rate is prescribed annually.
+
+Rules:
+1. If you are not certain of the published figure for ${year}, say so and set confidence to "unverified". A confident wrong rate makes every deposit refund wrong, and it is not discovered until a tenant moves out.
+2. Do not interpolate from other years and do not estimate. Either you have the published figure or you do not.
+3. Give the rate as a decimal: 0.02 for 2%, 0.0 for zero.
+4. This rate has been set at zero for a long stretch of recent years. If that is what you find, report zero plainly rather than treating it as an error.
+5. Name a source a person can check.
+
+Reply with JSON only, no markdown:
+{"year":${year},"rate":0.0,"confidence":"high|low|unverified","source_text":"what the source says","source_url":"where to verify","reasoning":"one or two sentences, including what a person should confirm"}`,
+  },
+
+  /* Advises staff on parking allocation. The shortfall is structural — 222
+     stalls against 330 units — so the useful answers are about policy, not
+     about finding stalls that do not exist. */
+  parking_advice: {
+    permission: "parking.allocate",
+    maxTokens: 900,
+    build: ({ state, question }) =>
+`You advise the leasing team at Baydo Pointe in Edmonton, Alberta on parking.
+
+Current position:
+${state}
+
+Question: ${question}
+
+Rules:
+1. Use only the numbers above. Never estimate or invent a figure.
+2. The shortfall is structural: there are fewer stalls than units and no more can be built. Do not suggest finding extra stalls.
+3. Allocation is first come, first served by request time. Do not suggest prioritising by rent paid, by unit type, or by anything about the tenant — allocating scarce parking on a discretionary basis is where a fair housing problem starts.
+4. If the answer is that somebody has to wait, say so plainly rather than softening it.
+5. Three short paragraphs at most. No bullet points.
+
+Write the answer only.`,
+  },
+
+  /* Drafts a purchase order from a maintenance ticket. The estimate is a
+     starting figure, not a commitment: whoever attends enters the actual
+     before it becomes a bill, and a difference needs a reason. */
+  purchase_order: {
+    permission: "po.create",
+    maxTokens: 1200,
+    build: ({ ticket, unit, category, priority, vendor, history, accounts }) =>
+`Draft a purchase order for a repair at a residential building in Edmonton, Alberta.
+
+THE TICKET
+Unit: ${unit ?? "common area"}
+Category: ${category ?? "unspecified"}
+Priority: ${priority ?? "normal"}
+Reported: ${ticket}
+${vendor ? `Vendor: ${vendor}` : "Vendor: not yet chosen"}
+${history ? `Notes so far:\n${history}` : ""}
+
+Available expense accounts:
+${accounts}
+
+Rules:
+1. Break the work into line items a vendor would recognise. Labour and parts separately where that makes sense.
+2. Estimates only. Say clearly in the scope that the figures are an estimate and the actual is confirmed after the work.
+3. Do not invent a price you have no basis for. If a line cannot be estimated from what is above, put 0 and say in the scope that it needs a quote.
+4. Pick the expense account that fits from the list. Do not invent a code.
+5. Scope should say what "done" means, so there is something to check the invoice against.
+6. Nothing about the tenant beyond the unit number.
+
+Reply with JSON only, no markdown:
+{"description":"one line","scope":"what the vendor is being asked to do and what done looks like","gl_code":"5010","lines":[{"description":"...","gl_code":"5010","quantity":1,"unit_price":0,"estimated":0}],"needs_quote":false,"note":"anything the person raising this should check"}`,
+  },
+
+
+  /* ---------- Accounting ---------- */
+
+  /* Matches a bank line to something in the ledger by reading its
+     description. Amount and date alone cannot separate three tenants who
+     each paid $1,450 on the first. */
+  bank_match: {
+    permission: "accounting.bank",
+    maxTokens: 2000,
+    build: ({ transactions, receipts, invoices, vendors, units }) =>
+`Match bank statement lines to records in a property ledger.
+
+BANK LINES (unmatched)
+${transactions}
+
+POSSIBLE MATCHES
+Receipts from tenants:
+${receipts}
+
+Vendor invoices awaiting payment:
+${invoices}
+
+Known vendors and how they appear on statements:
+${vendors}
+
+Unit numbers in this property: ${units}
+
+Rules:
+1. Match on the description as well as the amount. Bank descriptions are abbreviated and upper case: "NORTHGATE PLBG EDM" is Northgate Plumbing, "E-TFR 378519" carries a unit number.
+2. Only propose a match where the amount agrees to the cent. A close amount is not a match, it is a different transaction.
+3. Where several records share an amount, use the description to choose. If the description does not separate them, return no match rather than guessing — a wrong match is harder to find than an unmatched line.
+4. Set confidence to "high" only where the description names the counterparty or a unit. Everything else is "low".
+5. Never invent a record id. Use only the ids given.
+
+Reply with JSON only, no markdown:
+{"matches":[{"transaction_id":"...","record_type":"ar_receipt|ap_invoice","record_id":"...","confidence":"high|low","reason":"what in the description made this the match"}],"unmatched":[{"transaction_id":"...","why":"what would be needed to identify it"}]}`,
+  },
+
+  /* Reads a vendor invoice into a draft bill. The invoice sits beside the
+     draft while somebody checks it, which is what makes this safe. */
+  invoice_extract: {
+    permission: "accounting.ap",
+    maxTokens: 2000,
+    build: ({ text, vendors, accounts }) =>
+`Read this vendor invoice and pull out what is needed to enter it.
+
+INVOICE
+${text}
+
+KNOWN VENDORS
+${vendors}
+
+EXPENSE ACCOUNTS
+${accounts}
+
+Rules:
+1. Copy figures exactly as printed. Do not recalculate a total, and do not correct one that looks wrong — flag it instead.
+2. If the invoice total does not equal the lines plus tax, say so in "discrepancy". That is usually a reading error on your part, occasionally the vendor's, and either way a person needs to look.
+3. Match the vendor to the known list where you can. If it is not on the list, return the name as printed and set vendor_id to null.
+4. GST is separate from the line amounts. Do not fold it in.
+5. Choose an expense account from the list. Never invent a code.
+6. Anything you cannot read, return as null. A null is checkable; a guess is not.
+
+Reply with JSON only, no markdown:
+{"vendor_name":"...","vendor_id":null,"invoice_no":"...","invoice_date":"YYYY-MM-DD","due_date":null,"lines":[{"description":"...","amount":0,"gl_code":"5010"}],"subtotal":0,"gst":0,"total":0,"unit_number":null,"discrepancy":null,"confidence":"high|medium|low","unreadable":["what you could not make out"]}`,
+  },
+
+  /* Works out which column is which in a bank export. Every bank ships a
+     different shape, and the opening-plus-movement-equals-closing check
+     catches a wrong mapping immediately. */
+  csv_mapping: {
+    permission: "accounting.bank",
+    maxTokens: 900,
+    build: ({ sample }) =>
+`Work out the column layout of this bank statement export.
+
+FIRST FEW ROWS
+${sample}
+
+Rules:
+1. Identify which column holds the date, the description, money out, money in, and the running balance.
+2. Some banks use one signed amount column instead of separate debit and credit. Say which.
+3. Report the date format as it appears: YYYY-MM-DD, DD/MM/YYYY, MM/DD/YYYY. Getting this backwards puts every transaction in the wrong month, and 03/04 is ambiguous — if you cannot tell from the rows, say so.
+4. Say whether the first row is a header.
+5. Note anything that will not parse: a thousands separator, a currency symbol, brackets for negatives.
+
+Reply with JSON only, no markdown:
+{"has_header":true,"date_col":0,"description_col":1,"debit_col":2,"credit_col":3,"balance_col":4,"single_amount_col":null,"date_format":"YYYY-MM-DD","date_format_certain":true,"cleanup":["what needs stripping before parsing"],"note":null}`,
+  },
+
+  /* Flags payables worth a second look. Output is "look at these", never
+     "this is fraud" — the difference matters because the second one gets
+     acted on. */
+  ap_anomaly: {
+    permission: "accounting.ap",
+    maxTokens: 2000,
+    build: ({ recent, history, vendors }) =>
+`Look over recent vendor invoices and flag anything worth a second look.
+
+RECENT INVOICES
+${recent}
+
+WHAT THIS PROPERTY USUALLY PAYS
+${history}
+
+VENDORS
+${vendors}
+
+Look for:
+- The same vendor invoiced twice in a month for a similar amount
+- An invoice number out of sequence for that vendor, or reused
+- An amount well outside what this property usually pays for that kind of work
+- A vendor with no history whose first invoice is large
+- A round number where that vendor normally invoices to the cent
+- An invoice dated before the work was scheduled
+
+Rules:
+1. Flag things to look at. Do not call anything fraud, an error, or wrong — you cannot see the invoice, the contract or the conversation.
+2. Say what specifically looks off and what would settle it.
+3. A large invoice is not by itself unusual. A large invoice from a vendor who has only ever sent small ones is.
+4. Return nothing rather than padding the list. A flag that turns out to be routine costs attention, and attention is what makes the real ones get looked at.
+
+Reply with JSON only, no markdown:
+{"flags":[{"invoice_id":"...","what":"one line","why":"what specifically looks off","check":"what would settle it","severity":"high|medium|low"}]}`,
+  },
+
+  /* Commentary on how the month moved against the last one. The figures
+     are computed in SQL; this explains movement, it does not recalculate. */
+  variance_commentary: {
+    permission: "accounting.reports",
+    maxTokens: 1200,
+    build: ({ period, current, previous, movements }) =>
+`Explain how ${period} moved against the previous period for a residential property in Edmonton.
+
+THIS PERIOD
+${JSON.stringify(current, null, 2)}
+
+PREVIOUS PERIOD
+${JSON.stringify(previous, null, 2)}
+
+THE LARGEST MOVEMENTS, WITH WHAT DROVE THEM
+${movements}
+
+Rules:
+1. Never recalculate anything. Every figure you use must appear above.
+2. Explain the movements that matter and say what drove them where the data shows it. Where it does not, say the cause is not visible rather than suggesting one.
+3. A one-off does not mean a trend. An elevator repair is not a rising maintenance cost.
+4. Three short paragraphs at most. No bullet points.
+5. End with the single line item most worth watching next month, and why.
+
+Write the commentary only. No heading, no preamble, no markdown.`,
+  },
+
+  /* ---------- On site ---------- */
+
+  /* Sorts a repair into a category and suggests who to send. It does not
+     set urgency: that is a rule, and it is a person, because whether a
+     leak is a drip or a flow is something you have to see. */
+  maintenance_triage: {
+    permission: "maintenance.manage",
+    maxTokens: 1200,
+    build: ({ description, unit, history, vendors, categories }) =>
+`Sort this repair report and suggest who should attend.
+
+REPORTED
+${description}
+
+Unit: ${unit ?? "common area"}
+${history ? `Previous work on this unit:\n${history}` : ""}
+
+CATEGORIES
+${categories}
+
+VENDORS AND WHAT THEY DO
+${vendors}
+
+Rules:
+1. Pick a category from the list. Do not invent one.
+2. Suggest vendors from the list who do this kind of work. If none fit, say so rather than picking the closest.
+3. Say whether somebody has to go inside the suite, because that decides whether a notice of entry is needed.
+4. Do not set urgency. Whether a leak is a drip or a flow is something a person has to see, and getting it wrong in either direction is expensive.
+5. If the description suggests a safety issue — gas, electrical, structural, no heat in winter — say so in "safety_note" so a person reads it first. That is a flag for attention, not a priority setting.
+6. If this unit has had similar work before, say so. A third visit for the same thing is usually a different problem from the first two.
+
+Reply with JSON only, no markdown:
+{"category":"...","suggested_vendors":["..."],"entry_required":true,"likely_parts":["..."],"safety_note":null,"repeat_issue":null,"note":"anything the person dispatching should know"}`,
+  },
+
+  /* Lays three quotes side by side. Comparison only — the decision is not
+     arithmetic, and the cheapest quote is often the one that excludes the
+     most. */
+  quote_comparison: {
+    permission: "po.create",
+    maxTokens: 1800,
+    build: ({ scope, quotes }) =>
+`Compare these quotes for the same job at a residential building.
+
+THE JOB
+${scope}
+
+QUOTES
+${quotes}
+
+Rules:
+1. Set out what each quote includes and, more importantly, what it excludes. The cheapest quote is often the one that excludes the most.
+2. Note differences in lead time, warranty, and whether disposal, permits or making good are included.
+3. Where a quote is silent on something another covers, say so — silence is not inclusion.
+4. Do not recommend one. Say what each is strong and weak on and let a person weigh it.
+5. If the quotes are not actually for the same scope, say that first. Comparing prices for different work is worse than not comparing at all.
+
+Reply with JSON only, no markdown:
+{"same_scope":true,"scope_note":null,"comparison":[{"vendor":"...","amount":0,"includes":["..."],"excludes":["..."],"lead_time":"...","warranty":"...","strong_on":"...","weak_on":"..."}],"watch_for":["what to ask before deciding"]}`,
+  },
+
+  /* ---------- Needs confirmation ---------- */
+
+  /* Turns a question into read-only SQL. The query is shown alongside the
+     answer, always — a query nobody can see is an answer nobody can check. */
+  nl_query: {
+    permission: "accounting.view",
+    maxTokens: 1200,
+    build: ({ question, schema }) =>
+`Write one read-only SQL query answering this question about a property ledger.
+
+QUESTION
+${question}
+
+SCHEMA (these tables only)
+${schema}
+
+Rules:
+1. SELECT only. No INSERT, UPDATE, DELETE, DROP, ALTER, ATTACH or PRAGMA.
+2. Use only the tables and columns given. Never assume a column exists.
+3. Amounts are stored as numbers. Filter journal entries on state='posted' — a draft or reversed entry is not part of the answer.
+4. Where the question mentions a building, filter on building_code. Getting this wrong silently returns the whole property, and the number will look plausible.
+5. Say plainly what the query counts and what it leaves out. That sentence is what a person checks against, not the SQL.
+6. If the question cannot be answered from this schema, say so and return sql as null. A query that answers a nearby question is worse than none.
+
+Reply with JSON only, no markdown:
+{"sql":"SELECT ...","explains":"what this counts, in one sentence","excludes":"what it does not count","assumptions":["anything you had to assume"],"answerable":true}`,
+  },
+
+  /* Pulls key terms out of a signed lease. Populates a draft; the file
+     stays the authority. */
+  lease_abstract: {
+    permission: "lease.sign",
+    maxTokens: 2000,
+    build: ({ text, unit }) =>
+`Pull the key terms out of this signed residential tenancy agreement. Alberta.
+
+${unit ? `Unit: ${unit}` : ""}
+
+DOCUMENT
+${text}
+
+Rules:
+1. Copy what the document says. Do not interpret, summarise or tidy up wording.
+2. Every field gets its own confidence. A date you read clearly is "high"; one you inferred from context is "low".
+3. Anything not stated, return as null. A null is checkable; a guess that reads as certain is not.
+4. Do not extract anything about the tenant beyond their name and the number of occupants. Household composition, employment and income are not indexed here even when the document mentions them.
+5. If the document contains a term that looks unusual for an Alberta residential tenancy, note it in "unusual" rather than leaving it to be found later.
+
+Reply with JSON only, no markdown:
+{"fields":{"tenant_names":{"value":[],"confidence":"high"},"start_date":{"value":null,"confidence":"high"},"end_date":{"value":null,"confidence":"high"},"term_type":{"value":"fixed|periodic","confidence":"high"},"rent":{"value":null,"confidence":"high"},"rent_due_day":{"value":null,"confidence":"high"},"security_deposit":{"value":null,"confidence":"high"},"pet_deposit":{"value":null,"confidence":"high"},"parking_stall":{"value":null,"confidence":"low"},"occupants":{"value":null,"confidence":"low"},"utilities_included":{"value":[],"confidence":"low"}},"unusual":[],"note":null}`,
+  },
+
+  /* Estimates what a turnover will cost, from this property's own history.
+     A range, never a figure — a single number gets treated as a quote. */
+  turnover_estimate: {
+    permission: "units.status.edit",
+    maxTokens: 1200,
+    build: ({ unit, unitType, condition, history }) =>
+`Estimate what this turnover will cost and how long it will take, using this property's own history.
+
+THE UNIT
+${unit}${unitType ? ` · ${unitType}` : ""}
+Condition noted at inspection: ${condition ?? "not recorded"}
+
+PREVIOUS TURNOVERS AT THIS PROPERTY
+${history}
+
+Rules:
+1. Use only the history given. Do not bring in figures from anywhere else.
+2. Give a range, not a single number. A single figure gets treated as a quote and then argued with.
+3. Say how many past turnovers the range is based on. Fewer than ten is a small sample and you should say so plainly rather than presenting a confident range.
+4. If the condition noted suggests work outside the usual turnover, call that out separately — it is the part that makes an estimate wrong.
+5. Days and cost are different questions. A cheap turnover can still sit empty for six weeks waiting on one trade.
+
+Reply with JSON only, no markdown:
+{"cost_low":0,"cost_high":0,"days_low":0,"days_high":0,"based_on":0,"sample_adequate":true,"outside_usual":[],"note":"what would move this either way"}`,
+  },
+
+  /* Drafts an arrears sequence. Collections only — nothing about ending a
+     tenancy, which is a legal process with its own notice periods. */
+  arrears_sequence: {
+    permission: "accounting.ar",
+    maxTokens: 1800,
+    build: ({ unit, tenant, owing, daysLate, history, locale }) =>
+`Draft the next message in an arrears sequence for a residential tenant in Alberta.
+
+Unit: ${unit}
+Tenant: ${tenant}
+Outstanding: ${owing}
+Days past due: ${daysLate}
+${history ? `Previously sent:\n${history}` : "Nothing sent yet."}
+
+Rules:
+1. Say what is owed and when it was due. Nothing else about their circumstances.
+2. Tone follows the days: a reminder at five, a clearer request at fifteen, a direct one at thirty. None of them are threatening at any stage.
+3. Never mention eviction, termination, RTDRS, or a lawyer. Ending a tenancy is a legal process with its own notice periods and forms, and a collections message that gestures at it is both ineffective and a problem later.
+4. Never suggest a reason for the arrears, and never ask for one. Somebody who has lost work does not need to explain that to get a payment date.
+5. Offer to arrange a payment date. Most arrears end that way rather than in a process.
+6. Write in ${locale === "zh" ? "Traditional Chinese" : "English"}.
+7. Short. Six lines at most.
+
+Reply with JSON only, no markdown:
+{"stage":"reminder|request|direct","subject":"...","body":"...","note_for_staff":"anything the person sending should know"}`,
+  },
+
+  /* Answers a prospective tenant on the public site. The only task that can
+     reach someone without a person in between, which is why the hard stops
+     run before it. */
+  tenant_chat: {
+    permission: null,          // public, rate limited by IP
+    maxTokens: 900,
+    build: ({ facts, history, message, language }) =>
+`You answer questions from prospective tenants on the Baydo Pointe website. Below is the live property data. It is your only source of facts.
+
+${facts}
+
+Recent conversation:
+${history}
+Tenant: ${message}
+
+Rules:
+1. Every number, date and unit reference must appear in the data above. Never calculate, estimate or fill a gap.
+2. If something is marked "not set" or is absent, say you will check and come back to them. Do not invent it.
+3. Never promise to hold a unit, negotiate, quote lease terms, or answer questions about who qualifies.
+4. Never state a rent or fee that is not in the data.
+5. Reply in ${language === "zh" ? "Traditional Chinese" : "English"}, matching the tenant.
+6. Two or three sentences. Warm and direct, not salesy. No greeting boilerplate.
+7. If you cannot answer from the data, say so plainly and offer to pass it to a colleague.
+
+Reply with the message text only. No preamble, no markdown.`,
+  },
+};
+
+async function callModel(task, prompt) {
+  const key = process.env.ANTHROPIC_API_KEY;
+  if (!key) throw Object.assign(new Error("AI_NOT_CONFIGURED"), { status: 503 });
+
+  const res = await fetch(API, {
+    method: "POST",
+    headers: { "Content-Type": "application/json", "x-api-key": key,
+               "anthropic-version": "2023-06-01" },
+    body: JSON.stringify({
+      model: MODEL, max_tokens: task.maxTokens ?? 1000,
+      ...(task.tools ? { tools: task.tools } : {}),
+      messages: [{ role: "user", content: prompt }],
+    }),
+  });
+
+  if (!res.ok) {
+    const detail = await res.text().catch(() => "");
+    throw Object.assign(new Error("AI_UPSTREAM_ERROR"),
+      { status: 502, upstream: res.status, detail: detail.slice(0, 400) });
+  }
+
+  const data = await res.json();
+  const text = (data.content ?? []).filter((c) => c.type === "text")
+    .map((c) => c.text).join("").trim();
+  return { text, usage: data.usage ?? null };
+}
+
+/** Every call is recorded: the task, who asked, how long it took, and whether
+ *  it came back. Not the prompt or the response — those hold tenant messages
+ *  and belong in the record for the thing they were about, not here. */
+function recordCall(req, { taskName, refType, refId, ok, ms, usage, error }) {
+  audit(req, {
+    action: `ai.${taskName}`, entityType: refType ?? "ai", entityId: refId ?? null,
+    after: { ok, ms, input_tokens: usage?.input_tokens ?? null,
+             output_tokens: usage?.output_tokens ?? null, error: error ?? null },
+  });
+}
+
+/* ---------- Public: tenant chat ---------- */
+/* No session. Rate limited by address, because the alternative is either an
+   account wall in front of "how much is rent" or an open budget. */
+
+const publicHits = new Map();
+function publicRate(ip) {
+  const now = Date.now();
+  const hits = (publicHits.get(ip) ?? []).filter((t) => now - t < 3600e3);
+  hits.push(now);
+  publicHits.set(ip, hits);
+  return hits.length <= 40;
+}
+
+/* When the model is unavailable a fixed message goes out rather than nothing.
+   Silence reads as being ignored, and the tenant has no way to tell the
+   difference between a service outage and being brushed off. */
+const FALLBACK = {
+  en: "Thank you for your message. Someone will reply within one business day. If it is urgent — a leak, no heat, no hot water, or anything unsafe — please call the office rather than waiting here.",
+  zh: "謝謝你的訊息，同事會在一個工作天內回覆。如果是緊急狀況——漏水、沒有暖氣、沒有熱水，或任何安全問題——請直接打電話到辦公室，不要在這裡等。",
+};
+
+r.post("/public/ai/chat", async (req, res) => {
+  if (!publicRate(req.ip)) return res.status(429).json({ code: "RATE_LIMITED" });
+  const { facts, history, message, language } = req.body ?? {};
+  if (!message?.trim()) return res.status(400).json({ code: "MESSAGE_REQUIRED" });
+
+  const task = TASKS.tenant_chat;
+  const started = Date.now();
+  try {
+    const out = await callModel(task, task.build({ facts, history, message, language }));
+    db.prepare(`INSERT INTO audit_log (actor_name, action, entity_type, ip)
+      VALUES ('public','ai.tenant_chat','ai',?)`).run(req.ip);
+    res.json({ text: out.text, ms: Date.now() - started, fallback: false });
+  } catch (e) {
+    db.prepare(`INSERT INTO audit_log (actor_name, action, entity_type, ip, after_value)
+      VALUES ('public','ai.fallback','ai',?,?)`)
+      .run(req.ip, JSON.stringify({ error: e.message }));
+    // 200 with a fallback rather than an error: the tenant gets an answer, and
+    // the failure is in the log where somebody can act on it.
+    res.json({ text: FALLBACK[language === "zh" ? "zh" : "en"],
+               fallback: true, ms: Date.now() - started });
+  }
+});
+
+/* ---------- Everything else needs a session ---------- */
+r.use(authenticate);
+
+r.get("/ai/tasks", (req, res) => {
+  res.json({
+    configured: !!process.env.ANTHROPIC_API_KEY,
+    model: MODEL,
+    tasks: Object.entries(TASKS).map(([name, t]) => ({
+      name, permission: t.permission,
+      allowed: !t.permission || req.user.perms.has(t.permission) })),
+  });
+});
+
+r.post("/ai/:task", async (req, res) => {
+  const name = req.params.task;
+  const task = TASKS[name];
+  if (!task) return res.status(404).json({ code: "UNKNOWN_TASK", task: name });
+  if (task.permission && !req.user.perms.has(task.permission))
+    return res.status(403).json({ code: "FORBIDDEN", needs: task.permission });
+  if (!withinRate(req.user.id)) return res.status(429).json({ code: "RATE_LIMITED" });
+
+  const started = Date.now();
+  try {
+    const prompt = task.build(req.body?.input ?? {});
+    const out = await callModel(task, prompt);
+    recordCall(req, { taskName: name, refType: req.body?.ref_type, refId: req.body?.ref_id,
+                      ok: true, ms: Date.now() - started, usage: out.usage });
+    res.json({ text: out.text, ms: Date.now() - started });
+  } catch (e) {
+    recordCall(req, { taskName: name, refType: req.body?.ref_type, refId: req.body?.ref_id,
+                      ok: false, ms: Date.now() - started, error: e.message });
+    // Staff-facing tasks fail loudly. A draft that silently becomes a template
+    // is worse than a button that says the service is down, because somebody
+    // would send it.
+    res.status(e.status ?? 500).json({ code: e.message, upstream: e.upstream,
+                                        detail: e.detail,
+                                        fallback_available: name === "inbox_draft" });
+  }
+});
+
+export default r;
