@@ -232,94 +232,25 @@ r.post("/public/auth/reset", async (c) => {
   if (issues.length) return c.json({ code: "PASSWORD_TOO_WEAK", issues }, 400);
 
   /*
-   * This deliberately stays one database round trip. Although bcrypt itself
-   * already runs inside PostgreSQL, the previous implementation made seven
-   * separate queries around it. Serialising and parsing those queries was
-   * enough Worker CPU to cross the Free-plan 10 ms request limit (1102).
-   *
-   * PostgreSQL data-modifying CTEs keep the claim, history entry, password
-   * update and session revocation atomic while the Worker only submits and
-   * reads one statement. Unsupported legacy hashes are not compared here;
-   * the reset replaces them, as it did before.
+   * This deliberately stays one small database round trip. The whole reset
+   * transaction lives in schema/012_password_reset_function.sql so the Worker
+   * does not spend its Free-plan CPU budget constructing and parsing a large
+   * multi-CTE statement. Unsupported legacy hashes are replaced by the reset;
+   * only recent bcrypt hashes can be compared safely by PostgreSQL.
    */
   const tokenHash = await sha256(token);
   const historyId = uid("ph_");
   const passwordParams = JSON.stringify({ cost: 12 });
   const passwordExpiresAt = addDays(PASSWORD_MAX_AGE_DAYS);
   const [result] = await sql`
-    WITH token_row AS MATERIALIZED (
-      SELECT p.id AS token_id, p.user_id, p.expires_at, p.used_at,
-             u.password_hash AS old_hash, u.password_salt AS old_salt,
-             u.password_algo AS old_algo, u.password_params AS old_params
-      FROM password_reset_tokens p
-      JOIN users u ON u.id = p.user_id
-      WHERE p.token_hash = ${tokenHash}
-      ORDER BY p.created_at DESC
-      LIMIT 1
-    ),
-    recent AS MATERIALIZED (
-      SELECT EXISTS (
-        SELECT 1
-        FROM (
-          SELECT h.hash, h.algo
-          FROM password_history h
-          JOIN token_row t ON t.user_id = h.user_id
-          ORDER BY h.changed_at DESC
-          LIMIT ${PASSWORD_HISTORY}
-        ) h
-        WHERE h.algo = 'bcrypt-pgcrypto'
-          AND extensions.crypt(${password}, h.hash) = h.hash
-      ) AS reused
-    ),
-    new_hash AS MATERIALIZED (
-      SELECT extensions.crypt(
-        ${password}, extensions.gen_salt('bf', 12)
-      ) AS hash
-      FROM token_row t, recent r
-      WHERE t.used_at IS NULL AND t.expires_at > now() AND NOT r.reused
-    ),
-    claimed AS (
-      UPDATE password_reset_tokens p
-      SET used_at = now()
-      FROM token_row t, recent r
-      WHERE p.id = t.token_id AND p.used_at IS NULL
-        AND p.expires_at > now() AND NOT r.reused
-      RETURNING p.user_id
-    ),
-    saved_history AS (
-      INSERT INTO password_history (id, user_id, hash, salt, algo, params)
-      SELECT ${historyId}, c.user_id, t.old_hash, COALESCE(t.old_salt, ''),
-             t.old_algo, t.old_params
-      FROM claimed c
-      JOIN token_row t ON t.user_id = c.user_id
-      WHERE t.old_hash IS NOT NULL
-      RETURNING user_id
-    ),
-    updated_user AS (
-      UPDATE users u
-      SET password_algo = 'bcrypt-pgcrypto', password_salt = '',
-          password_hash = n.hash, password_params = ${passwordParams},
-          password_changed_at = now(), password_expires_at = ${passwordExpiresAt},
-          must_change_password = FALSE, failed_attempts = 0, locked_until = NULL
-      FROM claimed c, new_hash n
-      WHERE u.id = c.user_id
-      RETURNING u.id
-    ),
-    revoked AS (
-      UPDATE sessions s
-      SET revoked_at = now()
-      FROM updated_user u
-      WHERE s.user_id = u.id AND s.revoked_at IS NULL
-      RETURNING s.id
-    )
-    SELECT CASE
-      WHEN NOT EXISTS (SELECT 1 FROM token_row) THEN 'INVALID_TOKEN'
-      WHEN (SELECT used_at IS NOT NULL FROM token_row) THEN 'INVALID_TOKEN'
-      WHEN (SELECT expires_at <= now() FROM token_row) THEN 'TOKEN_EXPIRED'
-      WHEN (SELECT reused FROM recent) THEN 'PASSWORD_RECENTLY_USED'
-      WHEN EXISTS (SELECT 1 FROM updated_user) THEN 'OK'
-      ELSE 'INVALID_OR_USED_TOKEN'
-    END AS code`;
+    SELECT public.reset_staff_password(
+      ${tokenHash},
+      ${password},
+      ${historyId},
+      ${passwordParams},
+      ${passwordExpiresAt},
+      ${PASSWORD_HISTORY}
+    ) AS code`;
 
   if (result?.code === "INVALID_TOKEN")
     return c.json({ code: "INVALID_TOKEN" }, 400);
