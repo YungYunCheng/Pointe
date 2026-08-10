@@ -124,7 +124,7 @@ const SEED = [
 
 const money = (n) => (n === "" || n == null || isNaN(n) ? null : "$" + Math.round(Number(n)).toLocaleString("en-CA"));
 
-export default function AIInbox() {
+export default function AIInbox({ session }) {
   const [facts, setFacts] = useState(null);
   const [loading, setLoading] = useState(true);
   const [msgs, setMsgs] = useState(() => SEED.map((m) => ({ ...m, ts: Date.now(), state: "new" })));
