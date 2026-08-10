@@ -46,7 +46,7 @@ const TOOLS = [
   { path: "/site",        label: "On site",     el: BuildingManager, roles: ["admin", "building_manager"] },
   { path: "/inbox",       label: "AI inbox",    el: AiInbox,         roles: ["admin", "property_manager"] },
   { path: "/intake",      label: "Lease intake",el: LeaseIntake,     roles: ["admin", "property_manager"] },
-  { path: "/operations",  label: "Operations",  el: Operations,      roles: ["admin", "property_manager"] },
+  { path: "/operations",  label: "Operations",  el: Operations,      roles: ["admin", "property_manager", "building_manager"] },
   { path: "/agreements",  label: "Agreements",  el: Agreements,      roles: LEASING },
   { path: "/documents",   label: "Documents",   el: Documents,       roles: LEASING },
   { path: "/portfolio",   label: "Portfolio",   el: Portfolio,       roles: ["admin", "property_manager", "building_manager"] },

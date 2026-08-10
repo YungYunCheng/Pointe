@@ -181,6 +181,16 @@ export function screenLead({ email, phone, name }, existing, excludeId) {
 }
 const nowISO = () => new Date().toISOString();
 
+/* Older demo data incorrectly made the Property Manager the owner of leads
+ * already at the showing stage.  Showings are an on-site Building Manager
+ * responsibility; normalise only those stages so a genuine PM contact note
+ * or later application decision is not rewritten as somebody else's work. */
+function normaliseShowingOwner(lead) {
+  if (!["booked", "viewed"].includes(lead.stage) || lead.assigned !== "Bowen Wang")
+    return lead;
+  return { ...lead, assigned: "Building Manager" };
+}
+
 function seedLeads() {
   const t = Date.now();
   const ago = (h) => new Date(t - h * 3.6e6).toISOString();
@@ -195,12 +205,12 @@ function seedLeads() {
       notes: [{ at: ago(26), by: "AI", text: "Auto-replied with the pet policy and fees." }] },
     { id: "ld_3", name: "Priya Nair", phone: "780-555-0177", email: "p.nair@example.com",
       source: "SMS", stage: "booked", units: ["378-315"], beds: "2 bed", moveIn: "2026-09-15",
-      assigned: "Bowen Wang", created_at: ago(72), last_contact_at: ago(20), next_action_at: "", dnc: false,
-      notes: [{ at: ago(20), by: "Bowen Wang", text: "Showing booked for 11:00 tomorrow." }] },
+      assigned: "Building Manager", created_at: ago(72), last_contact_at: ago(20), next_action_at: "", dnc: false,
+      notes: [{ at: ago(20), by: "Building Manager", text: "Showing booked for 11:00 tomorrow." }] },
     { id: "ld_4", name: "Ahmed Farouk", phone: "587-555-0110", email: "a.farouk@example.com",
       source: "Kijiji", stage: "viewed", units: ["370-501"], beds: "1 bed", moveIn: "2026-08-15",
-      assigned: "Bowen Wang", created_at: ago(120), last_contact_at: ago(60), next_action_at: "", dnc: false,
-      notes: [{ at: ago(60), by: "Bowen Wang", text: "After the showing, wants to discuss with family." }] },
+      assigned: "Building Manager", created_at: ago(120), last_contact_at: ago(60), next_action_at: "", dnc: false,
+      notes: [{ at: ago(60), by: "Building Manager", text: "After the showing, wants to discuss with family." }] },
     { id: "ld_5", name: "Lily Kwan", phone: "780-555-0166", email: "lily.k@example.com",
       source: "Referral", stage: "applied", units: ["378-519"], beds: "2 bed", moveIn: "2026-08-01",
       assigned: "Bowen Wang", created_at: ago(200), last_contact_at: ago(5), next_action_at: "", dnc: false,
@@ -232,7 +242,13 @@ export default function CRM() {
         try { const r = await window.storage.get(k); return r?.value ? JSON.parse(r.value) : null; }
         catch (e) { return null; }
       };
-      const l = await read("baydo:leads"); if (l) setLeads(l);
+      const l = await read("baydo:leads");
+      if (l) {
+        const normalised = l.map(normaliseShowingOwner);
+        setLeads(normalised);
+        if (normalised.some((lead, i) => lead !== l[i]))
+          try { await window.storage.set("baydo:leads", JSON.stringify(normalised)); } catch {}
+      }
       const s = await read("baydo:schedule"); if (s?.events) setEvents(s.events);
       const ses = await read("baydo:session"); if (ses) setSession(ses);
       setLoading(false);

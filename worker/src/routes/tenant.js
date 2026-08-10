@@ -412,6 +412,12 @@ r.post("/tenant/viewings", async (c) => {
   const endsAt = new Date(startsAt.getTime() + 30 * 60000);
   const reference = `V${Date.now().toString(36).toUpperCase()}${crypto.randomUUID()
     .replace(/-/g, "").slice(0, 4).toUpperCase()}`;
+  const [showingAssignee] = await sql`
+    SELECT id, full_name FROM users
+    WHERE role_code = 'building_manager' AND is_active
+    ORDER BY full_name, id LIMIT 1`;
+  if (!showingAssignee)
+    return c.json({ code: "ACTIVE_BUILDING_MANAGER_REQUIRED" }, 503);
 
   try {
     const booking = await sql.begin(async (tx) => {
@@ -427,9 +433,10 @@ r.post("/tenant/viewings", async (c) => {
 
       const eventId = uid("ev_");
       await tx`INSERT INTO events (id, type, contact_name, contact_info,
-        starts_at, duration_min, blocking, state, created_via)
+        assignee_id, assignee, starts_at, duration_min, blocking, state, created_via)
         VALUES (${eventId}, 'showing', ${t.name},
                 ${[t.email, body.phone].filter(Boolean).join(" · ")},
+                ${showingAssignee.id}, ${showingAssignee.full_name},
                 ${startsAt.toISOString()}, 30, TRUE, 'booked', 'tenant_portal')`;
 
       const [row] = await tx`INSERT INTO showing_requests

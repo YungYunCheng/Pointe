@@ -57,7 +57,7 @@ const CONFIRM_STATE = {
   declined: { label: "Declined", color: "#B23A54" },
 };
 const EVENT_OWNER = {
-  showing: { label: "Leasing / Building Manager", roles: ["admin", "property_manager", "building_manager"] },
+  showing: { label: "Building Manager", roles: ["admin", "property_manager", "building_manager"] },
   signing: { label: "Property Manager", roles: ["admin", "property_manager"] },
   keys: { label: "Building Manager", roles: ["admin", "building_manager"] },
   maintenance: { label: "Building Manager", roles: ["admin", "building_manager"] },
@@ -73,12 +73,20 @@ function fromApiEvent(e) {
   return { ...e, date: `${get("year")}-${get("month")}-${get("day")}`,
     time: `${get("hour")}:${get("minute")}`, unit: e.unit_number || "—",
     name: e.contact_name || "Internal", contact: e.contact_info || "",
-    assignee: e.owner_name || e.assignee || null,
+    /* The label is role-based for legacy showings that were incorrectly
+       assigned to a PM. Migration 015 fixes the stored owner as well. */
+    assignee: e.type === "showing" && e.assignee_role !== "building_manager"
+      ? "Building Manager" : e.owner_name || e.assignee || null,
     sign: e.signing_state || undefined,
     confirm_state: e.confirmation_state || "none",
     confirm_channel: e.confirmation_channel || undefined,
     confirm_sent_at: e.confirmation_sent_at || undefined };
 }
+
+const normaliseStoredEvent = (event) =>
+  event.type === "showing" && event.assignee === "Bowen Wang"
+    ? { ...event, assignee: "Building Manager" }
+    : event;
 
 const SIGN_STATES = {
   pending_review: { label: "Awaiting approval",  color: "#C98A15" },
@@ -173,7 +181,12 @@ export default function ScheduleConsole({ session }) {
         const r = await window.storage.get("baydo:schedule");
         if (r?.value) {
           const s = JSON.parse(r.value);
-          if (s.events) setEvents(s.events);
+          if (s.events) {
+            const normalised = s.events.map(normaliseStoredEvent);
+            setEvents(normalised);
+            if (normalised.some((event, i) => event !== s.events[i]))
+              try { await window.storage.set("baydo:schedule", JSON.stringify({ ...s, events: normalised })); } catch {}
+          }
           if (s.holidays) setHolidays(s.holidays);
           if (s.done) setDone(s.done);
           if (s.agent) setAgent(s.agent);
@@ -249,6 +262,8 @@ export default function ScheduleConsole({ session }) {
   const canSee = useCallback((e) => {
     if (session?.role === "admin")
       return ownerFilter === "all" || (e.assignee || EVENT_OWNER[e.type]?.label) === ownerFilter;
+    if (e.type === "showing")
+      return ["property_manager", "building_manager"].includes(session?.role);
     if (!e.assignee || e.assignee === session?.name) return true;
     return EVENT_OWNER[e.type]?.roles?.includes(session?.role) ?? false;
   }, [session?.role, session?.name, ownerFilter]);
@@ -300,11 +315,12 @@ export default function ScheduleConsole({ session }) {
 
   const addEvent = async () => {
     if (!form.unit.trim() || !form.name.trim()) return;
+    if (form.type === "showing" && !["admin", "building_manager"].includes(session?.role)) return;
     if (apiMode) {
       await api.post("/events", { type: form.type, date: form.date, time: form.time,
         unit_number: form.unit.trim() === "—" ? null : form.unit.trim(),
         contact_name: form.name.trim(), contact_info: form.contact.trim(),
-        assignee_id: form.assignee_id || session?.accountId, duration_min: TYPE_META[form.type]?.dur ?? 30 });
+        assignee_id: form.assignee_id || null, duration_min: TYPE_META[form.type]?.dur ?? 30 });
       await reloadEvents(); setForm({ ...form, open: false, unit: "", name: "", contact: "" }); return;
     }
     const e = { id: "e" + Date.now(), type: form.type, date: form.date, time: form.time,
@@ -314,6 +330,10 @@ export default function ScheduleConsole({ session }) {
     save({ events: [...events, e] });
     setForm({ ...form, open: false, unit: "", name: "", contact: "" });
   };
+
+  const canManageEvent = useCallback((ev) =>
+    ev.type !== "showing" || ["admin", "building_manager"].includes(session?.role),
+  [session?.role]);
 
   const todayIsBiz = isBiz(today, holidays);
 
@@ -345,7 +365,9 @@ export default function ScheduleConsole({ session }) {
             <option value="all">All staff schedules</option>
             {owners.map((owner) => <option key={owner} value={owner}>{owner}</option>)}
           </select>}
-          <button className="sc-btn" onClick={() => setForm({ ...form, open: !form.open, date: today })}>
+          <button className="sc-btn" onClick={() => setForm({ ...form, open: !form.open, date: today,
+            type: session?.role === "property_manager" && form.type === "showing" ? "signing" : form.type,
+            assignee_id: "" })}>
             New booking
           </button>
         </div>
@@ -353,8 +375,10 @@ export default function ScheduleConsole({ session }) {
 
       {form.open && (
         <div className="sc-form">
-          <select className="sc-sel" value={form.type} onChange={(e) => setForm({ ...form, type: e.target.value })}>
-            {Object.entries(TYPE_META).map(([k, v]) => <option key={k} value={k}>{v.label}</option>)}
+          <select className="sc-sel" value={form.type} onChange={(e) => setForm({ ...form, type: e.target.value, assignee_id: "" })}>
+            {Object.entries(TYPE_META)
+              .filter(([k]) => k !== "showing" || ["admin", "building_manager"].includes(session?.role))
+              .map(([k, v]) => <option key={k} value={k}>{v.label}</option>)}
           </select>
           <input className="sc-in" placeholder="Unit e.g. 370-412" value={form.unit}
                  onChange={(e) => setForm({ ...form, unit: e.target.value })} />
@@ -366,9 +390,11 @@ export default function ScheduleConsole({ session }) {
                  onChange={(e) => setForm({ ...form, date: e.target.value })} />
           <input className="sc-in" type="time" value={form.time}
                  onChange={(e) => setForm({ ...form, time: e.target.value })} />
-          {session?.role === "admin" && <select className="sc-sel" value={form.assignee_id || session?.accountId || ""}
+          {session?.role === "admin" && <select className="sc-sel" value={form.assignee_id || ""}
             onChange={(e) => setForm({ ...form, assignee_id: e.target.value })}>
-            {staff.map((person) => <option key={person.id} value={person.id}>{person.full_name} · {person.role_code}</option>)}
+            <option value="">{form.type === "showing" ? "Assign automatically · Building Manager" : "Assign automatically"}</option>
+            {staff.filter((person) => form.type !== "showing" || person.role_code === "building_manager")
+              .map((person) => <option key={person.id} value={person.id}>{person.full_name} · {person.role_code}</option>)}
           </select>}
           <button className="sc-btn" onClick={addEvent}>Add</button>
         </div>
@@ -386,6 +412,7 @@ export default function ScheduleConsole({ session }) {
               {dayList.map((e) => {
                 const m = TYPE_META[e.type];
                 const isDone = !!done[e.id];
+                const canManage = canManageEvent(e);
                 return (
                   <div className={`sc-item ${isDone ? "done" : ""}`} key={e.id} style={{ "--c": m.color }}>
                     <div className="sc-time">
@@ -411,13 +438,15 @@ export default function ScheduleConsole({ session }) {
                           The lease has not been approved, so no signing link will go out. Handle it under Signing approval on the right.
                         </div>
                       )}
-                      <ConfirmBar ev={e} onSend={sendConfirmation} onMark={markConfirmation} />
+                      {canManage
+                        ? <ConfirmBar ev={e} onSend={sendConfirmation} onMark={markConfirmation} />
+                        : <div className="sc-block">View only · Building Manager handles this showing.</div>}
                     </div>
-                    <div className="sc-acts">
+                    {canManage && <div className="sc-acts">
                       <button className="sc-chk" onClick={() => toggleDone(e.id)}
                               aria-label={isDone ? "Mark not done" : "Mark done"}>{isDone ? "✓" : ""}</button>
                       <button className="sc-x" onClick={() => cancel(e.id)} aria-label="Cancel booking">×</button>
-                    </div>
+                    </div>}
                   </div>
                 );
               })}

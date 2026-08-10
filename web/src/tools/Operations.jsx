@@ -107,6 +107,9 @@ export default function Operations() {
   const [newMo, setNewMo] = useState(false);
 
   const isAdmin = session?.role === "admin";
+  const canViewShowings = ["admin", "building_manager", "property_manager"].includes(session?.role);
+  const canEditShowings = isAdmin || session?.role === "building_manager";
+  const canPmOperations = isAdmin || session?.role === "property_manager";
   const who = session?.name || "unsigned";
 
   useEffect(() => {
@@ -133,6 +136,19 @@ export default function Operations() {
   }, []);
 
   useEffect(() => { const t = setInterval(() => setTick((x) => x + 1), 60000); return () => clearInterval(t); }, []);
+
+  /* This page contains two different jobs.  A PM can release keys after the
+   lease is signed and run a move-out, while the on-site BM records showing
+   outcomes.  PM can read showing progress for the next signing step, but only
+   BM and Admin can record or change the outcome. */
+  useEffect(() => {
+    if (!session) return;
+    const allowed = [
+      ...(canViewShowings ? ["showings"] : []),
+      ...(canPmOperations ? ["keys", "moveout"] : []),
+    ];
+    if (!allowed.includes(tab)) setTab(allowed[0] || "showings");
+  }, [session, canViewShowings, canPmOperations, tab]);
 
   const persist = useCallback(async (k, v) => {
     setSaveState("saving");
@@ -296,19 +312,19 @@ export default function Operations() {
       </header>
 
       <nav className="op-tabs">
-        <button className={tab === "showings" ? "on" : ""} onClick={() => setTab("showings")}>
+        {canViewShowings && <button className={tab === "showings" ? "on" : ""} onClick={() => setTab("showings")}>
           Showing outcomes {showQueue.pend.length > 0 && <i className="op-b">{showQueue.pend.length}</i>}
-        </button>
-        <button className={tab === "keys" ? "on" : ""} onClick={() => setTab("keys")}>
+        </button>}
+        {canPmOperations && <button className={tab === "keys" ? "on" : ""} onClick={() => setTab("keys")}>
           Release keys {pendingRelease > 0 && <i className="op-b">{pendingRelease}</i>}
-        </button>
-        <button className={tab === "moveout" ? "on" : ""} onClick={() => setTab("moveout")}>
+        </button>}
+        {canPmOperations && <button className={tab === "moveout" ? "on" : ""} onClick={() => setTab("moveout")}>
           Move-outs {openMo.length > 0 && <i className="op-b">{openMo.length}</i>}
-        </button>
+        </button>}
       </nav>
 
       {/* ═══════ Showing outcomes ═══════ */}
-      {tab === "showings" && (
+      {canViewShowings && tab === "showings" && (
         <div className="op-body">
           <p className="op-note">
             A prompt appears {CONFIRM_AFTER_MIN} minutes after the booked time and turns overdue at {OVERDUE_AFTER_MIN}.
@@ -321,6 +337,7 @@ export default function Operations() {
             <div className="op-queue">
               {showQueue.pend.map(({ e, at, mins, overdue }) => (
                 <ShowConfirm key={e.id} ev={e} at={at} mins={mins} overdue={overdue}
+                             readOnly={!canEditShowings}
                              onRecord={(o, r, n) => recordOutcome(e.id, o, r, n)} />
               ))}
             </div>
@@ -361,7 +378,7 @@ export default function Operations() {
       )}
 
       {/* ═══════ Move-out ═══════ */}
-      {tab === "keys" && (
+      {canPmOperations && tab === "keys" && (
         <div className="op-body">
           <KeyRelease releases={releases} signedLeases={signedLeases}
             canRelease={["admin", "property_manager"].includes(session?.role)}
@@ -369,7 +386,7 @@ export default function Operations() {
         </div>
       )}
 
-      {tab === "moveout" && (
+      {canPmOperations && tab === "moveout" && (
         <div className="op-body">
           <div className="op-barrow">
             <p className="op-note" style={{ margin: 0, flex: 1 }}>
@@ -479,7 +496,7 @@ export default function Operations() {
 
 /* ============================ Sub-components ============================ */
 
-function ShowConfirm({ ev, at, mins, overdue, onRecord }) {
+function ShowConfirm({ ev, at, mins, overdue, readOnly, onRecord }) {
   const [pick, setPick] = useState(null);
   const [reason, setReason] = useState("");
   const [note, setNote] = useState("");
@@ -499,26 +516,30 @@ function ShowConfirm({ ev, at, mins, overdue, onRecord }) {
         <strong>{ev.name}</strong>
         <span className="op-dim">{ev.contact}</span>
       </div>
-      <div className="op-q">How did the showing go?</div>
-      <div className="op-opts">
-        {OUTCOMES.map((o) => (
-          <button key={o.k} className={pick === o.k ? "on" : ""} style={{ "--c": o.color }}
-                  onClick={() => setPick(o.k)}>{o.label}</button>
-        ))}
-      </div>
-      {needReason && (
-        <select className="op-sel" value={reason} onChange={(e) => setReason(e.target.value)}>
-          <option value="">Reason it was not for them (optional, but worth filling)</option>
-          {NOT_INTERESTED_REASONS.map((r) => <option key={r}>{r}</option>)}
-        </select>
-      )}
-      {pick && (
-        <input className="op-in" value={note} placeholder="Anything to add (optional)"
-               onChange={(e) => setNote(e.target.value)} />
-      )}
-      <button className="op-btn" disabled={!pick} onClick={() => onRecord(pick, reason, note)}>
-        Record the outcome
-      </button>
+      {readOnly ? (
+        <div className="op-note">Building Manager records the outcome. Property Manager has view-only access for the follow-up and signing steps.</div>
+      ) : <>
+        <div className="op-q">How did the showing go?</div>
+        <div className="op-opts">
+          {OUTCOMES.map((o) => (
+            <button key={o.k} className={pick === o.k ? "on" : ""} style={{ "--c": o.color }}
+                    onClick={() => setPick(o.k)}>{o.label}</button>
+          ))}
+        </div>
+        {needReason && (
+          <select className="op-sel" value={reason} onChange={(e) => setReason(e.target.value)}>
+            <option value="">Reason it was not for them (optional, but worth filling)</option>
+            {NOT_INTERESTED_REASONS.map((r) => <option key={r}>{r}</option>)}
+          </select>
+        )}
+        {pick && (
+          <input className="op-in" value={note} placeholder="Anything to add (optional)"
+                 onChange={(e) => setNote(e.target.value)} />
+        )}
+        <button className="op-btn" disabled={!pick} onClick={() => onRecord(pick, reason, note)}>
+          Record the outcome
+        </button>
+      </>}
     </div>
   );
 }

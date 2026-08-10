@@ -15,10 +15,24 @@ const humanAssigner = (c) => {
   return user?.role === "admin" || user?.role === "building_manager";
 };
 
+const activeBuildingManager = async (sql, requestedId = null) => {
+  if (requestedId) {
+    const [requested] = await sql`
+      SELECT id, full_name FROM users
+      WHERE id = ${requestedId} AND role_code = 'building_manager' AND is_active`;
+    if (requested) return requested;
+  }
+  const [fallback] = await sql`
+    SELECT id, full_name FROM users
+    WHERE role_code = 'building_manager' AND is_active
+    ORDER BY full_name, id LIMIT 1`;
+  return fallback ?? null;
+};
+
 /* ---------- Shared staff schedule ---------- */
 r.get("/events", require_("schedule.view"), async (c) => c.json({
   events: await c.get("db")`
-    SELECT e.*, COALESCE(e.assignee, u.full_name) AS owner_name
+    SELECT e.*, u.role_code AS assignee_role, COALESCE(e.assignee, u.full_name) AS owner_name
     FROM events e LEFT JOIN users u ON u.id = e.assignee_id
     ORDER BY e.starts_at`,
   staff: await c.get("db")`
@@ -33,9 +47,16 @@ r.post("/events", require_("schedule.view"), async (c) => {
   const allowed = new Set(["showing", "signing", "keys", "maintenance", "followup", "review"]);
   if (!allowed.has(body.type)) return c.json({ code: "INVALID_EVENT_TYPE" }, 400);
   const user = c.get("user");
-  const assigneeId = user.role === "admin" && body.assignee_id ? body.assignee_id : user.id;
-  const [assignee] = await c.get("db")`SELECT full_name FROM users WHERE id = ${assigneeId} AND is_active`;
+  if (body.type === "showing" && !["admin", "building_manager"].includes(user.role))
+    return c.json({ code: "SHOWINGS_BUILDING_MANAGER_ONLY" }, 403);
+  const sql = c.get("db");
+  const assignee = body.type === "showing"
+    ? await activeBuildingManager(sql, user.role === "admin" ? body.assignee_id : user.id)
+    : (await sql`SELECT id, full_name FROM users
+        WHERE id = ${user.role === "admin" && body.assignee_id ? body.assignee_id : user.id}
+          AND is_active`)[0];
   if (!assignee) return c.json({ code: "ACTIVE_ASSIGNEE_REQUIRED" }, 400);
+  const assigneeId = assignee.id;
   const [event] = await c.get("db")`
     INSERT INTO events (id, type, unit_number, contact_name, contact_info,
       assignee_id, assignee, starts_at, duration_min, blocking, state, created_via,
@@ -60,6 +81,10 @@ r.patch("/events/:id", require_("schedule.view"), async (c) => {
   if (body.signing_state && !signing.has(body.signing_state))
     return c.json({ code: "INVALID_SIGNING_STATE" }, 400);
   const user = c.get("user");
+  const [existing] = await c.get("db")`SELECT type FROM events WHERE id = ${c.req.param("id")}`;
+  if (!existing) return c.json({ code: "NOT_FOUND" }, 404);
+  if (existing.type === "showing" && !["admin", "building_manager"].includes(user.role))
+    return c.json({ code: "SHOWINGS_BUILDING_MANAGER_ONLY" }, 403);
   const [event] = await c.get("db")`
     UPDATE events SET
       state = COALESCE(${body.state ?? null}, state),

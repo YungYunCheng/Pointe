@@ -4433,6 +4433,43 @@ ON CONFLICT DO NOTHING;
 
 COMMIT;
 
+
+-- ============================================================
+-- MIGRATION 015 — SHOWINGS BELONG TO BUILDING MANAGER
+-- ============================================================
+
+BEGIN;
+
+DELETE FROM role_permissions
+WHERE role_code = 'property_manager'
+  AND permission_code IN ('showings.manage', 'schedule.showings');
+
+INSERT INTO role_permissions (role_code, permission_code) VALUES
+  ('admin', 'showings.manage'),
+  ('admin', 'schedule.showings'),
+  ('building_manager', 'showings.manage'),
+  ('building_manager', 'schedule.showings')
+ON CONFLICT DO NOTHING;
+
+WITH preferred_bm AS (
+  SELECT id, full_name
+  FROM users
+  WHERE role_code = 'building_manager' AND is_active
+  ORDER BY full_name, id
+  LIMIT 1
+)
+UPDATE events AS e
+SET assignee_id = preferred_bm.id,
+    assignee = preferred_bm.full_name
+FROM preferred_bm
+WHERE e.type = 'showing'
+  AND (
+    e.assignee_id IS DISTINCT FROM preferred_bm.id
+    OR e.assignee IS DISTINCT FROM preferred_bm.full_name
+  );
+
+COMMIT;
+
 -- ═══════════════════════════════════════════════════════════════════════
 --   Check it landed
 -- ═══════════════════════════════════════════════════════════════════════
