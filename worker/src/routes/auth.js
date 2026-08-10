@@ -43,7 +43,7 @@ r.post("/public/auth/login", async (c) => {
   let needsReset = false;
   if (u?.is_active && u.password_hash) {
     try {
-      ok = await verifyPassword(password, u);
+      ok = await verifyPassword(password, u, sql);
     } catch (e) {
       // A hash made by the old container under Argon2id or scrypt. Neither can
       // be checked in this runtime, so say that rather than letting it read as
@@ -87,7 +87,7 @@ r.post("/public/auth/login", async (c) => {
     // The password was verified, so the plaintext is in hand. This is the one
     // moment it can be upgraded without asking anybody to do anything.
     if (needsRehash(u)) {
-      const h = await hashPassword(password);
+      const h = await hashPassword(password, tx);
       await tx`UPDATE users SET password_algo = ${h.algo}, password_salt = ${h.salt},
         password_hash = ${h.hash}, password_params = ${h.params} WHERE id = ${u.id}`;
     }
@@ -151,7 +151,7 @@ r.post("/auth/change-password", async (c) => {
   if (issues.length) return c.json({ code: "PASSWORD_TOO_WEAK", issues }, 400);
 
   const [u] = await sql`SELECT * FROM users WHERE id = ${actor.id}`;
-  if (!u || !await verifyPassword(current, u))
+  if (!u || !await verifyPassword(current, u, sql))
     return c.json({ code: "INVALID_CURRENT_PASSWORD" }, 401);
 
   const history = await sql`SELECT * FROM password_history WHERE user_id = ${u.id}
@@ -160,12 +160,12 @@ r.post("/auth/change-password", async (c) => {
     password_hash: x.hash, password_salt: x.salt,
     password_algo: x.algo, password_params: x.params }))]) {
     try {
-      if (await verifyPassword(password, old))
+      if (await verifyPassword(password, old, sql))
         return c.json({ code: "PASSWORD_RECENTLY_USED", within: PASSWORD_HISTORY }, 400);
     } catch { /* an older unsupported hash cannot be compared */ }
   }
 
-  const h = await hashPassword(password);
+  const h = await hashPassword(password, sql);
   await sql.begin(async (tx) => {
     if (u.password_hash)
       await tx`INSERT INTO password_history (id, user_id, hash, salt, algo, params)
@@ -249,13 +249,13 @@ r.post("/public/auth/reset", async (c) => {
     try {
       same = await verifyPassword(password, {
         password_hash: old.hash, password_salt: old.salt,
-        password_algo: old.algo, password_params: old.params });
+        password_algo: old.algo, password_params: old.params }, sql);
     } catch { /* an old algorithm we cannot check; treat as not matching */ }
     if (same)
       return c.json({ code: "PASSWORD_RECENTLY_USED", within: PASSWORD_HISTORY }, 400);
   }
 
-  const h = await hashPassword(password);
+  const h = await hashPassword(password, sql);
   try {
     await sql.begin(async (tx) => {
     const [claimed] = await tx`UPDATE password_reset_tokens SET used_at = now()

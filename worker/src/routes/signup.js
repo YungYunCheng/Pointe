@@ -251,7 +251,7 @@ r.post("/public/verify/:token", async (c) => {
       if (new Date(v.expires_at) < new Date())
         throw Object.assign(new Error("EXPIRED"), { status: 410 });
 
-      const h = await hashPassword(password);
+      const h = await hashPassword(password, tx);
 
       if (v.purpose === "tenant_claim") {
         // The lease is re-checked here, not trusted from when the email went
@@ -492,7 +492,7 @@ r.post("/public/signup", async (c) => {
   }
 
   const raw = randToken();
-  const h = await hashPassword(password);
+  const h = await hashPassword(password, sql);
 
   await sql.begin(async (tx) => {
     // Created straight away, unverified. Keeping the password in a token row
@@ -704,4 +704,3 @@ const maskEmail = (e) => {
 };
 
 export default r;
-

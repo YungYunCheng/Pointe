@@ -181,7 +181,7 @@ r.post("/public/tenant/login", async (c) => {
   let ok = false;
   try {
     ok = !!(a?.is_active && a.email_verified_at && a.password_hash &&
-            await verifyPassword(password, a));
+            await verifyPassword(password, a, sql));
   } catch (e) {
     if (e.code === "PASSWORD_NEEDS_RESET")
       return c.json({ code: "PASSWORD_NEEDS_RESET" }, 409);
@@ -874,7 +874,7 @@ r.post("/public/tenant/reset", async (c) => {
       if (new Date(v.expires_at) < new Date())
         throw Object.assign(new Error("EXPIRED"), { status: 410 });
 
-      const h = await hashPassword(password);
+      const h = await hashPassword(password, tx);
       await tx`UPDATE tenant_accounts SET password_algo = ${h.algo},
         password_salt = ${h.salt}, password_hash = ${h.hash},
         password_params = ${h.params}, password_changed_at = now(),
