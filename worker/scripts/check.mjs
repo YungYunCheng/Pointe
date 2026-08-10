@@ -73,9 +73,16 @@ const known = new Set([
 ]);
 
 for (const { path, text } of files) {
+  // A CTE is a statement-local relation, not a schema table. Keep checking
+  // the real tables referenced inside it, but do not report the CTE's own
+  // name when a later clause reads from or updates it.
+  const ctes = new Set(
+    [...text.matchAll(/(?:WITH|,)\s*(\w+)\s+AS\s+(?:MATERIALIZED\s+)?\(/gi)]
+      .map((m) => m[1].toLowerCase()),
+  );
   const referenced = [...text.matchAll(/(?:FROM|INTO|UPDATE|JOIN)\s+(\w+)/g)]
     .map((m) => m[1])
-    .filter((t) => /^[a-z][a-z0-9_]*$/.test(t));
+    .filter((t) => /^[a-z][a-z0-9_]*$/.test(t) && !ctes.has(t));
 
   for (const t of new Set(referenced))
     if (!known.has(t))
@@ -151,4 +158,3 @@ if (!problems.length && !warnings.length)
   console.log("\n  Nothing to report.\n");
 
 process.exit(problems.length ? 1 : 0);
-
