@@ -2,6 +2,7 @@ import React, { useState, useEffect, Suspense, lazy } from "react";
 import { createRoot } from "react-dom/client";
 import { BrowserRouter, Routes, Route, NavLink, Navigate, useLocation } from "react-router-dom";
 import { applyTheme, ROLE_THEME, MizarMark, BRAND_CSS, roleColor } from "./lib/theme.jsx";
+import api from "./lib/api.js";
 
 /* ============================================================
    Entry point and shell
@@ -72,18 +73,28 @@ function useSession() {
     let alive = true;
     const load = async () => {
       try {
-        const r = await window.storage?.get?.("baydo:session");
-        const s = r?.value ? JSON.parse(r.value) : null;
-        if (alive) setSession(s);
+        const { user } = await api.me();
+        const s = { accountId: user.id, name: user.name, email: user.email,
+          role: user.role, at: new Date().toISOString(),
+          must_change_password: !!user.mustChangePassword };
+        try { await window.storage?.set?.("baydo:session", JSON.stringify(s)); } catch {}
+        if (alive) setSession(user.mustChangePassword ? null : s);
       } catch {
+        try { await window.storage?.delete?.("baydo:session"); } catch {}
         if (alive) setSession(null);
       }
     };
     load();
     const onOut = () => setSession(null);
+    const onIn = () => load();
     window.addEventListener("baydo:signed-out", onOut);
-    const poll = setInterval(load, 3000);   // picks up sign-in from the auth tool
-    return () => { alive = false; clearInterval(poll); window.removeEventListener("baydo:signed-out", onOut); };
+    window.addEventListener("baydo:signed-in", onIn);
+    const poll = setInterval(load, 60000);
+    return () => {
+      alive = false; clearInterval(poll);
+      window.removeEventListener("baydo:signed-out", onOut);
+      window.removeEventListener("baydo:signed-in", onIn);
+    };
   }, []);
 
   return session;

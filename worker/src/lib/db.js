@@ -60,3 +60,4 @@ export async function lockRow(tx, table, column, value) {
     SELECT * FROM ${tx(table)} WHERE ${tx(column)} = ${value} FOR UPDATE`;
   return row ?? null;
 }
+

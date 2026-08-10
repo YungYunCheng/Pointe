@@ -1,6 +1,6 @@
 import React, { useState, useEffect, useMemo, useCallback } from "react";
 import { createRoot } from "react-dom/client";
-import { BrowserRouter, Routes, Route, NavLink, Link } from "react-router-dom";
+import { BrowserRouter, Routes, Route, NavLink, Link, Navigate, useLocation } from "react-router-dom";
 import { LOCALES } from "./lib/i18n.js";
 import { LocaleProvider, useT } from "./lib/locale.jsx";
 import TenantChat from "./TenantChat.jsx";
@@ -9,6 +9,7 @@ import Booking from "./pages/Booking.jsx";
 import Apply from "./pages/Apply.jsx";
 import { Privacy, ConfirmReply } from "./pages/Privacy.jsx";
 import Sign from "./pages/Sign.jsx";
+import { Signup, VerifySignup, Claim, ResetPassword } from "./pages/Account.jsx";
 
 /* ============================================================
    BAYDO POINTE — tenant site
@@ -320,6 +321,35 @@ function Building() {
   );
 }
 
+/* ---------- account gate for viewing / application ---------- */
+function RequireTenantSession({ children }) {
+  const location = useLocation();
+  const [ready, setReady] = useState(false);
+  const [signedIn, setSignedIn] = useState(false);
+
+  useEffect(() => {
+    let live = true;
+    (async () => {
+      try {
+        const r = await fetch("/api/tenant/me", { credentials: "include" });
+        if (live) setSignedIn(r.ok);
+      } catch {
+        if (live) setSignedIn(false);
+      } finally {
+        if (live) setReady(true);
+      }
+    })();
+    return () => { live = false; };
+  }, []);
+
+  if (!ready) return <div className="bt-loading">Checking account…</div>;
+  if (!signedIn) {
+    const next = `${location.pathname}${location.search}`;
+    return <Navigate to={`/portal?next=${encodeURIComponent(next)}`} replace />;
+  }
+  return children;
+}
+
 /* ---------- app ---------- */
 function Site() {
   return (
@@ -330,11 +360,15 @@ function Site() {
           <Route path="/" element={<Home />} />
           <Route path="/suites" element={<Suites />} />
           <Route path="/building" element={<Building />} />
-          <Route path="/book" element={<Booking />} />
-          <Route path="/apply" element={<Apply />} />
+          <Route path="/book" element={<RequireTenantSession><Booking /></RequireTenantSession>} />
+          <Route path="/apply" element={<RequireTenantSession><Apply /></RequireTenantSession>} />
           <Route path="/privacy" element={<Privacy />} />
           <Route path="/confirm" element={<ConfirmReply />} />
           <Route path="/sign/:token" element={<Sign />} />
+          <Route path="/signup" element={<Signup />} />
+          <Route path="/verify" element={<VerifySignup />} />
+          <Route path="/claim" element={<Claim />} />
+          <Route path="/reset" element={<ResetPassword />} />
           <Route path="/portal/*" element={<Portal />} />
           <Route path="*" element={<Home />} />
         </Routes>

@@ -1,7 +1,16 @@
 import { Hono } from "hono";
 import { connect, closeAll } from "./lib/db.js";
 import { runDailyJobs, runHourlyJobs } from "./lib/jobs.js";
+import { require_, tenantUnit, mustBeTheirs, audit } from "./lib/auth.js";
 import health from "./routes/health.js";
+import auth from "./routes/auth.js";
+import core from "./routes/core.js";
+import tenant from "./routes/tenant.js";
+import signup from "./routes/signup.js";
+import renewals from "./routes/renewals.js";
+import increases from "./routes/increases.js";
+import leases from "./routes/leases.js";
+import payments from "./routes/payments.js";
 
 /* ============================================================
    Baydo Pointe — one API on Cloudflare Workers
@@ -27,9 +36,54 @@ import health from "./routes/health.js";
 
 const app = new Hono();
 
+/* API responses carry the browser protections here so a newly added route
+   cannot forget them. Cloudflare may add more at the edge; these are the
+   application minimums. */
+app.use("*", async (c, next) => {
+  await next();
+  c.header("X-Content-Type-Options", "nosniff");
+  c.header("X-Frame-Options", "DENY");
+  c.header("Referrer-Policy", "no-referrer");
+  c.header("Permissions-Policy", "camera=(), microphone=(), geolocation=()");
+  c.header("Cache-Control", "no-store");
+});
+
+/* Cookie-authenticated writes must come from one of our own front ends.
+   SameSite is useful, but it is not the whole CSRF boundary when two sites
+   share a parent domain. Requests with no Origin are kept for cron/CLI API
+   clients that authenticate with an Authorization header. */
+app.use("/api/*", async (c, next) => {
+  const method = c.req.method.toUpperCase();
+  if (!["GET", "HEAD", "OPTIONS"].includes(method)) {
+    const origin = c.req.header("origin");
+    const allowed = new Set([c.env.PUBLIC_URL, c.env.PUBLIC_TENANT_URL].filter(Boolean));
+    if (origin && !allowed.has(origin)) return c.json({ code: "ORIGIN_NOT_ALLOWED" }, 403);
+    const bearerClient = (c.req.header("authorization") ?? "")
+      .toLowerCase().startsWith("bearer ");
+    const cookieClient = /(?:^|;\s*)baydo_(?:tenant_)?session=/
+      .test(c.req.header("cookie") ?? "");
+    if (!origin && cookieClient && !bearerClient)
+      return c.json({ code: "ORIGIN_REQUIRED" }, 403);
+
+    const length = Number(c.req.header("content-length") ?? 0);
+    if (length > 1_048_576) return c.json({ code: "PAYLOAD_TOO_LARGE" }, 413);
+  }
+  return next();
+});
+
 /* One connection per request. A Worker has no process to hold a pool in,
    which is what Hyperdrive is for — it pools on Cloudflare's side. */
 app.use("/api/*", async (c, next) => {
+  // The liveness check deliberately does not need a database binding.
+  if (c.req.path === "/api/health") return next();
+  // Reject an unauthenticated private request before opening Postgres. Public
+  // routes and requests carrying a credential still need the database.
+  const publicRoute = c.req.path.startsWith("/api/public/");
+  const authHeader = c.req.header("authorization") ?? "";
+  const cookies = c.req.header("cookie") ?? "";
+  const hasCredential = authHeader.toLowerCase().startsWith("bearer ") ||
+    /(?:^|;\s*)baydo_(?:tenant_)?session=/.test(cookies);
+  if (!publicRoute && !hasCredential) return next();
   c.set("db", connect(c.env));
   try {
     await next();
@@ -51,20 +105,42 @@ app.use("/api/*", async (c, next) => {
   // Open, so a monitor does not need a credential.
   if (path === "/api/health") return next();
 
+  // Signing in is how a session is obtained, so it cannot require one. It
+  // lives under /api/public/auth/ for exactly that reason rather than being
+  // an exception listed here — an exception list is a thing that grows.
+
   if (path.startsWith(PUBLIC_PREFIX)) {
-    // Rate limited by address. The alternative is an account wall in front of
-    // "how much is the rent", or an open bill.
-    const ok = await withinRate(c.env, c.req.header("cf-connecting-ip") ?? "unknown");
-    if (!ok) return c.json({ code: "RATE_LIMITED" }, 429);
+    // Rate limited by address, in the bucket that matches what the call
+    // costs. The alternative to a limit is an account wall in front of "how
+    // much is the rent", or an open bill.
+    const ip = c.req.header("cf-connecting-ip") ?? "unknown";
+    const bucket = bucketFor(path, c.req.method);
+    if (!await withinRate(c.env, ip, bucket))
+      return c.json({
+        code: "RATE_LIMITED",
+        // Says which limit, so somebody hitting the browse limit is not left
+        // wondering whether their password is wrong.
+        detail: bucket === "auth"
+          ? "Too many sign-in attempts from this address. Try again in a few minutes."
+          : "Too many requests. Try again shortly.",
+      }, 429);
     return next();
   }
 
-  const token = bearer(c);
+  const token = bearer(c, path.startsWith(TENANT_PREFIX) ? "tenant" : "staff");
   if (!token) return c.json({ code: "NOT_AUTHENTICATED" }, 401);
 
   if (path.startsWith(TENANT_PREFIX)) {
     const tenant = await tenantSession(c, token);
     if (!tenant) return c.json({ code: "SESSION_INVALID" }, 401);
+
+    // A tenant route must not take a unit from the caller. If one ever does,
+    // this refuses it here rather than trusting every route to check — the
+    // check that has to be remembered is the check that gets forgotten.
+    const claimed = c.req.query("unit") ?? c.req.param?.("unit");
+    if (claimed && claimed !== tenant.unit)
+      return c.json({ code: "NOT_FOUND" }, 404);
+
     c.set("tenant", tenant);
     return next();
   }
@@ -73,16 +149,20 @@ app.use("/api/*", async (c, next) => {
   // separate so a mistake in one cannot produce access to the other.
   const user = await staffSession(c, token);
   if (!user) return c.json({ code: "SESSION_INVALID" }, 401);
+  if (user.mustChangePassword && !path.startsWith("/api/auth/"))
+    return c.json({ code: "PASSWORD_CHANGE_REQUIRED" }, 403);
   c.set("user", user);
   return next();
 });
 
 /* ---------- Sessions ---------- */
 
-const bearer = (c) => {
+const bearer = (c, kind) => {
   const h = c.req.header("authorization") ?? "";
   if (h.toLowerCase().startsWith("bearer ")) return h.slice(7).trim();
-  return (c.req.header("cookie") ?? "").match(/baydo_session=([^;]+)/)?.[1] ?? null;
+  const cookie = kind === "tenant" ? "baydo_tenant_session" : "baydo_session";
+  const escaped = cookie.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+  return (c.req.header("cookie") ?? "").match(new RegExp(`(?:^|;\\s*)${escaped}=([^;]+)`))?.[1] ?? null;
 };
 
 async function staffSession(c, token) {
@@ -90,7 +170,7 @@ async function staffSession(c, token) {
   const hash = await sha256(token);
   const [row] = await sql`
     SELECT s.id AS session_id, s.expires_at, u.id, u.email, u.full_name,
-           u.role_code, u.is_active
+           u.role_code, u.is_active, u.must_change_password, u.password_expires_at
     FROM sessions s JOIN users u ON u.id = s.user_id
     WHERE s.token_hash = ${hash} AND s.revoked_at IS NULL`;
   if (!row || !row.is_active) return null;
@@ -109,8 +189,11 @@ async function staffSession(c, token) {
       WHERE user_id = ${row.id} AND effect = 'revoke'
         AND (expires_at IS NULL OR expires_at > now())`;
 
+  const passwordExpired = row.password_expires_at && new Date(row.password_expires_at) < new Date();
   return { id: row.id, email: row.email, name: row.full_name, role: row.role_code,
-           perms: new Set(perms.map((x) => x.p)), sessionId: row.session_id };
+           perms: new Set(perms.map((x) => x.p)), sessionId: row.session_id,
+           mustChangePassword: !!row.must_change_password || !!passwordExpired,
+           passwordExpiresAt: row.password_expires_at ?? null };
 }
 
 async function tenantSession(c, token) {
@@ -126,34 +209,49 @@ async function tenantSession(c, token) {
            leaseId: row.lease_id, locale: row.locale, sessionId: row.session_id };
 }
 
-/** Every staff route declares what it needs, so "who can do this" is answered
- *  in the route rather than in a document that drifts. */
-export const require_ = (permission) => async (c, next) => {
-  const user = c.get("user");
-  if (!user?.perms?.has(permission))
-    return c.json({ code: "FORBIDDEN", needs: permission }, 403);
-  return next();
+
+
+
+/* ---------- Rate limiting ----------
+
+   Separate buckets, because the limits are protecting different things.
+
+   Browsing costs money — every availability call is a database query, and a
+   loop can spend a month of budget in an afternoon. Sixty in fifteen minutes
+   is generous for a person and useless for a script.
+
+   Password attempts cost an account. Ten in fifteen minutes across every
+   account from one address, on top of the five-attempt lock on each account,
+   so somebody working through a list of emails runs out of address before
+   they run out of guesses.
+
+   Sharing one bucket would mean a busy public page consuming the login
+   allowance, and a locked-out tenant would look identical to an attack.
+
+   KV is eventually consistent, so a limit is briefly generous across edges.
+   That is fine here: this stops loops and lists, not a determined attacker
+   with a botnet. */
+const RATE_BUCKETS = {
+  browse: { limit: 60, window: 900 },
+  auth:   { limit: 10, window: 900 },
+  write:  { limit: 30, window: 900 },
 };
 
-/** Only a tenant's own unit. Without this a tenant session could read any
-   suite by changing a number in the URL, which is the classic version of
-   this mistake. */
-export const ownUnit = (c, unit) => {
-  const t = c.get("tenant");
-  if (!t || t.unit !== unit)
-    throw Object.assign(new Error("NOT_YOUR_UNIT"), { status: 403, code: "NOT_YOUR_UNIT" });
-  return true;
-};
+function bucketFor(path, method) {
+  if (path.includes("/auth/") ||
+      /\/public\/(?:tenant\/(?:login|forgot|reset)|signup|verify)/.test(path))
+    return "auth";
+  if (method !== "GET") return "write";
+  return "browse";
+}
 
-/* KV is eventually consistent, so a limit is briefly generous across edges.
-   That is fine: this stops a loop spending a month's budget in an afternoon,
-   not a determined attacker. */
-async function withinRate(env, ip, limit = 60, windowSeconds = 900) {
+async function withinRate(env, ip, bucket = "browse") {
   if (!env.SESSIONS) return true;
-  const key = `rate:${ip}`;
+  const { limit, window } = RATE_BUCKETS[bucket] ?? RATE_BUCKETS.browse;
+  const key = `rate:${bucket}:${ip}`;
   const current = Number((await env.SESSIONS.get(key)) ?? 0);
   if (current >= limit) return false;
-  await env.SESSIONS.put(key, String(current + 1), { expirationTtl: windowSeconds });
+  await env.SESSIONS.put(key, String(current + 1), { expirationTtl: window });
   return true;
 }
 
@@ -193,10 +291,19 @@ app.route("/api", health);
    Public routes go under /api/public/, tenant routes under /api/tenant/.
    That prefix is the whole boundary now, so which one a route belongs in is
    worth being deliberate about. */
-// app.route("/api", auth);
-// app.route("/api", core);
+app.route("/api", auth);
+app.route("/api", core);
 // app.route("/api", accounting);
-// app.route("/api", tenant);
+app.route("/api", tenant);
+app.route("/api", signup);
+app.route("/api", renewals);
+app.route("/api", increases);
+app.route("/api", leases);
+app.route("/api", payments);
+
+/* Re-exported so a route can import either from here or from lib/auth.js.
+   The definitions live in lib so nothing imports the app. */
+export { require_, tenantUnit, mustBeTheirs, audit };
 
 export default {
   fetch: app.fetch,
@@ -211,7 +318,7 @@ export default {
   async scheduled(event, env, ctx) {
     const sql = connect(env);
     const hour = new Date(event.scheduledTime).getUTCHours();
-    if (hour === 7) ctx.waitUntil(runDailyJobs(sql, env));
-    else ctx.waitUntil(runHourlyJobs(sql, env));
+    const job = hour === 7 ? runDailyJobs(sql, env) : runHourlyJobs(sql, env);
+    ctx.waitUntil(job.finally(() => sql.end({ timeout: 5 }).catch(() => {})));
   },
 };

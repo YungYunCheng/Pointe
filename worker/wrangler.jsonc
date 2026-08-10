@@ -1,6 +1,6 @@
 {
   "$schema": "node_modules/wrangler/config-schema.json",
-  "name": "pointe-api",
+  "name": "pointe-backend",
   "main": "src/index.js",
   "compatibility_date": "2025-01-15",
 
@@ -17,10 +17,7 @@
   // Without this the front ends would be on one domain and the API on
   // another, and every request would carry a preflight and a SameSite
   // problem for the session cookie.
-  "routes": [
-    { "pattern": "staff.example.com/api/*", "zone_name": "example.com" },
-    { "pattern": "www.example.com/api/*", "zone_name": "example.com" }
-  ],
+  
 
   // Hyperdrive pools connections on Cloudflare's side. A Worker has no
   // long-lived process, so without it every request opens a new Postgres
@@ -32,7 +29,7 @@
   "hyperdrive": [
     {
       "binding": "DB",
-      "id": "REPLACE_WITH_HYPERDRIVE_ID",
+      "id": "1776a718ec8a4438a39b1d106733c4bb",
       "localConnectionString": "postgres://baydo:baydo@localhost:5432/baydo"
     }
   ],
@@ -48,7 +45,7 @@
   // both: a session that takes a second to appear on another edge is not a
   // problem, and a rate limit that is briefly generous is not either.
   "kv_namespaces": [
-    { "binding": "SESSIONS", "id": "REPLACE_WITH_KV_ID" }
+    { "binding": "SESSIONS", "id": "b72235fac137474eb276182c99c8c7a3" }
   ],
 
   // What ran on setInterval in the container. Cron on Workers is UTC.
@@ -70,3 +67,4 @@
   //   npx wrangler secret put SESSION_PEPPER
   // Anything in vars is visible in the dashboard and in this file.
 }
+

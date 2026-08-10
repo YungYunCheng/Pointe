@@ -9,7 +9,10 @@
     "deploy": "wrangler deploy",
     "upload": "wrangler versions upload",
     "tail": "wrangler tail",
-    "types": "wrangler types"
+    "types": "wrangler types",
+    "check": "node scripts/check.mjs",
+    "predeploy": "node scripts/check.mjs && node scripts/check-sql.mjs",
+    "check:sql": "node scripts/check-sql.mjs"
   },
   "dependencies": {
     "hono": "^4.6.14",

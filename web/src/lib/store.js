@@ -151,7 +151,7 @@ export function useResource(name, fallback = []) {
     if (!alive.current) return;
     setLocalMode(m);
 
-    if (m === "api" && getToken()) {
+    if (m === "api") {
       try {
         const res = await spec.load();
         if (!alive.current) return;

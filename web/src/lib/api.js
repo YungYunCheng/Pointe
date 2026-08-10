@@ -14,9 +14,10 @@
 const BASE = import.meta.env.VITE_API_URL || "";
 const TOKEN_KEY = "baydo:token";
 
-export const getToken = () => localStorage.getItem(TOKEN_KEY);
-export const setToken = (t) =>
-  t ? localStorage.setItem(TOKEN_KEY, t) : localStorage.removeItem(TOKEN_KEY);
+/* Browser sessions live only in an HttpOnly cookie. Remove any token left by
+   the prototype so script injection cannot copy a reusable credential. */
+export const getToken = () => null;
+export const setToken = () => localStorage.removeItem(TOKEN_KEY);
 
 /** Thrown for any non-2xx. Carries the server's message code so the
  *  caller can translate it rather than showing raw English. */
@@ -31,8 +32,6 @@ export class ApiError extends Error {
 
 async function request(method, path, body, opts = {}) {
   const headers = {};
-  const token = getToken();
-  if (token) headers.Authorization = `Bearer ${token}`;
 
   let payload = body;
   if (body && !(body instanceof FormData)) {
@@ -65,16 +64,15 @@ export const api = {
 
   /* ---- auth ---- */
   async login(email, password) {
-    const out = await request("POST", "/auth/login", { email, password });
-    setToken(out.token);
+    const out = await request("POST", "/public/auth/login", { email, password });
     return out.user;
   },
   async logout() {
     try { await request("POST", "/auth/logout"); } finally { setToken(null); }
   },
   me:             ()            => request("GET", "/auth/me"),
-  forgot:         (email)       => request("POST", "/auth/forgot", { email }),
-  reset:          (token, pw)   => request("POST", "/auth/reset", { token, password: pw }),
+  forgot:         (email)       => request("POST", "/public/auth/forgot", { email }),
+  reset:          (token, pw)   => request("POST", "/public/auth/reset", { token, password: pw }),
   changePassword: (cur, pw)     => request("POST", "/auth/change-password", { current: cur, password: pw }),
 
   /* ---- property ---- */

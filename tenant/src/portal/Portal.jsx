@@ -1,4 +1,5 @@
 import React, { useState, useEffect } from "react";
+import { Link, useNavigate, useSearchParams } from "react-router-dom";
 import { useT } from "../lib/locale.jsx";
 
 /* ============================================================
@@ -25,13 +26,35 @@ const OFFICE_PHONE = "306-974-1727";
 const STATE_KEY = {
   new: "repairs.statusNew", scheduled: "repairs.statusScheduled",
   in_progress: "repairs.statusProgress", done: "repairs.statusDone",
+  cancelled: "repairs.statusDone",
 };
 const STATE_COLOR = {
   new: "#B23A54", scheduled: "#C98A15", in_progress: "#1C6FA6", done: "#0E8577",
+  cancelled: "#6B7280",
 };
 
+const normaliseSession = (d) => ({
+  ...(d?.tenant || {}),
+  account_state: d?.account_state || (d?.unit ? "tenant" : "prospect"),
+  unit: d?.unit || d?.tenant?.unit || null,
+  lease: d?.lease || null,
+  term: d?.lease?.term_type || null,
+  leaseEnd: d?.lease?.end_date || null,
+  rent: Number(d?.lease?.rent || 0),
+  parking: d?.parking?.status === "assigned" ? d.parking.label : null,
+  waitlist: d?.parking?.status === "waiting" ? d.parking.waitlist_position : null,
+  balance: Number(d?.balance || 0),
+  overdue: Number(d?.overdue || 0),
+  charges: d?.charges || [],
+  counts: d?.counts || { viewings: 0, applications: 0, to_sign: 0 },
+  note: d?.note || null,
+});
+
 export default function Portal() {
-  const { t } = useT();
+  const { t, locale } = useT();
+  const navigate = useNavigate();
+  const [params] = useSearchParams();
+  const next = params.get("next");
   const [session, setSession] = useState(undefined);
   const [prefs, setPrefs] = useState({ allow_email: true, allow_sms: true,
                                        allow_marketing: false });
@@ -39,63 +62,78 @@ export default function Portal() {
 
   useEffect(() => {
     (async () => {
-      let saved = null;
-      try {
-        const r = await window.storage.get("baydo:tenant-session");
-        saved = r?.value ? JSON.parse(r.value) : null;
-      } catch {}
-      if (!saved?.token) { setSession(saved); return; }
-
-      // A stored session is not proof of a live one. Checking on load means an
-      // expired token sends the tenant to sign in rather than to a page of
-      // empty panels.
       try {
         const res = await fetch("/api/tenant/me", {
-          headers: { Authorization: `Bearer ${saved.token}` }, credentials: "include" });
+          credentials: "include" });
         if (res.ok) {
           const d = await res.json();
-          setSession({ ...saved, ...d.tenant, lease: d.lease, parking: d.parking,
-                       balance: d.balance });
+          setSession(normaliseSession(d));
         } else {
-          await window.storage.delete("baydo:tenant-session").catch(() => {});
           setSession(null);
         }
       } catch {
-        setSession(saved);   // offline: work from what we have
+        setSession(null);
       }
     })();
   }, []);
 
-  if (session === undefined) return <div className="bt-loading">{t("common.loading")}</div>;
-  if (!session) return <SignIn onIn={setSession} />;
+  useEffect(() => {
+    if (session && next?.startsWith("/")) {
+      navigate(next, { replace: true });
+    }
+  }, [session, next, navigate]);
+
+  const finishSignIn = async (signedInSession) => {
+    try {
+      const res = await fetch("/api/tenant/me", { credentials: "include" });
+      setSession(res.ok ? normaliseSession(await res.json()) : signedInSession);
+    } catch { setSession(normaliseSession({ tenant: signedInSession,
+      unit: signedInSession?.unit,
+      account_state: signedInSession?.unit ? "tenant" : "prospect" })); }
+    if (next?.startsWith("/")) navigate(next, { replace: true });
+  };
+
+  if (session === undefined) return <>
+    <div className="bt-loading">{t("common.loading")}</div>
+    <style>{PORTAL_CSS}</style>
+  </>;
+  if (!session) return <>
+    <SignIn onIn={finishSignIn} />
+    <style>{PORTAL_CSS}</style>
+  </>;
+
+  const isTenant = session.account_state === "tenant" && !!session.unit;
 
   return (
     <section className="bt-sec">
       <div className="bt-portal-h">
         <div>
           <h2>{t("portal.hello", { name: session.name })}</h2>
-          <span className="bt-dim">{t("portal.yourSuite", { unit: session.unit })}</span>
+          <span className="bt-dim">{isTenant
+            ? t("portal.yourSuite", { unit: session.unit }) : session.email}</span>
         </div>
         <button className="bt-btn bt-btn--ghost bt-btn--sm"
-                onClick={async () => { await window.storage.delete("baydo:tenant-session").catch(() => {});
-                                       setSession(null); }}>
+                onClick={async () => {
+                  await fetch("/api/tenant/logout", { method: "POST", credentials: "include" }).catch(() => {});
+                  setSession(null);
+                }}>
           {t("nav.signout")}
         </button>
       </div>
 
       <nav className="bt-ptabs">
-        {[["home", "portal.tabHome"], ["repairs", "portal.tabRepairs"],
+        {(isTenant ? [["home", "portal.tabHome"], ["repairs", "portal.tabRepairs"],
           ["notices", "portal.tabNotices"], ["rent", "portal.tabRent"],
-          ["docs", "portal.tabDocs"]].map(([k, label]) => (
+          ["docs", "portal.tabDocs"]] : [["home", "portal.tabHome"]]).map(([k, label]) => (
           <button key={k} className={tab === k ? "on" : ""} onClick={() => setTab(k)}>{t(label)}</button>
         ))}
       </nav>
 
-      {tab === "home"    && <Overview session={session} />}
-      {tab === "repairs" && <Repairs session={session} />}
-      {tab === "notices" && <Notices session={session} />}
-      {tab === "rent"    && <Rent session={session} />}
-      {tab === "docs"    && (<>
+      {tab === "home" && (isTenant ? <Overview session={session} /> : <ProspectHome session={session} />)}
+      {isTenant && tab === "repairs" && <Repairs session={session} />}
+      {isTenant && tab === "notices" && <Notices session={session} />}
+      {isTenant && tab === "rent"    && <Rent session={session} />}
+      {isTenant && tab === "docs"    && (<>
         <Docs />
         <ContactPreferences prefs={prefs} zh={locale === "zh"}
           onSave={async (v) => { setPrefs(v);
@@ -109,7 +147,7 @@ export default function Portal() {
 
 /* ---------- sign in ---------- */
 function SignIn({ onIn }) {
-  const { t } = useT();
+  const { t, locale } = useT();
   const [email, setEmail] = useState("");
   const [pw, setPw] = useState("");
   const [err, setErr] = useState("");
@@ -120,7 +158,7 @@ function SignIn({ onIn }) {
     if (!email.trim() || !pw) { setErr(t("common.error")); setBusy(false); return; }
 
     try {
-      const res = await fetch("/api/tenant/login", {
+      const res = await fetch("/api/public/tenant/login", {
         method: "POST", headers: { "Content-Type": "application/json" },
         credentials: "include",
         body: JSON.stringify({ email: email.trim(), password: pw }),
@@ -138,10 +176,8 @@ function SignIn({ onIn }) {
         setBusy(false); return;
       }
 
-      const { token, tenant } = await res.json();
-      const session = { ...tenant, token };
-      await window.storage.set("baydo:tenant-session", JSON.stringify(session)).catch(() => {});
-      onIn(session);
+      const { tenant } = await res.json();
+      onIn(tenant);
     } catch {
       setErr(t("common.error"));
     }
@@ -152,7 +188,7 @@ function SignIn({ onIn }) {
     if (!email.trim()) { setErr(t("portal.emailFirst")); return; }
     setBusy(true); setErr("");
     try {
-      await fetch("/api/tenant/forgot", {
+      await fetch("/api/public/tenant/forgot", {
         method: "POST", headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ email: email.trim() }),
       });
@@ -177,13 +213,20 @@ function SignIn({ onIn }) {
                onChange={(e) => setPw(e.target.value)} onKeyDown={(e) => e.key === "Enter" && go()} />
       </div>
       {err && <div className="bt-err">{err}</div>}
-      <button className="bt-btn" onClick={go} disabled={busy || !email.trim() || !pw}>
-        {busy ? t("common.loading") : t("portal.signIn")}
-      </button>
-      <button className="bt-linkbtn" onClick={forgot} disabled={busy}>
-        {t("portal.forgot")}
-      </button>
-      <p className="bt-hint" style={{ marginTop: 14 }}>{t("portal.firstTime")}</p>
+      <div className="bt-auth-actions">
+        <button className="bt-btn" onClick={go} disabled={busy || !email.trim() || !pw}>
+          {busy ? t("common.loading") : t("portal.signIn")}
+        </button>
+        <button className="bt-linkbtn" onClick={forgot} disabled={busy}>
+          {t("portal.forgot")}
+        </button>
+        <Link className="bt-linkbtn bt-linkbtn--muted" to="/claim">
+          {t("portal.firstTime")}
+        </Link>
+        <Link className="bt-linkbtn bt-linkbtn--muted" to="/signup">
+          {locale === "zh" ? "尚未簽約？建立租屋帳戶" : "Looking to rent? Create an account"}
+        </Link>
+      </div>
     </div></section>
   );
 }
@@ -213,6 +256,30 @@ function Overview({ session }) {
   );
 }
 
+function ProspectHome({ session }) {
+  const { locale } = useT();
+  const zh = locale === "zh";
+  return (
+    <div style={{ marginTop: 20 }}>
+      <div className="bt-panel">
+        <h3>{zh ? "你的租屋進度" : "Your rental progress"}</h3>
+        <p className="bt-body">{session.note || (zh
+          ? "簽署租約並由管理人員連結單位後，租金、維修與通知會出現在這裡。"
+          : "Rent, repairs and notices appear here after a lease is signed and staff connect your suite.")}</p>
+        <div className="bt-chips">
+          <span>{zh ? `看房預約 ${session.counts.viewings}` : `Viewings ${session.counts.viewings}`}</span>
+          <span>{zh ? `申請 ${session.counts.applications}` : `Applications ${session.counts.applications}`}</span>
+          <span>{zh ? `待簽文件 ${session.counts.to_sign}` : `To sign ${session.counts.to_sign}`}</span>
+        </div>
+        <div style={{ display: "flex", gap: 8, marginTop: 18, flexWrap: "wrap" }}>
+          <Link to="/book" className="bt-btn">{zh ? "預約看房" : "Book a viewing"}</Link>
+          <Link to="/apply" className="bt-btn bt-btn--ghost">{zh ? "送出申請" : "Apply"}</Link>
+        </div>
+      </div>
+    </div>
+  );
+}
+
 /* ---------- repairs ---------- */
 function Repairs({ session }) {
   const { t, date } = useT();
@@ -220,27 +287,31 @@ function Repairs({ session }) {
   const [open, setOpen] = useState(false);
   const [f, setF] = useState({ what: "", where: "", urgent: null, files: [] });
   const [busy, setBusy] = useState(false);
+  const [err, setErr] = useState("");
 
   const load = async () => {
     try {
-      const r = await window.storage.get("baydo:tenant-repairs");
-      const all = r?.value ? JSON.parse(r.value) : [];
-      setList(all.filter((x) => x.unit === session.unit));
+      const r = await fetch("/api/tenant/repairs", { credentials: "include" });
+      if (!r.ok) throw new Error("repairs");
+      const d = await r.json();
+      setList((d.repairs || []).map((x) => ({ ...x,
+        state: x.ticket_state || "new", where: x.where_in_unit,
+        createdAt: x.created_at, scheduledAt: x.scheduled_at })));
     } catch { setList([]); }
   };
-  useEffect(() => { load(); }, []);
+  useEffect(() => { load(); }, [session.unit]);
 
   const submit = async () => {
-    setBusy(true);
-    const rec = { id: "r" + Date.now().toString(36), unit: session.unit,
-                  what: f.what, where: f.where, urgent: f.urgent === true,
-                  photos: f.files.map((x) => x.name), state: "new",
-                  createdAt: new Date().toISOString() };
+    setBusy(true); setErr("");
     try {
-      const r = await window.storage.get("baydo:tenant-repairs");
-      const all = r?.value ? JSON.parse(r.value) : [];
-      await window.storage.set("baydo:tenant-repairs", JSON.stringify([...all, rec]));
-    } catch {}
+      const r = await fetch("/api/tenant/repairs", {
+        method: "POST", credentials: "include",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ what: f.what, where_in_unit: f.where,
+          urgent: f.urgent === true }),
+      });
+      if (!r.ok) throw new Error("repair");
+    } catch { setErr(t("common.error")); setBusy(false); return; }
     setF({ what: "", where: "", urgent: null, files: [] });
     setOpen(false); setBusy(false); load();
   };
@@ -284,12 +355,8 @@ function Repairs({ session }) {
                 <label>{t("repairs.where")}</label>
                 <input className="bt-in" value={f.where} onChange={(e) => setF({ ...f, where: e.target.value })} />
               </div>
-              <div className="bt-f">
-                <label>{t("repairs.photos")}</label>
-                <input className="bt-in" type="file" accept="image/*" multiple
-                       onChange={(e) => setF({ ...f, files: Array.from(e.target.files || []) })} />
-              </div>
               <p className="bt-hint">{t("repairs.entryConsent")}</p>
+              {err && <div className="bt-err">{err}</div>}
               <div style={{ display: "flex", gap: 8, marginTop: 14 }}>
                 <button className="bt-btn" disabled={!f.what.trim() || busy} onClick={submit}>
                   {t("repairs.submit")}
@@ -328,9 +395,10 @@ function Notices({ session }) {
   useEffect(() => {
     (async () => {
       try {
-        const r = await window.storage.get("baydo:entrynotices");
-        const all = r?.value ? JSON.parse(r.value) : [];
-        setList(all.filter((n) => n.unitId === session.unit && n.state === "sent"));
+        const r = await fetch("/api/tenant/notices", { credentials: "include" });
+        if (!r.ok) throw new Error("notices");
+        const d = await r.json();
+        setList(d.notices || []);
       } catch { setList([]); }
     })();
   }, [session.unit]);
@@ -340,12 +408,17 @@ function Notices({ session }) {
   return (
     <div className="bt-list" style={{ marginTop: 20 }}>
       {list.map((n) => {
-        const [from, to] = (n.window || "").split("–");
+        const clock = (v) => {
+          const s = String(v || "");
+          return s.includes("T") ? s.slice(11, 16) : s.slice(0, 5);
+        };
+        const from = clock(n.window_from);
+        const to = clock(n.window_to);
         return (
           <div className="bt-item" key={n.id}>
             <div className="bt-item-h">
               <span className="bt-tag" style={{ "--c": "#1C6FA6" }}>{t("notices.entry")}</span>
-              <span className="bt-dim">{date(n.sentAt)}</span>
+              <span className="bt-dim">{date(n.sent_at)}</span>
             </div>
             <p>{t("notices.entryBody", { date: date(n.entry_date || n.date),
                  from: from || "—", to: to || "—", reason: n.purpose })}</p>
@@ -364,13 +437,13 @@ function Rent({ session }) {
     <div style={{ marginTop: 20 }}>
       <h3>{t("rent.title")}</h3>
       <div className="bt-price" style={{ marginBottom: 4 }}>
-        <strong>{money(session.rent)}</strong><em>{t("suites.perMonth")}</em>
+        <strong>{money(session.balance)}</strong><em>{t("rent.title")}</em>
       </div>
       <p className="bt-dim">{t("rent.dueOn", { day: 1 })}</p>
       {/* A payment is recorded once, by accounting, against the charge it
           settles. Recording it here as well would create a second version of
           the truth about money. */}
-      <a className="bt-btn" href="#" onClick={(e) => e.preventDefault()}>{t("rent.payLink")}</a>
+      <a className="bt-btn" href="/api/tenant/ledger/download">{t("docs.download")}</a>
       <p className="bt-hint" style={{ marginTop: 10 }}>{t("rent.external")}</p>
     </div>
   );
@@ -467,7 +540,12 @@ const PORTAL_CSS = `
 .bt-pref strong{display:block;font-size:13.5px}
 .bt-pref em{display:block;font-style:normal;font-size:12px;color:var(--dim);margin-top:1px}
 .bt-tag{font-size:11px;font-weight:700;color:#fff;background:var(--c);border-radius:10px;padding:2px 9px}
-.bt-linkbtn{font:inherit;font-size:13px;background:none;border:0;color:var(--accent);
-  cursor:pointer;padding:4px 0;align-self:flex-start}
+/* Same text-link treatment as the staff sign-in screen: this is an action,
+   but it should not visually compete with the primary Sign in button. */
+.bt-auth-actions{display:flex;flex-direction:column;align-items:flex-start;gap:3px;margin-top:2px}
+.bt-linkbtn{font:inherit;font-size:12.5px;cursor:pointer;background:none;border:0;color:var(--accent);
+  padding:2px;text-align:left}
 .bt-linkbtn:hover{text-decoration:underline}
+.bt-linkbtn--muted{color:var(--dim)}
+.bt-linkbtn:focus-visible{outline:2px solid var(--accent);outline-offset:2px}
 `;

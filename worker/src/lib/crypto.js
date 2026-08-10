@@ -97,3 +97,4 @@ export async function sha256(input) {
 }
 
 export const fileHash = sha256;
+

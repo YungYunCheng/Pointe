@@ -8,10 +8,10 @@ Leasing management for 370 / 374 / 378 Clareview Station Drive NW, Edmonton, AB 
 ## Layout
 
 ```
-web/        Staff tools: ten tools behind one shell    → container
-tenant/     Public site and tenant portal, bilingual  → container
-server/     Express API: permissions, audit, locks    → container
-infra/      Postgres init, reverse proxy config       → container
+web/        Staff tools                              → Cloudflare Pages
+tenant/     Public site and tenant portal, bilingual → Cloudflare Pages
+worker/     Hono API, sessions, permissions, cron    → Cloudflare Workers
+server-legacy/  Previous server kept as porting reference
 docs/       ERD, schema, architecture notes
 data/       Unit inventory spreadsheet
 ```
@@ -25,25 +25,18 @@ without touching the staff session.
 
 ## Running it
 
-```bash
-cp .env.example .env
-openssl rand -base64 32          # paste into POSTGRES_PASSWORD
-docker compose up -d --build
-```
-
-| | |
-|---|---|
-| Staff tools | http://localhost:8080 — sign in as `admin@themizar.ca` |
-| Tenant site | http://localhost:8081 |
-
-Development, with both servers reloading on save:
+Install and build each package separately:
 
 ```bash
-docker compose -f docker-compose.yml -f docker-compose.dev.yml up
+(cd worker && npm ci && npm run check && npm run check:sql)
+(cd web && npm ci && npm run build)
+(cd tenant && npm ci && npm run build)
 ```
 
-Full deployment notes in [DEPLOY.md](DEPLOY.md).
-Current state, what the AI does, and what is missing: [docs/STATUS.md](docs/STATUS.md).
+Load `worker/schema/baydo_pointe_supabase_complete.sql` into a new Supabase
+database, then replace the domain, Hyperdrive and KV placeholders in
+`worker/wrangler.jsonc`. Deployment gaps and the staging checklist are in
+[`docs/BACKEND-HARDENING-2026-08-10.zh-Hant.md`](docs/BACKEND-HARDENING-2026-08-10.zh-Hant.md).
 
 ---
 
@@ -52,13 +45,11 @@ Current state, what the AI does, and what is missing: [docs/STATUS.md](docs/STAT
 | Email | Role |
 |---|---|
 | admin@themizar.ca | Admin |
-| bowen.wang@themizar.ca | Property Manager |
-| rentals@themizar.ca | Building Manager |
-| invoice@themizar.ca | Accounting |
+| Other staff | Invite from Admin after first sign-in |
 
-The seed passwords were shared over chat and every account is flagged
-`must_change_password`. **Rotate all four before this touches production**, and
-keep them out of the repository.
+No seed password is stored. Use **Forgot password** for `admin@themizar.ca` to
+set the first password through a one-time link, then invite every other staff
+member so each person chooses their own password.
 
 ---
 
@@ -148,25 +139,22 @@ with an instruction not to recalculate. It writes the commentary, nothing else.
 that exists, every place the AI is used and what bounds it, and what is missing
 in the order it should be built.
 
-The short version: the API is complete and the tools are built, but **nothing on
-the front end talks to the server yet**. Until that wiring is done, permissions,
-audit, signing locks and parking concurrency are decorative.
+The short version: authentication, units, pricing, parking, lease lifecycle,
+renewals, rent increases, core payments and tenant self-service now use the
+Worker API. Several staff tools still need their legacy routes ported; see the
+backend hardening report for the exact P0/P1 list.
 
 ---
 
 ## Before production
 
-1. Lawyer-approved lease template and the rest of the document set. Nothing in
-   `Documents.jsx` can produce a real document until these exist.
-2. Confirm the Alberta figures: deposit cap, refund deadline, notice periods,
-   entry notice lead time, the 365-day rule on increases. They are constants at
-   the top of each file for exactly this reason.
-3. Move Argon2id in place of scrypt for password hashing.
-4. Postgres instead of SQLite. The schema in `docs/schema-postgres.sql` is
-   already written; swap the immediate transaction for `SELECT ... FOR UPDATE`.
-5. Evidence files to object storage rather than local disk.
-6. Data retention. Alberta PIPA expects a defined period enforced by a job, not
-   a sentence in a policy document.
+1. Run the complete SQL (or migration 011 on an existing database) and execute
+   the staging checklist against real Supabase／Hyperdrive.
+2. Replace Cloudflare placeholders and configure KV, R2, Resend and secrets.
+3. Port staff workflow, signing/R2 and the rest of accounting before enabling
+   the corresponding production menus.
+4. Have Alberta counsel review the actual approved documents and notice flows.
+5. Define and test data retention, backup restore and monitoring.
 
 ---
 

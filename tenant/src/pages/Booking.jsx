@@ -1,4 +1,4 @@
-import React, { useState, useMemo, useEffect } from "react";
+import React, { useState, useEffect } from "react";
 import { useSearchParams, Link } from "react-router-dom";
 import { useT } from "../lib/locale.jsx";
 
@@ -18,36 +18,6 @@ import { useT } from "../lib/locale.jsx";
      cannot attend wastes the tenant's evening, not ours.
    ============================================================ */
 
-const SLOT_MIN = 30;
-const DAY = { start: 10, end: 18 };      // office hours for viewings
-const NOTICE_HOURS = 24;                 // occupied suites need this much warning
-const LEAD_HOURS = 3;                    // nothing same-hour, someone has to travel
-const HORIZON_DAYS = 14;
-
-const pad = (n) => String(n).padStart(2, "0");
-const isoD = (d) => `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}`;
-
-function buildDays(occupied) {
-  const out = [];
-  const earliest = Date.now() + (occupied ? NOTICE_HOURS : LEAD_HOURS) * 3600e3;
-  for (let i = 0; i < HORIZON_DAYS; i++) {
-    const d = new Date(); d.setDate(d.getDate() + i);
-    const dow = d.getDay();
-    if (dow === 0) continue;                       // closed Sunday
-    const endH = dow === 6 ? 16 : DAY.end;         // shorter Saturday
-    const slots = [];
-    for (let h = DAY.start; h < endH; h++) {
-      for (const m of [0, SLOT_MIN]) {
-        const at = new Date(d); at.setHours(h, m, 0, 0);
-        if (at.getTime() < earliest) continue;
-        slots.push(`${pad(h)}:${pad(m)}`);
-      }
-    }
-    if (slots.length) out.push({ date: isoD(d), slots });
-  }
-  return out;
-}
-
 export default function Booking() {
   const { t, locale, date: fmtD } = useT();
   const [params] = useSearchParams();
@@ -58,12 +28,31 @@ export default function Booking() {
   const [busy, setBusy] = useState(false);
   const [done, setDone] = useState(null);
   const [err, setErr] = useState("");
+  const [days, setDays] = useState([]);
+  const [occupied, setOccupied] = useState(false);
+  const [slotsBusy, setSlotsBusy] = useState(true);
 
-  // Treated as occupied when a type is chosen, since re-lets are the common
-  // case here. The server knows for certain and will refuse a short-notice slot.
-  const occupied = !!unitType;
-  const days = useMemo(() => buildDays(occupied), [occupied]);
-  useEffect(() => { setDay(""); setTime(""); }, [unitType]);
+  useEffect(() => {
+    fetch("/api/tenant/me", { credentials: "include" })
+      .then((r) => r.ok ? r.json() : null)
+      .then((d) => d?.tenant && setForm((x) => ({ ...x,
+        name: d.tenant.name || "", email: d.tenant.email || "" })))
+      .catch(() => {});
+  }, []);
+
+  useEffect(() => {
+    let live = true;
+    setDay(""); setTime(""); setSlotsBusy(true);
+    fetch(`/api/public/slots${unitType ? `?unit_type=${encodeURIComponent(unitType)}` : ""}`)
+      .then(async (r) => {
+        if (!r.ok) throw new Error("slots");
+        const d = await r.json();
+        if (live) { setDays(d.days || []); setOccupied(!!d.occupied); }
+      })
+      .catch(() => { if (live) { setDays([]); setErr(t("common.error")); } })
+      .finally(() => { if (live) setSlotsBusy(false); });
+    return () => { live = false; };
+  }, [unitType, t]);
 
   const chosen = days.find((d) => d.date === day);
   const canSubmit = day && time && form.name.trim() && form.email.trim() && !busy;
@@ -72,14 +61,19 @@ export default function Booking() {
     if (!canSubmit) return;
     setBusy(true); setErr("");
     try {
-      const ref = "V" + Date.now().toString(36).toUpperCase().slice(-6);
-      const rec = { ref, type: "showing", unitType: unitType || null, date: day, time,
-                    ...form, locale, createdAt: new Date().toISOString(), state: "requested" };
-      let q = [];
-      try { const r = await window.storage.get("baydo:bookings"); if (r?.value) q = JSON.parse(r.value); }
-      catch {}
-      await window.storage.set("baydo:bookings", JSON.stringify([...q, rec]));
-      setDone(rec);
+      const requestId = crypto.randomUUID();
+      const res = await fetch("/api/tenant/viewings", {
+        method: "POST", credentials: "include",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ unit_type: unitType || null,
+          requested_date: day, requested_time: time, phone: form.phone,
+          notes: form.notes, locale, client_request_id: requestId }),
+      });
+      const d = await res.json().catch(() => ({}));
+      if (!res.ok) throw new Error(d.code || "booking");
+      setDone({ ref: d.booking.reference, unitType: d.booking.unit_type,
+        date: String(d.booking.requested_date).slice(0, 10), time,
+        email: form.email });
     } catch (e) {
       setErr(t("common.error"));
     }
@@ -125,6 +119,7 @@ export default function Booking() {
 
         <div className="bt-f">
           <label>{t("book.pickDay")}</label>
+          {slotsBusy && <p className="bt-hint">{t("common.loading")}</p>}
           <div className="bt-days">
             {days.slice(0, 10).map((d) => (
               <button key={d.date} className={day === d.date ? "on" : ""}
@@ -153,13 +148,11 @@ export default function Booking() {
 
         <div className="bt-f">
           <label>{t("book.name")}</label>
-          <input className="bt-in" value={form.name}
-                 onChange={(e) => setForm({ ...form, name: e.target.value })} />
+          <input className="bt-in" value={form.name} readOnly />
         </div>
         <div className="bt-f">
           <label>{t("book.email")}</label>
-          <input className="bt-in" type="email" value={form.email}
-                 onChange={(e) => setForm({ ...form, email: e.target.value })} />
+          <input className="bt-in" type="email" value={form.email} readOnly />
         </div>
         <div className="bt-f">
           <label>{t("book.phone")} <em>{t("common.optional")}</em></label>

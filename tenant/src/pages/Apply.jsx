@@ -39,7 +39,7 @@ export default function Apply() {
     moveIn: "", term: "12",
     tenants: [""], occupants: "",
     parking: false, storage: false, pets: "none", serviceAnimal: false,
-    files: [], skipDocs: false,
+    files: [], skipDocs: true,
     feeAck: false, consent: false,
     email: "", phone: "",
   });
@@ -54,11 +54,31 @@ export default function Apply() {
         if (r?.value) setF((x) => ({ ...x, ...JSON.parse(r.value), files: [] }));
       } catch {}
       try {
-        const p = await window.storage.get("baydo:pricing");
-        const pk = await window.storage.get("baydo:parking");
-        setFacts({ pricing: p?.value ? JSON.parse(p.value) : {},
-                   parking: pk?.value ? JSON.parse(pk.value) : { pools: [], records: [] } });
-      } catch { setFacts({ pricing: {}, parking: { pools: [], records: [] } }); }
+        const [availability, me] = await Promise.all([
+          fetch("/api/public/availability").then((r) => {
+            if (!r.ok) throw new Error("availability"); return r.json();
+          }),
+          fetch("/api/tenant/me", { credentials: "include" }).then((r) => r.ok ? r.json() : null),
+        ]);
+        const fees = availability.fees || {};
+        setFacts({
+          pricing: {
+            base: Object.fromEntries((availability.types || []).map((x) => [x.code, Number(x.rent)])),
+            parkUnderground: fees.parking_underground,
+            storage: fees.storage_fee,
+            petRent: fees.pet_rent,
+            depositMode: fees.deposit_mode,
+            depositFixed: fees.deposit_fixed,
+            catDeposit: fees.cat_deposit,
+            dogDeposit: fees.dog_deposit,
+            appFee: fees.application_fee,
+            utilities: fees.utilities_included,
+          },
+          parking: availability.parking || { free: 0 },
+        });
+        if (me?.tenant?.email)
+          setF((x) => ({ ...x, email: me.tenant.email }));
+      } catch { setFacts({ pricing: {}, parking: { free: 0 } }); }
     })();
   }, []);
 
@@ -87,15 +107,16 @@ export default function Apply() {
     // A service animal carries no deposit. A pet deposit sits inside the
     // security deposit cap rather than on top of it.
     const petDep = petCount === 0 ? 0
-      : (f.pets.includes("dog") ? Number(p.dogDeposit) || 0 : Number(p.catDeposit) || 0);
+      : f.pets === "both" ? (Number(p.dogDeposit) || 0) + (Number(p.catDeposit) || 0)
+      : f.pets === "dog" ? Number(p.dogDeposit) || 0 : Number(p.catDeposit) || 0;
+    const refundableDeposit = Math.min(rent, Math.max(deposit, petDep));
     const upfront = [
-      { label: locale === "zh" ? "保證金" : "Security deposit", amt: deposit },
-      { label: locale === "zh" ? "寵物押金" : "Pet deposit", amt: petDep },
+      { label: locale === "zh" ? "可退還保證金（含寵物部分）" : "Refundable deposit (including pet portion)", amt: refundableDeposit },
       { label: locale === "zh" ? "首月租金" : "First month", amt: monthlyTotal },
       { label: locale === "zh" ? "申請費" : "Application fee", amt: Number(p.appFee) || 0 },
     ].filter((x) => x.amt > 0);
     const upfrontTotal = upfront.reduce((s, x) => s + x.amt, 0);
-    const capOk = rent === 0 || deposit + petDep <= rent;
+    const capOk = rent === 0 || refundableDeposit <= rent;
 
     return { rent, monthly, monthlyTotal, upfront, upfrontTotal, capOk,
              includes: p.utilities || "" };
@@ -103,10 +124,7 @@ export default function Apply() {
 
   const stallsFree = useMemo(() => {
     const pk = facts?.parking; if (!pk) return null;
-    return (pk.pools || []).reduce((n, p) => {
-      const used = (pk.records || []).filter((r) => r.status === "assigned" && r.poolId === p.id).length;
-      return n + (Number(p.total || 0) - used);
-    }, 0);
+    return Number(pk.free ?? 0);
   }, [facts]);
 
   const canAdvance = () => {
@@ -121,16 +139,21 @@ export default function Apply() {
   const submit = async () => {
     setBusy(true); setErr("");
     try {
-      const ref = "A" + Date.now().toString(36).toUpperCase().slice(-6);
-      const rec = { ref, ...f, files: f.files.map((x) => x.name),
-                    costs: { monthlyTotal: costs.monthlyTotal, upfrontTotal: costs.upfrontTotal },
-                    locale, createdAt: new Date().toISOString(), state: "new" };
-      let q = [];
-      try { const r = await window.storage.get("baydo:applications"); if (r?.value) q = JSON.parse(r.value); }
-      catch {}
-      await window.storage.set("baydo:applications", JSON.stringify([...q, rec]));
+      const res = await fetch("/api/tenant/applications", {
+        method: "POST", credentials: "include",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          unit_type: f.unitType, move_in: f.moveIn, term: f.term,
+          tenants: f.tenants, occupants: Number(f.occupants), phone: f.phone,
+          wants_parking: f.parking, wants_storage: f.storage, pets: f.pets,
+          service_animal: f.serviceAnimal, fee_ack: f.feeAck,
+          consent: f.consent, locale, client_request_id: crypto.randomUUID(),
+        }),
+      });
+      const d = await res.json().catch(() => ({}));
+      if (!res.ok) throw new Error(d.code || "application");
       await window.storage.delete("baydo:apply-draft").catch(() => {});
-      setDone(rec);
+      setDone({ ref: d.application.reference, state: d.application.state });
     } catch { setErr(t("common.error")); }
     setBusy(false);
   };
@@ -301,17 +324,11 @@ export default function Apply() {
           <>
             <h2>{t("apply.s5")}</h2>
             <p className="bt-body">{t("apply.s5sub")}</p>
-            <div className="bt-f">
-              <label htmlFor="up">{t("apply.upload")}</label>
-              <input id="up" className="bt-in" type="file" multiple
-                     onChange={(e) => set({ files: [...f.files, ...Array.from(e.target.files || [])] })} />
-              {f.files.length > 0 && <span className="bt-hint">{t("apply.uploaded", { n: f.files.length })}</span>}
-              <span className="bt-hint">{t("apply.docHint")}</span>
-            </div>
-            <label className="bt-check">
-              <input type="checkbox" checked={f.skipDocs} onChange={(e) => set({ skipDocs: e.target.checked })} />
+            <label className="bt-check bt-note">
+              <input type="checkbox" checked readOnly />
               <span>{t("apply.skipDocs")}</span>
             </label>
+            <p className="bt-hint">{t("apply.docHint")}</p>
           </>
         )}
 

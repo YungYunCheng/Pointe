@@ -323,7 +323,7 @@ Missing:
 3. **Confirm the Alberta figures** with your manager: deposit cap, refund
    deadline, notice periods, entry notice lead time, the 365-day rule. All are
    constants at the top of the files that use them.
-4. **Rotate the three seed passwords.** They were shared over chat.
+4. **Set the first Admin password by one-time reset link**, then invite every other staff member.
 5. **Postgres, TLS, Argon2id.** See DEPLOY.md.
 
 ### Before tenants see it
