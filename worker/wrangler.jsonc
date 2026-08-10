@@ -57,7 +57,7 @@
 
   "vars": {
     "ENVIRONMENT": "production",
-    "PUBLIC_URL": "https://staff.example.com",
+    "PUBLIC_URL": "https://pointe-worker.dcheng0726.workers.dev",
     "PUBLIC_TENANT_URL": "https://www.example.com"
   }
 
