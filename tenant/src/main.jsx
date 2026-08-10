@@ -1,6 +1,6 @@
 import React, { useState, useEffect, useMemo, useCallback } from "react";
 import { createRoot } from "react-dom/client";
-import { BrowserRouter, Routes, Route, NavLink, Link, Navigate, useLocation } from "react-router-dom";
+import { BrowserRouter, Routes, Route, NavLink, Link, Navigate, useLocation, useNavigate } from "react-router-dom";
 import { LOCALES } from "./lib/i18n.js";
 import { LocaleProvider, useT } from "./lib/locale.jsx";
 import TenantChat from "./TenantChat.jsx";
@@ -98,7 +98,46 @@ function useProperty() {
 function Header() {
   const { t, locale, setLocale } = useT();
   const [open, setOpen] = useState(false);
+  const [signedIn, setSignedIn] = useState(false);
+  const [loggingOut, setLoggingOut] = useState(false);
+  const navigate = useNavigate();
   const link = ({ isActive }) => (isActive ? "on" : "");
+
+  const checkSession = useCallback(async () => {
+    try {
+      const res = await fetch("/api/tenant/me", { credentials: "include" });
+      setSignedIn(res.ok);
+    } catch {
+      setSignedIn(false);
+    }
+  }, []);
+
+  useEffect(() => {
+    checkSession();
+    const onIn = () => setSignedIn(true);
+    const onOut = () => setSignedIn(false);
+    window.addEventListener("baydo:tenant-signed-in", onIn);
+    window.addEventListener("baydo:tenant-signed-out", onOut);
+    return () => {
+      window.removeEventListener("baydo:tenant-signed-in", onIn);
+      window.removeEventListener("baydo:tenant-signed-out", onOut);
+    };
+  }, [checkSession]);
+
+  const logout = async (event) => {
+    event.stopPropagation();
+    if (loggingOut) return;
+    setLoggingOut(true);
+    try {
+      await fetch("/api/tenant/logout", { method: "POST", credentials: "include" });
+    } catch {}
+    setSignedIn(false);
+    setOpen(false);
+    window.dispatchEvent(new CustomEvent("baydo:tenant-signed-out"));
+    navigate("/portal", { replace: true });
+    setLoggingOut(false);
+  };
+
   return (
     <header className="bt-head">
       <Link to="/" className="bt-logo" onClick={() => setOpen(false)}>
@@ -119,6 +158,11 @@ function Header() {
                     onClick={(e) => { e.stopPropagation(); setLocale(l.code); }}>{l.short}</button>
           ))}
         </div>
+        {signedIn && (
+          <button className="bt-signout" type="button" onClick={logout} disabled={loggingOut}>
+            {loggingOut ? t("common.loading") : t("nav.signout")}
+          </button>
+        )}
         <Link to="/book" className="bt-cta">{t("nav.book")}</Link>
       </nav>
     </header>
@@ -455,6 +499,10 @@ a{color:inherit}
   border-right:1px solid var(--rule);padding:6px 11px;color:var(--dim)}
 .bt-lang button:last-child{border-right:0}
 .bt-lang button.on{background:var(--ink);color:#fff}
+.bt-signout{font:inherit;font-size:13px;font-weight:600;color:var(--warn);background:#fff;
+  border:1px solid #D9B8C0;border-radius:4px;padding:7px 11px;cursor:pointer;white-space:nowrap}
+.bt-signout:hover:not(:disabled){background:#FFF7F9;border-color:var(--warn)}
+.bt-signout:disabled{cursor:wait;opacity:.6}
 .bt-cta{background:var(--ink);color:#fff !important;padding:9px 16px !important;border-radius:22px;
   font-size:13.5px !important}
 .bt-cta:hover{background:#000 !important}
@@ -589,6 +637,7 @@ a{color:inherit}
   .bt-nav.open{display:flex}
   .bt-nav a{padding:12px}
   .bt-lang{margin:8px 12px;align-self:flex-start}
+  .bt-signout{margin:4px 12px;align-self:stretch;text-align:center;padding:10px 12px}
   .bt-cta{margin:4px 12px 8px;text-align:center}
   .bt-sec,.bt-hero{padding-left:16px;padding-right:16px}
   .bt-foot-in{padding:28px 16px}

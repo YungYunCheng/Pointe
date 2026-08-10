@@ -1,6 +1,6 @@
 import React, { useState, useEffect, Suspense, lazy, Component } from "react";
 import { createRoot } from "react-dom/client";
-import { BrowserRouter, Routes, Route, NavLink, Navigate, useLocation } from "react-router-dom";
+import { BrowserRouter, Routes, Route, NavLink, Navigate, useLocation, useNavigate } from "react-router-dom";
 import { applyTheme, ROLE_THEME, MizarMark, BRAND_CSS, roleColor } from "./lib/theme.jsx";
 import api from "./lib/api.js";
 
@@ -107,6 +107,18 @@ function useSession() {
 function Shell() {
   const session = useSession();
   const loc = useLocation();
+  const navigate = useNavigate();
+  const [loggingOut, setLoggingOut] = useState(false);
+
+  const logout = async () => {
+    if (loggingOut) return;
+    setLoggingOut(true);
+    try { await api.logout(); } catch {}
+    try { await window.storage?.delete?.("baydo:session"); } catch {}
+    window.dispatchEvent(new CustomEvent("baydo:signed-out"));
+    navigate("/", { replace: true });
+    setLoggingOut(false);
+  };
 
   if (session === undefined)
     return <div className="sh-load">Loading…</div>;
@@ -134,6 +146,9 @@ function Shell() {
             {ROLE_LABEL[session.role] ?? session.role}
           </span>
           <span className="sh-name">{session.name}</span>
+          <button className="sh-logout" type="button" onClick={logout} disabled={loggingOut}>
+            {loggingOut ? "Logging out…" : "Log out"}
+          </button>
         </div>
       </nav>
 
@@ -191,6 +206,10 @@ body{margin:0;font-family:'IBM Plex Sans',system-ui,sans-serif;
 .sh-who{display:flex;align-items:center;gap:8px;flex:0 0 auto;padding:12px 0}
 .sh-chip{font-size:10.5px;font-weight:700;color:#fff;background:var(--brand);border-radius:9px;padding:3px 10px;letter-spacing:.01em;transition:background .35s ease}
 .sh-name{font-size:13px;font-weight:600}
+.sh-logout{font:inherit;font-size:12px;font-weight:600;color:#5F6F7E;background:#fff;border:1px solid #C7D1D9;
+  border-radius:4px;padding:6px 10px;cursor:pointer;white-space:nowrap}
+.sh-logout:hover:not(:disabled){color:#B23A54;border-color:#B23A54;background:#FFF8FA}
+.sh-logout:disabled{cursor:wait;opacity:.6}
 .sh-main{flex:1}
 .sh-crash{max-width:720px;margin:54px auto;padding:26px;background:#fff;border:1px solid #D3DBE1;border-left:4px solid #B23A54}
 .sh-crash h2{margin:0 0 8px}.sh-crash p{color:#5f6f7e;line-height:1.6}.sh-crash div{display:flex;gap:8px;margin:18px 0}.sh-crash button{font:inherit;border:1px solid #b9c5cf;background:#fff;border-radius:4px;padding:9px 14px;cursor:pointer}.sh-crash button:first-child{background:#173b5f;color:#fff;border-color:#173b5f}.sh-crash details{color:#718096}.sh-crash code{display:block;margin-top:8px;white-space:pre-wrap}

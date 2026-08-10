@@ -83,6 +83,15 @@ export default function Portal() {
     }
   }, [session, next, navigate]);
 
+  useEffect(() => {
+    const onSignedOut = () => {
+      setSession(null);
+      setTab("home");
+    };
+    window.addEventListener("baydo:tenant-signed-out", onSignedOut);
+    return () => window.removeEventListener("baydo:tenant-signed-out", onSignedOut);
+  }, []);
+
   const finishSignIn = async (signedInSession) => {
     try {
       const res = await fetch("/api/tenant/me", { credentials: "include" });
@@ -90,6 +99,7 @@ export default function Portal() {
     } catch { setSession(normaliseSession({ tenant: signedInSession,
       unit: signedInSession?.unit,
       account_state: signedInSession?.unit ? "tenant" : "prospect" })); }
+    window.dispatchEvent(new CustomEvent("baydo:tenant-signed-in"));
     if (next?.startsWith("/")) navigate(next, { replace: true });
   };
 
@@ -112,13 +122,6 @@ export default function Portal() {
           <span className="bt-dim">{isTenant
             ? t("portal.yourSuite", { unit: session.unit }) : session.email}</span>
         </div>
-        <button className="bt-btn bt-btn--ghost bt-btn--sm"
-                onClick={async () => {
-                  await fetch("/api/tenant/logout", { method: "POST", credentials: "include" }).catch(() => {});
-                  setSession(null);
-                }}>
-          {t("nav.signout")}
-        </button>
       </div>
 
       <nav className="bt-ptabs">
