@@ -277,6 +277,51 @@ export default function CRM() {
     });
   }, [leads, filter, q, session]);
 
+  /* ---------- Duplicate records ---------- */
+  const dupes = useMemo(() => findDuplicates(leads), [leads]);
+
+  const mergeLeads = (group) => {
+    const mergeIds = new Set(group.merge.map((l) => l.id));
+    const records = leads.filter((l) => l.id === group.keep.id || mergeIds.has(l.id));
+    const keep = records.find((l) => l.id === group.keep.id);
+    if (!keep || records.length < 2) return;
+
+    const firstValue = (key) => records.find((l) => l[key])?.[key] || "";
+    const latestIso = (key) => records.map((l) => l[key]).filter(Boolean).sort().at(-1) || null;
+    const notes = records.flatMap((l) => l.notes || [])
+      .sort((a, b) => String(a.at || "").localeCompare(String(b.at || "")));
+
+    const merged = {
+      ...keep,
+      name: keep.name || firstValue("name"),
+      phone: keep.phone || firstValue("phone"),
+      email: keep.email || firstValue("email"),
+      source: keep.source || firstValue("source"),
+      stage: group.stage || keep.stage,
+      units: [...new Set(records.flatMap((l) => l.units || []))],
+      beds: keep.beds || firstValue("beds"),
+      moveIn: keep.moveIn || firstValue("moveIn"),
+      assigned: keep.assigned || firstValue("assigned"),
+      next_action_at: keep.next_action_at || firstValue("next_action_at"),
+      last_contact_at: latestIso("last_contact_at"),
+      dnc: records.some((l) => l.dnc),
+      notes: [...notes, {
+        at: nowISO(),
+        by: session?.name || "System",
+        text: `Merged ${records.length} duplicate lead records.`,
+      }],
+    };
+
+    if (merged.stage === "lost") merged.lost_reason = keep.lost_reason || firstValue("lost_reason");
+    else delete merged.lost_reason;
+
+    const next = leads
+      .filter((l) => !mergeIds.has(l.id))
+      .map((l) => (l.id === keep.id ? merged : l));
+    save(next);
+    setSel(keep.id);
+  };
+
   /* ---------- Overdue follow-ups ---------- */
   const overdue = useMemo(() => leads.filter((l) => {
     if (!OPEN_STAGES.includes(l.stage)) return false;
