@@ -1,4 +1,5 @@
 import React, { useState, useEffect, useMemo, useCallback } from "react";
+import api from "../lib/api.js";
 
 /* ============================================================
    BAYDO POINTE — Schedule, daily task list and signing approval
@@ -43,6 +44,41 @@ const TYPE_META = {
   followup:    { label: "Follow-up",     icon: "→", color: "#C98A15", dur: 15 },
   review:      { label: "Draft to review",icon: "✎", color: "#8B5CF6", dur: 10 },
 };
+
+const nowISO = () => new Date().toISOString();
+const CHANNEL_DEFAULT = {
+  showing: "email", signing: "email", keys: "both", maintenance: "both",
+  followup: "email", review: "email",
+};
+const CONFIRM_STATE = {
+  none: { label: "Not sent", color: "#78899A" },
+  sent: { label: "Confirmation sent", color: "#1C6FA6" },
+  confirmed: { label: "Confirmed", color: "#0E8577" },
+  declined: { label: "Declined", color: "#B23A54" },
+};
+const EVENT_OWNER = {
+  showing: { label: "Leasing / Building Manager", roles: ["admin", "property_manager", "building_manager"] },
+  signing: { label: "Property Manager", roles: ["admin", "property_manager"] },
+  keys: { label: "Building Manager", roles: ["admin", "building_manager"] },
+  maintenance: { label: "Building Manager", roles: ["admin", "building_manager"] },
+  followup: { label: "Leasing", roles: ["admin", "property_manager", "building_manager"] },
+  review: { label: "Property Manager", roles: ["admin", "property_manager"] },
+};
+
+function fromApiEvent(e) {
+  const parts = new Intl.DateTimeFormat("en-CA", { timeZone: "America/Edmonton",
+    year: "numeric", month: "2-digit", day: "2-digit", hour: "2-digit",
+    minute: "2-digit", hourCycle: "h23" }).formatToParts(new Date(e.starts_at));
+  const get = (k) => parts.find((p) => p.type === k)?.value;
+  return { ...e, date: `${get("year")}-${get("month")}-${get("day")}`,
+    time: `${get("hour")}:${get("minute")}`, unit: e.unit_number || "—",
+    name: e.contact_name || "Internal", contact: e.contact_info || "",
+    assignee: e.owner_name || e.assignee || null,
+    sign: e.signing_state || undefined,
+    confirm_state: e.confirmation_state || "none",
+    confirm_channel: e.confirmation_channel || undefined,
+    confirm_sent_at: e.confirmation_sent_at || undefined };
+}
 
 const SIGN_STATES = {
   pending_review: { label: "Awaiting approval",  color: "#C98A15" },
@@ -111,7 +147,7 @@ function ConfirmBar({ ev, onSend, onMark }) {
   );
 }
 
-export default function ScheduleConsole() {
+export default function ScheduleConsole({ session }) {
   const [today, setToday] = useState(iso(new Date()));
   const [events, setEvents] = useState(seedEvents);
   const [holidays, setHolidays] = useState(DEFAULT_HOLIDAYS);
@@ -121,10 +157,18 @@ export default function ScheduleConsole() {
   const [saveState, setSaveState] = useState("idle");
   const [form, setForm] = useState({ open: false, type: "showing", unit: "", name: "", contact: "",
                                      date: iso(new Date()), time: "10:00" });
+  const [ownerFilter, setOwnerFilter] = useState("all");
+  const [staff, setStaff] = useState([]);
+  const [apiMode, setApiMode] = useState(false);
 
   /* ---------- Load and save ---------- */
   useEffect(() => {
     (async () => {
+      try {
+        const remote = await api.get("/events");
+        setEvents((remote.events ?? []).map(fromApiEvent));
+        setStaff(remote.staff ?? []); setApiMode(true); setLoading(false); return;
+      } catch {}
       try {
         const r = await window.storage.get("baydo:schedule");
         if (r?.value) {
@@ -138,6 +182,10 @@ export default function ScheduleConsole() {
       setLoading(false);
     })();
   }, []);
+
+  useEffect(() => {
+    if (session?.name && !agent) setAgent(session.name);
+  }, [session?.name]);
 
   const persist = useCallback(async (next) => {
     setSaveState("saving");
@@ -180,20 +228,35 @@ export default function ScheduleConsole() {
       state: "queued", created_at: nowISO() };
     try { await window.storage.set("baydo:outbox", JSON.stringify([msg, ...queue])); } catch (e) {}
 
-    save({ ...data, events: data.events.map((x) => x.id === ev.id
+    if (apiMode) {
+      await api.patch(`/events/${ev.id}`, { confirmation_state: "sent", confirmation_channel: channel });
+      const remote = await api.get("/events"); setEvents((remote.events ?? []).map(fromApiEvent));
+    } else save({ events: events.map((x) => x.id === ev.id
       ? { ...x, confirm_state: "sent", confirm_channel: channel, confirm_sent_at: nowISO() } : x) });
   };
 
-  const markConfirmation = (ev, state) => {
-    save({ ...data, events: data.events.map((x) => x.id === ev.id
+  const markConfirmation = async (ev, state) => {
+    if (apiMode) {
+      await api.patch(`/events/${ev.id}`, { confirmation_state: state });
+      const remote = await api.get("/events"); setEvents((remote.events ?? []).map(fromApiEvent));
+    } else save({ events: events.map((x) => x.id === ev.id
       ? { ...x, confirm_state: state, confirm_responded_at: nowISO() } : x) });
   };
 
   /* ---------- Today's list ---------- */
+  const owners = useMemo(() => [...new Set(events.map((e) =>
+    e.assignee || EVENT_OWNER[e.type]?.label).filter(Boolean))].sort(), [events]);
+  const canSee = useCallback((e) => {
+    if (session?.role === "admin")
+      return ownerFilter === "all" || (e.assignee || EVENT_OWNER[e.type]?.label) === ownerFilter;
+    if (!e.assignee || e.assignee === session?.name) return true;
+    return EVENT_OWNER[e.type]?.roles?.includes(session?.role) ?? false;
+  }, [session?.role, session?.name, ownerFilter]);
+
   const dayList = useMemo(
-    () => events.filter((e) => e.date === today && e.state === "booked")
+    () => events.filter((e) => e.date === today && e.state === "booked" && canSee(e))
                 .sort((a, b) => a.time.localeCompare(b.time)),
-    [events, today]
+    [events, today, canSee]
   );
 
   /* ---------- Reminders due today ---------- */
@@ -216,17 +279,37 @@ export default function ScheduleConsole() {
     [events]
   );
 
-  const setSign = (id, sign) =>
-    save({ events: events.map((e) => (e.id === id ? { ...e, sign, approvedBy: agent || "unsigned",
-                                                       approvedAt: new Date().toISOString() } : e)) });
+  const reloadEvents = async () => {
+    const remote = await api.get("/events"); setEvents((remote.events ?? []).map(fromApiEvent));
+  };
+  const setSign = async (id, sign) => {
+    if (apiMode) { await api.patch(`/events/${id}`, { signing_state: sign }); await reloadEvents(); }
+    else save({ events: events.map((e) => (e.id === id ? { ...e, sign, approvedBy: agent || "unsigned",
+      approvedAt: new Date().toISOString() } : e)) });
+  };
 
-  const toggleDone = (id) => save({ done: { ...done, [id]: !done[id] } });
-  const cancel = (id) => save({ events: events.map((e) => (e.id === id ? { ...e, state: "cancelled" } : e)) });
+  const toggleDone = async (id) => {
+    if (apiMode) { await api.patch(`/events/${id}`, { state: done[id] ? "booked" : "done" });
+      setDone({ ...done, [id]: !done[id] }); await reloadEvents(); }
+    else save({ done: { ...done, [id]: !done[id] } });
+  };
+  const cancel = async (id) => {
+    if (apiMode) { await api.patch(`/events/${id}`, { state: "cancelled" }); await reloadEvents(); }
+    else save({ events: events.map((e) => (e.id === id ? { ...e, state: "cancelled" } : e)) });
+  };
 
-  const addEvent = () => {
+  const addEvent = async () => {
     if (!form.unit.trim() || !form.name.trim()) return;
+    if (apiMode) {
+      await api.post("/events", { type: form.type, date: form.date, time: form.time,
+        unit_number: form.unit.trim() === "—" ? null : form.unit.trim(),
+        contact_name: form.name.trim(), contact_info: form.contact.trim(),
+        assignee_id: form.assignee_id || session?.accountId, duration_min: TYPE_META[form.type]?.dur ?? 30 });
+      await reloadEvents(); setForm({ ...form, open: false, unit: "", name: "", contact: "" }); return;
+    }
     const e = { id: "e" + Date.now(), type: form.type, date: form.date, time: form.time,
                 unit: form.unit.trim(), name: form.name.trim(), contact: form.contact.trim(),
+                assignee: session?.name || null,
                 state: "booked", ...(form.type === "signing" ? { sign: "pending_review" } : {}) };
     save({ events: [...events, e] });
     setForm({ ...form, open: false, unit: "", name: "", contact: "" });
@@ -257,6 +340,11 @@ export default function ScheduleConsole() {
             <button onClick={() => setToday(iso(new Date()))}>Today</button>
             <button onClick={() => setToday(addDays(today, 1))} aria-label="Next day">›</button>
           </div>
+          {session?.role === "admin" && <select className="sc-sel" value={ownerFilter}
+            onChange={(e) => setOwnerFilter(e.target.value)} aria-label="Schedule owner">
+            <option value="all">All staff schedules</option>
+            {owners.map((owner) => <option key={owner} value={owner}>{owner}</option>)}
+          </select>}
           <button className="sc-btn" onClick={() => setForm({ ...form, open: !form.open, date: today })}>
             New booking
           </button>
@@ -278,6 +366,10 @@ export default function ScheduleConsole() {
                  onChange={(e) => setForm({ ...form, date: e.target.value })} />
           <input className="sc-in" type="time" value={form.time}
                  onChange={(e) => setForm({ ...form, time: e.target.value })} />
+          {session?.role === "admin" && <select className="sc-sel" value={form.assignee_id || session?.accountId || ""}
+            onChange={(e) => setForm({ ...form, assignee_id: e.target.value })}>
+            {staff.map((person) => <option key={person.id} value={person.id}>{person.full_name} · {person.role_code}</option>)}
+          </select>}
           <button className="sc-btn" onClick={addEvent}>Add</button>
         </div>
       )}
@@ -299,10 +391,9 @@ export default function ScheduleConsole() {
                     <div className="sc-time">
                       <strong>{e.time}</strong>
                       <em>{m.dur} min</em>
-                      {EVENT_OWNER[e.type] && session?.role !== EVENT_OWNER[e.type].role
-                        && session?.role !== "admin" && (
-                        <span className="sc-owner">{EVENT_OWNER[e.type].label}</span>
-                      )}
+                      {(e.assignee || EVENT_OWNER[e.type]) && <span className="sc-owner">
+                        {e.assignee || EVENT_OWNER[e.type].label}
+                      </span>}
                     </div>
                     <div className="sc-body">
                       <div className="sc-item-h">

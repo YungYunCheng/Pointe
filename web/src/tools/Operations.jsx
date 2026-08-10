@@ -97,8 +97,11 @@ export default function Operations() {
   const [leads, setLeads] = useState([]);
   const [parking, setParking] = useState(null);
   const [overrides, setOverrides] = useState({});
+  const [releases, setReleases] = useState([]);
+  const [signedLeases, setSignedLeases] = useState([]);
   const [loading, setLoading] = useState(true);
   const [saveState, setSaveState] = useState("idle");
+  const [notice, setNotice] = useState("");
   const [tab, setTab] = useState("showings");
   const [tick, setTick] = useState(0);
   const [newMo, setNewMo] = useState(false);
@@ -119,6 +122,12 @@ export default function Operations() {
       const l = await read("baydo:leads"); if (l) setLeads(l);
       const pk = await read("baydo:parking"); if (pk) setParking(pk);
       const ov = await read("baydo:overrides"); if (ov) setOverrides(ov);
+      const kr = await read("baydo:keyreleases"); if (Array.isArray(kr)) setReleases(kr);
+      const leases = await read("baydo:leases");
+      if (Array.isArray(leases)) {
+        setSignedLeases(leases.filter((lease) =>
+          !!lease.signed_at || ["signed", "active"].includes(lease.status ?? lease.state)));
+      }
       setLoading(false);
     })();
   }, []);
@@ -136,6 +145,10 @@ export default function Operations() {
 
   const saveOutcomes = (v) => { setOutcomes(v); persist("baydo:showoutcomes", v); };
   const saveReleases = (v) => { setReleases(v); persist("baydo:keyreleases", v); };
+  const flash = (text) => {
+    setNotice(text);
+    window.setTimeout(() => setNotice(""), 3500);
+  };
   const pendingRelease = signedLeases.filter((l) =>
     !releases.some((r) => r.unit_number === l.unit_number && r.approved_at)).length;
 
@@ -265,6 +278,7 @@ export default function Operations() {
           <h1>Showing outcomes and move-outs</h1>
         </div>
         <div className="op-headr">
+          {notice && <span className="op-flash">{notice}</span>}
           {session && (
             <span className="op-chip"
                   style={{ background: session.role === "admin" ? "#131C25"
@@ -1035,6 +1049,7 @@ const CSS = `
 .op-body{padding:18px 28px;display:flex;flex-direction:column;gap:14px;max-width:1100px}
 .op-note{color:var(--dim);font-size:12.5px;margin:0 0 4px;line-height:1.65}
 .op-admin{color:var(--accent)}
+.op-flash{font-size:12px;font-weight:700;color:#0E6C61;background:#EAF7F4;border:1px solid #B8DED7;padding:6px 10px;border-radius:4px}
 .op-empty{color:var(--dim);font-size:12.5px;padding:26px 0;text-align:center;background:var(--paper);
   border:1px dashed var(--rule);border-radius:4px}
 .op-card{background:var(--paper);border:1px solid var(--rule);border-radius:4px;padding:18px 20px;

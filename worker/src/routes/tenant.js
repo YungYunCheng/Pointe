@@ -58,8 +58,12 @@ r.get("/public/availability", async (c) => {
   const sql = c.get("db");
 
   const types = await sql`
-    SELECT u.unit_type_code, t.bedroom_label_en, t.bedroom_label_zh, t.area_sqft,
-           t.balcony_sqft,
+    SELECT replace(u.unit_type_code, ' (M)', '') AS unit_type_code,
+           MIN(t.bedroom_label_en) AS bedroom_label_en,
+           MIN(t.bedroom_label_zh) AS bedroom_label_zh, MIN(t.area_sqft) AS area_sqft,
+           MIN(t.balcony_sqft) AS balcony_sqft,
+           MAX(t.virtual_tour_url) AS virtual_tour_url,
+           MAX(t.virtual_tour_provider) AS virtual_tour_provider,
            COUNT(*) FILTER (WHERE u.status = 'available')::int AS available,
            MIN(u.available_from) FILTER (WHERE u.status = 'available') AS earliest,
            COALESCE(MIN(r.base_rent), 0) AS rent
@@ -70,9 +74,8 @@ r.get("/public/availability", async (c) => {
      AND (p.effective_to IS NULL OR p.effective_to >= CURRENT_DATE)
     LEFT JOIN unit_type_rents r
       ON r.pricing_profile_id = p.id AND r.unit_type_code = u.unit_type_code
-    GROUP BY u.unit_type_code, t.bedroom_label_en, t.bedroom_label_zh,
-             t.area_sqft, t.balcony_sqft
-    ORDER BY t.area_sqft`;
+    GROUP BY replace(u.unit_type_code, ' (M)', '')
+    ORDER BY MIN(t.area_sqft)`;
 
   const [parking] = await sql`
     SELECT
@@ -93,7 +96,7 @@ r.get("/public/availability", async (c) => {
   return c.json({
     // Mirrored layouts fold together. The same suite reversed is not two
     // options, and listing it twice reads as padding once somebody notices.
-    types: types.map((t) => ({ ...t, code: t.unit_type_code.replace(" (M)", "") })),
+    types: types.map((t) => ({ ...t, code: t.unit_type_code })),
     // Said out loud on the public page. 222 stalls against 330 units is
     // structural, and a tenant who finds out after signing has a reason to be
     // annoyed that one who was told does not.

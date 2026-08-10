@@ -77,7 +77,7 @@ export const api = {
 
   /* ---- property ---- */
   units:      ()                => request("GET", "/units"),
-  setStatus:  (unit, patch)     => request("PATCH", `/units/${unit}/status`, patch),
+  setStatus:  (unit, patch)     => request("PATCH", `/units/${unit}`, patch),
   pricing:    ()                => request("GET", "/pricing"),
   publishPricing: (payload)     => request("POST", "/pricing", payload),
 

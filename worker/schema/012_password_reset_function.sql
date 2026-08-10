@@ -1,6 +1,19 @@
 BEGIN;
 
 /*
+ * Older Pointe databases predate these password-metadata columns. PL/pgSQL
+ * defers column resolution until a function is called, so CREATE FUNCTION can
+ * otherwise succeed here and the reset endpoint fail later with HTTP 500.
+ */
+ALTER TABLE users
+  ADD COLUMN IF NOT EXISTS password_params TEXT,
+  ADD COLUMN IF NOT EXISTS password_changed_at TIMESTAMPTZ,
+  ADD COLUMN IF NOT EXISTS password_expires_at TIMESTAMPTZ;
+
+ALTER TABLE password_history
+  ADD COLUMN IF NOT EXISTS params TEXT;
+
+/*
  * Keep the complete password-reset transaction inside PostgreSQL.
  *
  * Cloudflare Workers Free allows very little CPU per request. Even when the

@@ -35,7 +35,8 @@ r.get("/units", require_("units.view"), async (c) => {
   const rentBy = Object.fromEntries(rents.map((x) => [x.unit_type_code, x.base_rent]));
 
   return c.json({
-    units: units.map((u) => ({ ...u, current_rent: rentBy[u.unit_type_code] ?? null })),
+    units: units.map((u) => ({ ...u,
+      current_rent: u.rent_override ?? rentBy[u.unit_type_code] ?? null })),
     counts: units.reduce((acc, u) => {
       acc[u.status] = (acc[u.status] ?? 0) + 1;
       return acc;
@@ -45,7 +46,13 @@ r.get("/units", require_("units.view"), async (c) => {
 
 r.patch("/units/:unit", require_("units.status.edit"), async (c) => {
   const sql = c.get("db");
-  const { status, available_from, rent_override, note } = await c.req.json();
+  const body = await c.req.json();
+  const { status, available_from, rent_override } = body;
+  const notes = Object.prototype.hasOwnProperty.call(body, "notes") ? body.notes : body.note;
+  const hasDate = Object.prototype.hasOwnProperty.call(body, "available_from");
+  const hasRent = Object.prototype.hasOwnProperty.call(body, "rent_override");
+  const hasNotes = Object.prototype.hasOwnProperty.call(body, "notes") ||
+    Object.prototype.hasOwnProperty.call(body, "note");
   const unit = c.req.param("unit");
 
   const [before] = await sql`SELECT * FROM units WHERE unit_number = ${unit}`;
@@ -54,9 +61,9 @@ r.patch("/units/:unit", require_("units.status.edit"), async (c) => {
   const [after] = await sql`
     UPDATE units SET
       status = COALESCE(${status ?? null}, status),
-      available_from = COALESCE(${available_from ?? null}, available_from),
-      rent_override = COALESCE(${rent_override ?? null}, rent_override),
-      note = COALESCE(${note ?? null}, note),
+      available_from = CASE WHEN ${hasDate} THEN ${available_from || null} ELSE available_from END,
+      rent_override = CASE WHEN ${hasRent} THEN ${rent_override === "" ? null : rent_override} ELSE rent_override END,
+      notes = CASE WHEN ${hasNotes} THEN ${notes || null} ELSE notes END,
       updated_at = now()
     WHERE unit_number = ${unit} RETURNING *`;
 

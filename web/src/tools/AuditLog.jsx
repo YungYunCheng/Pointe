@@ -200,17 +200,6 @@ export default function AuditConsole() {
     return () => clearInterval(t);
   }, [loading, scan]);
 
-  if (loading) return <div className="ad"><style>{CSS}</style><div className="ad-load">Loading the change log…</div></div>;
-
-  if (session && session.role !== "admin") return (
-    <div className="ad"><style>{CSS}</style>
-      <div className="ad-deny">
-        <h2>No access</h2>
-        <p>The change log and restore are Admin only. You are signed in as {session.name}.</p>
-      </div>
-    </div>
-  );
-
   /* Search runs across the action, the record, the person and the field values.
      The useful detail is usually inside the before and after, not in the label. */
   const shown = useMemo(() => {
@@ -231,6 +220,20 @@ export default function AuditConsole() {
 
   const actors = useMemo(
     () => [...new Set(log.map((e) => e.actor).filter(Boolean))].sort(), [log]);
+
+  /* Hooks must run in the same order on the loading render and every render
+     after it. Keeping these returns below the memos prevents the Audit route
+     from crashing as soon as its initial storage read finishes. */
+  if (loading) return <div className="ad"><style>{CSS}</style><div className="ad-load">Loading the change log…</div></div>;
+
+  if (session && session.role !== "admin") return (
+    <div className="ad"><style>{CSS}</style>
+      <div className="ad-deny">
+        <h2>No access</h2>
+        <p>The change log and restore are Admin only. You are signed in as {session.name}.</p>
+      </div>
+    </div>
+  );
 
   /* Taking a copy of the log is itself an event: who took it, covering what,
      and a hash of exactly what they received. Without that, an export is a

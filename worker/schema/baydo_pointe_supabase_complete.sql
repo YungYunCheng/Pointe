@@ -4200,6 +4200,14 @@ END $$;
 -- Keep password reset inside PostgreSQL so a Free-plan Worker only needs to
 -- send one small function call. This is also available as the incremental
 -- migration in 012_password_reset_function.sql.
+ALTER TABLE users
+  ADD COLUMN IF NOT EXISTS password_params TEXT,
+  ADD COLUMN IF NOT EXISTS password_changed_at TIMESTAMPTZ,
+  ADD COLUMN IF NOT EXISTS password_expires_at TIMESTAMPTZ;
+
+ALTER TABLE password_history
+  ADD COLUMN IF NOT EXISTS params TEXT;
+
 CREATE OR REPLACE FUNCTION public.reset_staff_password(
   p_token_hash          TEXT,
   p_password            TEXT,
@@ -4286,6 +4294,142 @@ BEGIN
   RETURN 'OK';
 END;
 $$;
+
+-- ═══════════════════════════════════════════════════════════════════════
+--   014 operations workflow
+-- ═══════════════════════════════════════════════════════════════════════
+
+/* Floor plans can point at a hosted tour now and at a company-server object
+ * later. The public site only exposes the HTTPS URL. */
+ALTER TABLE unit_types
+  ADD COLUMN IF NOT EXISTS virtual_tour_url TEXT,
+  ADD COLUMN IF NOT EXISTS virtual_tour_provider TEXT,
+  ADD COLUMN IF NOT EXISTS virtual_tour_storage_key TEXT,
+  ADD COLUMN IF NOT EXISTS virtual_tour_updated_by TEXT REFERENCES users(id),
+  ADD COLUMN IF NOT EXISTS virtual_tour_updated_at TIMESTAMPTZ;
+
+INSERT INTO permissions (code, description) VALUES
+  ('floorplans.manage', 'Manage floor-plan virtual tours'),
+  ('contracts.archive', 'Queue signed contracts for company-server archiving')
+ON CONFLICT (code) DO UPDATE SET description = EXCLUDED.description;
+
+INSERT INTO role_permissions (role_code, permission_code) VALUES
+  ('admin', 'floorplans.manage'),
+  ('property_manager', 'floorplans.manage'),
+  ('admin', 'contracts.archive'),
+  ('property_manager', 'contracts.archive')
+ON CONFLICT DO NOTHING;
+
+/* Admin and Property Manager may change unit availability. Building Manager
+ * and Accounting use the same screen as read-only users. */
+DELETE FROM role_permissions
+WHERE role_code = 'building_manager' AND permission_code = 'units.status.edit';
+
+ALTER TABLE events
+  ADD COLUMN IF NOT EXISTS confirmation_state TEXT NOT NULL DEFAULT 'none'
+    CHECK (confirmation_state IN ('none','sent','confirmed','declined')),
+  ADD COLUMN IF NOT EXISTS confirmation_channel TEXT,
+  ADD COLUMN IF NOT EXISTS confirmation_sent_at TIMESTAMPTZ,
+  ADD COLUMN IF NOT EXISTS confirmation_responded_at TIMESTAMPTZ,
+  ADD COLUMN IF NOT EXISTS signing_state TEXT
+    CHECK (signing_state IN ('pending_review','approved','sent','signed')),
+  ADD COLUMN IF NOT EXISTS approved_by TEXT REFERENCES users(id),
+  ADD COLUMN IF NOT EXISTS approved_name TEXT,
+  ADD COLUMN IF NOT EXISTS approved_at TIMESTAMPTZ;
+
+ALTER TABLE maintenance
+  ADD COLUMN IF NOT EXISTS approval_state TEXT NOT NULL DEFAULT 'pending'
+    CHECK (approval_state IN ('pending','approved','rejected')),
+  ADD COLUMN IF NOT EXISTS approved_by TEXT REFERENCES users(id),
+  ADD COLUMN IF NOT EXISTS approved_name TEXT,
+  ADD COLUMN IF NOT EXISTS approved_at TIMESTAMPTZ,
+  ADD COLUMN IF NOT EXISTS approval_note TEXT,
+  ADD COLUMN IF NOT EXISTS recommended_vendor_id TEXT REFERENCES vendors(id),
+  ADD COLUMN IF NOT EXISTS recommendation_reason TEXT,
+  ADD COLUMN IF NOT EXISTS recommendation_score NUMERIC(8,2),
+  ADD COLUMN IF NOT EXISTS assigned_vendor_id TEXT REFERENCES vendors(id),
+  ADD COLUMN IF NOT EXISTS assignment_source TEXT
+    CHECK (assignment_source IN ('system_recommendation','manual')),
+  ADD COLUMN IF NOT EXISTS assigned_by TEXT REFERENCES users(id),
+  ADD COLUMN IF NOT EXISTS assigned_name TEXT,
+  ADD COLUMN IF NOT EXISTS assigned_at TIMESTAMPTZ;
+
+CREATE INDEX IF NOT EXISTS idx_maintenance_approval
+  ON maintenance(approval_state, created_at DESC);
+CREATE INDEX IF NOT EXISTS idx_maintenance_vendor
+  ON maintenance(assigned_vendor_id, state);
+
+CREATE TABLE IF NOT EXISTS vendor_service_coverage (
+  id             TEXT PRIMARY KEY,
+  vendor_id      TEXT NOT NULL REFERENCES vendors(id) ON DELETE CASCADE,
+  category       TEXT NOT NULL,
+  building_code  TEXT REFERENCES buildings(code),
+  preference     INTEGER NOT NULL DEFAULT 0,
+  is_available   BOOLEAN NOT NULL DEFAULT TRUE,
+  max_job_amount NUMERIC(14,2),
+  note           TEXT,
+  created_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  UNIQUE (vendor_id, category, building_code)
+);
+CREATE INDEX IF NOT EXISTS idx_vendor_coverage
+  ON vendor_service_coverage(category, building_code, is_available);
+
+ALTER TABLE vendor_quotes
+  ADD COLUMN IF NOT EXISTS state TEXT NOT NULL DEFAULT 'received'
+    CHECK (state IN ('received','selected','rejected','expired','withdrawn')),
+  ADD COLUMN IF NOT EXISTS selected_by TEXT REFERENCES users(id),
+  ADD COLUMN IF NOT EXISTS selected_name TEXT,
+  ADD COLUMN IF NOT EXISTS selected_at TIMESTAMPTZ;
+
+ALTER TABLE purchase_orders
+  ADD COLUMN IF NOT EXISTS quote_id TEXT REFERENCES vendor_quotes(id),
+  ADD COLUMN IF NOT EXISTS issued_by TEXT REFERENCES users(id),
+  ADD COLUMN IF NOT EXISTS issued_name TEXT,
+  ADD COLUMN IF NOT EXISTS issued_at TIMESTAMPTZ;
+
+CREATE UNIQUE INDEX IF NOT EXISTS idx_one_selected_quote_per_ticket
+  ON vendor_quotes(ticket_id) WHERE state = 'selected';
+
+CREATE TABLE IF NOT EXISTS signed_contract_archives (
+  id                   TEXT PRIMARY KEY,
+  signature_request_id TEXT NOT NULL REFERENCES signature_requests(id),
+  lease_id             TEXT REFERENCES leases(id),
+  unit_number          TEXT,
+  source_key           TEXT NOT NULL,
+  source_sha256        TEXT NOT NULL,
+  certificate_key      TEXT,
+  destination_provider TEXT NOT NULL DEFAULT 'company_server',
+  destination_key      TEXT,
+  state                TEXT NOT NULL DEFAULT 'awaiting_connection'
+    CHECK (state IN ('awaiting_connection','queued','storing','stored','failed')),
+  last_error           TEXT,
+  queued_by            TEXT REFERENCES users(id),
+  queued_name          TEXT,
+  queued_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  stored_at TIMESTAMPTZ,
+  UNIQUE (signature_request_id)
+);
+CREATE INDEX IF NOT EXISTS idx_contract_archive_state
+  ON signed_contract_archives(state, queued_at);
+
+CREATE TABLE IF NOT EXISTS contract_storage_jobs (
+  id          TEXT PRIMARY KEY,
+  archive_id  TEXT NOT NULL REFERENCES signed_contract_archives(id) ON DELETE CASCADE,
+  state       TEXT NOT NULL DEFAULT 'waiting'
+    CHECK (state IN ('waiting','running','done','failed')),
+  attempts    INTEGER NOT NULL DEFAULT 0,
+  run_after TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  last_error  TEXT,
+  created_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  finished_at TIMESTAMPTZ,
+  UNIQUE (archive_id)
+);
+
+/* Admin is the super-role. This runs after every permission in the complete
+ * schema has been declared, including permissions introduced above. */
+INSERT INTO role_permissions (role_code, permission_code)
+SELECT 'admin', code FROM permissions
+ON CONFLICT DO NOTHING;
 
 COMMIT;
 

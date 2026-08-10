@@ -93,8 +93,10 @@ r.post("/public/auth/login", async (c) => {
     }
   });
 
-  const perms = await sql`
-    SELECT permission_code AS p FROM role_permissions WHERE role_code = ${u.role_code}`;
+  const perms = u.role_code === "admin"
+    ? await sql`SELECT code AS p FROM permissions`
+    : await sql`
+      SELECT permission_code AS p FROM role_permissions WHERE role_code = ${u.role_code}`;
 
   const expired = u.password_expires_at && new Date(u.password_expires_at) < new Date();
   const left = daysUntil(u.password_expires_at);

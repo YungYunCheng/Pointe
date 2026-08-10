@@ -11,6 +11,8 @@ import renewals from "./routes/renewals.js";
 import increases from "./routes/increases.js";
 import leases from "./routes/leases.js";
 import payments from "./routes/payments.js";
+import operations from "./routes/operations.js";
+import ai from "./routes/ai.js";
 
 /* ============================================================
    Baydo Pointe — one API on Cloudflare Workers
@@ -178,16 +180,18 @@ async function staffSession(c, token) {
 
   // Permissions are read on every request rather than carried in the token,
   // so a role change takes effect now instead of when the session expires.
-  const perms = await sql`
-    SELECT permission_code AS p FROM role_permissions WHERE role_code = ${row.role_code}
-    UNION
-    SELECT permission AS p FROM user_permissions
-      WHERE user_id = ${row.id} AND effect = 'grant'
-        AND (expires_at IS NULL OR expires_at > now())
-    EXCEPT
-    SELECT permission AS p FROM user_permissions
-      WHERE user_id = ${row.id} AND effect = 'revoke'
-        AND (expires_at IS NULL OR expires_at > now())`;
+  const perms = row.role_code === "admin"
+    ? await sql`SELECT code AS p FROM permissions`
+    : await sql`
+      SELECT permission_code AS p FROM role_permissions WHERE role_code = ${row.role_code}
+      UNION
+      SELECT permission AS p FROM user_permissions
+        WHERE user_id = ${row.id} AND effect = 'grant'
+          AND (expires_at IS NULL OR expires_at > now())
+      EXCEPT
+      SELECT permission AS p FROM user_permissions
+        WHERE user_id = ${row.id} AND effect = 'revoke'
+          AND (expires_at IS NULL OR expires_at > now())`;
 
   const passwordExpired = row.password_expires_at && new Date(row.password_expires_at) < new Date();
   return { id: row.id, email: row.email, name: row.full_name, role: row.role_code,
@@ -300,6 +304,8 @@ app.route("/api", renewals);
 app.route("/api", increases);
 app.route("/api", leases);
 app.route("/api", payments);
+app.route("/api", operations);
+app.route("/api", ai);
 
 /* Re-exported so a route can import either from here or from lib/auth.js.
    The definitions live in lib so nothing imports the app. */
@@ -317,8 +323,9 @@ export default {
    */
   async scheduled(event, env, ctx) {
     const sql = connect(env);
-    const hour = new Date(event.scheduledTime).getUTCHours();
-    const job = hour === 7 ? runDailyJobs(sql, env) : runHourlyJobs(sql, env);
+    const at = new Date(event.scheduledTime);
+    const daily = at.getUTCHours() === 7 && at.getUTCMinutes() === 0;
+    const job = daily ? runDailyJobs(sql, env) : runHourlyJobs(sql, env);
     ctx.waitUntil(job.finally(() => sql.end({ timeout: 5 }).catch(() => {})));
   },
 };

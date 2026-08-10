@@ -19,9 +19,9 @@ export function albertaToday(at = new Date()) {
   }).format(at);
 }
 
-/* Both cron patterns fire at 07:00 UTC, and the dispatcher in index.js sends
-   that hour to the daily job. Without this the outbox would sit unsent for
-   that hour, which is exactly the hour after the rent run queues 330 notices. */
+/* The five-minute cron's 07:00 UTC occurrence is sent to the daily job. The
+   daily job also drains the outbox so notices created by the rent run do not
+   wait for the next occurrence. */
 export async function runDailyJobs(sql, env) {
   const today = albertaToday();
   const results = {};
@@ -440,4 +440,3 @@ async function drainOutbox(sql, env, limit) {
 
   return { attempted: rows.length, sent, overdue };
 }
-

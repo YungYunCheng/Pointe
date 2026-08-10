@@ -1,4 +1,4 @@
-import React, { useState, useEffect, Suspense, lazy } from "react";
+import React, { useState, useEffect, Suspense, lazy, Component } from "react";
 import { createRoot } from "react-dom/client";
 import { BrowserRouter, Routes, Route, NavLink, Navigate, useLocation } from "react-router-dom";
 import { applyTheme, ROLE_THEME, MizarMark, BRAND_CSS, roleColor } from "./lib/theme.jsx";
@@ -17,7 +17,7 @@ import api from "./lib/api.js";
    ============================================================ */
 
 const AuthConsole     = lazy(() => import("./tools/AuthConsole.jsx"));
-const LeasingConsole  = lazy(() => import("./tools/LeasingConsole.jsx"));
+const UnitsConsole    = lazy(() => import("./tools/UnitsConsole.jsx"));
 const LeadsCrm        = lazy(() => import("./tools/LeadsCrm.jsx"));
 const Schedule        = lazy(() => import("./tools/Schedule.jsx"));
 const AiInbox         = lazy(() => import("./tools/AiInbox.jsx"));
@@ -31,12 +31,16 @@ const Agreements      = lazy(() => import("./tools/Agreements.jsx"));
 const Portfolio       = lazy(() => import("./tools/Portfolio.jsx"));
 const AdminConsole    = lazy(() => import("./tools/AdminConsole.jsx"));
 const Confirmations   = lazy(() => import("./tools/Confirmations.jsx"));
+const FloorPlans      = lazy(() => import("./tools/FloorPlans.jsx"));
+const MaintenanceWorkflow = lazy(() => import("./tools/MaintenanceWorkflow.jsx"));
 
 const ALL = "admin property_manager building_manager accounting".split(" ");
 const LEASING = ["admin", "property_manager", "building_manager"];
 const TOOLS = [
   { path: "/confirmations", label: "Confirmations", el: Confirmations, roles: ALL },
-  { path: "/units",       label: "Units",       el: LeasingConsole,  roles: ALL },
+  { path: "/units",       label: "Units",       el: UnitsConsole,    roles: ALL },
+  { path: "/floor-plans", label: "Floor plans", el: FloorPlans,      roles: ALL },
+  { path: "/maintenance", label: "Maintenance", el: MaintenanceWorkflow, roles: ["admin", "building_manager"] },
   { path: "/schedule",    label: "Schedule",    el: Schedule,        roles: LEASING },
   { path: "/leads",       label: "Leads",       el: LeadsCrm,        roles: ["admin", "building_manager"] },
   { path: "/site",        label: "On site",     el: BuildingManager, roles: ["admin", "building_manager"] },
@@ -136,16 +140,35 @@ function Shell() {
       <main className="sh-main">
         <Suspense fallback={<div className="sh-load">Loading…</div>}>
           <Routes>
-            <Route path="/" element={<Navigate to={visible[0]?.path ?? "/units"} replace />} />
-            {visible.map((t) => <Route key={t.path} path={t.path} element={<t.el />} />)}
+            <Route path="/" element={<Navigate to="/units" replace />} />
+            {visible.map((t) => <Route key={t.path} path={t.path}
+              element={<PageBoundary key={loc.pathname}><t.el session={session} /></PageBoundary>} />)}
             {/* A tool this role cannot see redirects rather than 404s, so a
                 shared link degrades quietly instead of looking broken. */}
-            <Route path="*" element={<Navigate to={visible[0]?.path ?? "/units"} replace />} />
+            <Route path="*" element={<Navigate to="/units" replace />} />
           </Routes>
         </Suspense>
       </main>
     </div>
   );
+}
+
+/* A failed lazy chunk or one broken tool must not erase the whole shell.
+ * Navigating elsewhere remounts this boundary because it is keyed by path. */
+class PageBoundary extends Component {
+  constructor(props) { super(props); this.state = { error: null }; }
+  static getDerivedStateFromError(error) { return { error }; }
+  componentDidCatch(error, info) { console.error("[page]", error, info); }
+  render() {
+    if (!this.state.error) return this.props.children;
+    return <section className="sh-crash">
+      <h2>This page could not open</h2>
+      <p>The rest of Pointe is still available. This usually happens when an older browser tab requests a page file from the previous deployment.</p>
+      <div><button onClick={() => window.location.reload()}>Reload this page</button>
+        <button onClick={() => { window.history.pushState({}, "", "/units"); window.location.reload(); }}>Go to Units</button></div>
+      <details><summary>Error details</summary><code>{String(this.state.error?.message ?? this.state.error)}</code></details>
+    </section>;
+  }
 }
 
 const CSS = `
@@ -169,6 +192,8 @@ body{margin:0;font-family:'IBM Plex Sans',system-ui,sans-serif;
 .sh-chip{font-size:10.5px;font-weight:700;color:#fff;background:var(--brand);border-radius:9px;padding:3px 10px;letter-spacing:.01em;transition:background .35s ease}
 .sh-name{font-size:13px;font-weight:600}
 .sh-main{flex:1}
+.sh-crash{max-width:720px;margin:54px auto;padding:26px;background:#fff;border:1px solid #D3DBE1;border-left:4px solid #B23A54}
+.sh-crash h2{margin:0 0 8px}.sh-crash p{color:#5f6f7e;line-height:1.6}.sh-crash div{display:flex;gap:8px;margin:18px 0}.sh-crash button{font:inherit;border:1px solid #b9c5cf;background:#fff;border-radius:4px;padding:9px 14px;cursor:pointer}.sh-crash button:first-child{background:#173b5f;color:#fff;border-color:#173b5f}.sh-crash details{color:#718096}.sh-crash code{display:block;margin-top:8px;white-space:pre-wrap}
 @media (max-width:720px){
   .sh-nav{gap:10px;padding:0 14px}
   .sh-links{order:3;width:100%;overflow-x:auto;padding-bottom:2px}

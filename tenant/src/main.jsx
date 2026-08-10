@@ -51,6 +51,21 @@ function useProperty() {
   const [data, setData] = useState(null);
   useEffect(() => {
     (async () => {
+      try {
+        const response = await fetch("/api/public/availability");
+        if (response.ok) {
+          const live = await response.json();
+          const byType = Object.fromEntries((live.types ?? []).map((x) => [x.code, {
+            free: Number(x.available ?? 0), dates: x.earliest ? [x.earliest] : [],
+          }]));
+          const base = Object.fromEntries((live.types ?? []).map((x) => [x.code, Number(x.rent) || null]));
+          setData({ pricing: { base, petLimit: live.fees?.pet_limit }, byType,
+            publicTypes: live.types ?? [], stalls: live.parking ?? { total: 0, free: 0 },
+            waiting: Number(live.parking?.waiting ?? 0) });
+          return;
+        }
+      } catch {}
+
       const read = async (k) => {
         try { const r = await window.storage.get(k); return r?.value ? JSON.parse(r.value) : null; }
         catch { return null; }
@@ -140,9 +155,12 @@ function Footer() {
 function Home() {
   const { t, money } = useT();
   const d = useProperty();
-  const totalFree = d ? Object.values(d.byType).reduce((s, x) => s + x.free, 0) : null;
-  const rents = d ? Object.entries(d.byType)
-    .map(([c]) => Number(d.pricing.base?.[c])).filter((n) => n > 0) : [];
+  const totalFree = d ? (d.publicTypes
+    ? d.publicTypes.reduce((s, x) => s + Number(x.available ?? 0), 0)
+    : Object.values(d.byType).reduce((s, x) => s + x.free, 0)) : null;
+  const rents = d ? (d.publicTypes
+    ? d.publicTypes.map((x) => Number(x.rent)).filter((n) => n > 0)
+    : Object.entries(d.byType).map(([c]) => Number(d.pricing.base?.[c])).filter((n) => n > 0)) : [];
   const from = rents.length ? Math.min(...rents) : null;
 
   return (
@@ -207,6 +225,14 @@ function Suites() {
 
   const rows = useMemo(() => {
     if (!d) return [];
+    if (d.publicTypes) return d.publicTypes.map((x) => ({
+      code: x.code, ...(TYPES[x.code] ?? {}), free: Number(x.available ?? 0),
+      dates: x.earliest ? [x.earliest] : [], rent: Number(x.rent) || null,
+      earliest: x.earliest || null, virtualTourUrl: x.virtual_tour_url || null,
+      virtualTourProvider: x.virtual_tour_provider || null,
+    })).filter((r) => filter === "all"
+      || (filter === "1" && r.beds === 1) || (filter === "2" && r.beds === 2)
+      || (filter === "den" && r.den)).sort((a, b) => a.sf - b.sf);
     // Mirrored layouts are the same suite reversed, so they are merged here.
     // Splitting them would show a tenant two identical listings.
     const merged = {};
@@ -261,6 +287,10 @@ function Suites() {
               </div>
               {r.earliest && <div className="bt-dim">{t("suites.earliest", { date: date(r.earliest) })}</div>}
               <div className="bt-card-a">
+                {r.virtualTourUrl && <a href={r.virtualTourUrl} target="_blank" rel="noopener noreferrer"
+                  className="bt-btn bt-btn--sm bt-btn--ghost">
+                  {locale === "zh" ? "線上看房" : "Virtual tour"}
+                </a>}
                 <Link to={`/book?type=${encodeURIComponent(r.code)}`} className="bt-btn bt-btn--sm">
                   {t("suites.book")}
                 </Link>

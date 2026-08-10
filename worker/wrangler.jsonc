@@ -52,11 +52,12 @@
   // 07:00 UTC is midnight Mountain in summer, 23:00 the previous day in winter
   // — the jobs check the local date themselves rather than trusting the trigger.
   "triggers": {
-    "crons": ["0 7 * * *", "0 * * * *"]
+    "crons": ["*/5 * * * *"]
   },
 
   "vars": {
     "ENVIRONMENT": "production",
+    "ANTHROPIC_MODEL": "claude-3-5-haiku-latest",
     "PUBLIC_URL": "https://pointe-worker.dcheng0726.workers.dev",
     "PUBLIC_TENANT_URL": "https://www.example.com"
   }
@@ -67,4 +68,3 @@
   //   npx wrangler secret put SESSION_PEPPER
   // Anything in vars is visible in the dashboard and in this file.
 }
-
