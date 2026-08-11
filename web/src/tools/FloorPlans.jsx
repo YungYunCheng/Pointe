@@ -7,7 +7,12 @@ export default function FloorPlans({ session }) {
   const [error, setError] = useState("");
   const canEdit = ["admin", "property_manager"].includes(session?.role);
   const load = async () => {
-    try { setRows((await api.get("/unit-types")).unit_types ?? []); setError(""); }
+    try {
+      const data = await api.get("/unit-types");
+      if (!Array.isArray(data?.unit_types)) throw new Error("INVALID_UNIT_TYPES_RESPONSE");
+      setRows(data.unit_types.filter((row) => row && typeof row === "object"));
+      setError("");
+    }
     catch (e) { setError(e.code || "LOAD_FAILED"); }
   };
   useEffect(() => { load(); }, []);

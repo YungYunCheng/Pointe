@@ -171,11 +171,26 @@ function Shell() {
 /* A failed lazy chunk or one broken tool must not erase the whole shell.
  * Navigating elsewhere remounts this boundary because it is keyed by path. */
 class PageBoundary extends Component {
-  constructor(props) { super(props); this.state = { error: null }; }
+  constructor(props) { super(props); this.state = { error: null, recovering: false }; }
   static getDerivedStateFromError(error) { return { error }; }
-  componentDidCatch(error, info) { console.error("[page]", error, info); }
+  componentDidCatch(error, info) {
+    console.error("[page]", error, info);
+    const message = String(error?.message ?? error);
+    const staleChunk = /failed to fetch dynamically imported module|error loading dynamically imported module|importing a module script failed|chunkloaderror|loading chunk/i.test(message);
+    if (!staleChunk) return;
+
+    // A tab kept open during a deployment can still reference the previous
+    // hashed page chunk. Refresh once to load the new manifest, but keep the
+    // normal error screen if the refreshed deployment is genuinely broken.
+    const key = `baydo:chunk-reload:${window.location.pathname}`;
+    const lastAttempt = Number(sessionStorage.getItem(key) || 0);
+    if (Date.now() - lastAttempt < 30_000) return;
+    sessionStorage.setItem(key, String(Date.now()));
+    this.setState({ recovering: true }, () => window.location.reload());
+  }
   render() {
     if (!this.state.error) return this.props.children;
+    if (this.state.recovering) return <div className="sh-load">Updating this page…</div>;
     return <section className="sh-crash">
       <h2>This page could not open</h2>
       <p>The rest of Pointe is still available. This usually happens when an older browser tab requests a page file from the previous deployment.</p>
