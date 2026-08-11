@@ -61,6 +61,29 @@ function orderCharges(charges) {
   });
 }
 
+async function leaseBalance(sql, leaseId) {
+  if (!leaseId) return { balance: 0, outstanding: 0, prepayment: 0 };
+  const [row] = await sql`
+    WITH clock AS (
+      SELECT (now() AT TIME ZONE 'America/Edmonton')::date AS local_today
+    )
+    SELECT
+      COALESCE((SELECT SUM(c.amount) FROM ar_charges c, clock
+        WHERE c.lease_id = ${leaseId} AND c.state <> 'void'
+          AND c.charge_date <= clock.local_today), 0)
+      - COALESCE((SELECT SUM(p.amount) FROM payments p, clock
+        WHERE p.lease_id = ${leaseId} AND p.purpose <> 'deposit'
+          AND p.state IN ('authorised','settled')
+          AND COALESCE(p.received_on, p.created_at::date) <= clock.local_today), 0)
+      AS balance`;
+  const balance = cents(row?.balance ?? 0);
+  return {
+    balance,
+    outstanding: Math.max(0, balance),
+    prepayment: Math.max(0, cents(-balance)),
+  };
+}
+
 /* ---------- What a tenant can pay with ---------- */
 
 r.get("/tenant/payment-methods", async (c) => {
@@ -174,10 +197,13 @@ r.post("/payments/manual", ledgerEditor, async (c) => {
 
   if (!unit_number || !method_code || !(Number(amount) > 0))
     return c.json({ code: "MISSING_FIELDS" }, 400);
+  if (method_code === "cheque" && !String(cheque_number ?? "").trim())
+    return c.json({ code: "CHEQUE_NUMBER_REQUIRED" }, 400);
 
   try {
     const out = await sql.begin(async (tx) => {
-      const [method] = await tx`SELECT * FROM payment_methods WHERE code = ${method_code}`;
+      const [method] = await tx`SELECT * FROM payment_methods
+        WHERE code = ${method_code} AND is_active AND channel = 'manual'`;
       if (!method) throw Object.assign(new Error("UNKNOWN_METHOD"), { status: 400 });
 
       if (purpose === "deposit" && !method.trust_capable)
@@ -186,6 +212,9 @@ r.post("/payments/manual", ledgerEditor, async (c) => {
 
       const [lease] = await tx`SELECT id, contact_id FROM leases
         WHERE unit_number = ${unit_number} AND status = 'active'`;
+      if (!lease && purpose !== "deposit")
+        throw Object.assign(new Error("NO_ACTIVE_TENANCY"), { status: 409,
+          detail: "Rent cannot be posted to a vacant unit. Assign the resident and active lease first." });
 
       const paid = cents(amount);
       const on = received_on || today();
@@ -198,7 +227,8 @@ r.post("/payments/manual", ledgerEditor, async (c) => {
         VALUES (${uid("pay_")}, ${ref()}, ${lease?.id ?? null}, ${unit_number},
                 ${lease?.contact_id ?? null}, ${method_code}, ${purpose},
                 ${paid}, 0, ${paid}, 'authorised',
-                ${cheque_number ?? null}, ${bank_name ?? null}, ${theirRef ?? null},
+                ${method_code === "cheque" ? String(cheque_number).trim() : null},
+                ${bank_name ?? null}, ${method_code === "cheque" ? null : theirRef ?? null},
                 ${on}, ${purpose === "deposit" ? "1020" : method.settles_to_gl},
                 ${c.get("user").id}, ${c.get("user").name}, ${note ?? null})
         RETURNING *`;
@@ -212,18 +242,24 @@ r.post("/payments/manual", ledgerEditor, async (c) => {
         ? []
         : await applyToCharges(tx, p, unit_number, apply_to);
 
-      return { payment: p, method, applied };
+      return { payment: p, method, applied, leaseId: lease?.id ?? null };
     });
+
+    const account = purpose === "deposit"
+      ? null : await leaseBalance(sql, out.leaseId);
 
     await audit(c, { action: "payment.manual", entityType: "payment",
       entityId: out.payment.id,
       after: { unit: unit_number, amount, method: method_code, purpose } });
 
-    return c.json({ payment: out.payment, applied: out.applied,
+    return c.json({ payment: out.payment, applied: out.applied, account,
       note: out.method.reversible_days > 0
         ? `Recorded as received. A ${out.method.label_en.toLowerCase()} can still be reversed for up to ${out.method.reversible_days} days, so it is not settled until it clears.`
         : null }, 201);
   } catch (e) {
+    if (e.code === "23505" && e.constraint_name === "idx_pay_cheque")
+      return c.json({ code: "DUPLICATE_CHEQUE",
+        detail: "This cheque number has already been recorded for the unit." }, 409);
     return c.json({ code: e.message, detail: e.detail }, e.status ?? 500);
   }
 });
@@ -369,24 +405,28 @@ r.get("/units/:unit/ledger", require_("units.view"), async (c) => {
   const [known] = await sql`SELECT unit_number FROM units WHERE unit_number = ${unit}`;
   if (!known) return c.json({ code: "NOT_FOUND" }, 404);
 
-  const charges = await sql`
+  const [lease] = await sql`SELECT id FROM leases
+    WHERE unit_number = ${unit} AND status = 'active'
+    ORDER BY start_date DESC, created_at DESC LIMIT 1`;
+
+  const charges = lease ? await sql`
     SELECT id, period, kind, description, amount, paid_amount, charge_date,
            due_date, state, created_at
     FROM ar_charges
-    WHERE unit_number = ${unit} AND state <> 'void'
-    ORDER BY charge_date, created_at`;
-  const payments = await sql`
+    WHERE lease_id = ${lease.id} AND state <> 'void'
+    ORDER BY charge_date, created_at` : [];
+  const payments = lease ? await sql`
     SELECT p.id, p.reference, p.purpose, p.amount, p.state, p.received_on,
            p.settled_on, p.failure_note, p.note, p.created_at,
            m.label_en AS method_label
     FROM payments p
     JOIN payment_methods m ON m.code = p.method_code
-    WHERE p.unit_number = ${unit}
-    ORDER BY COALESCE(p.received_on, p.created_at::date), p.created_at`;
-  const deposits = await sql`
+    WHERE p.lease_id = ${lease.id}
+    ORDER BY COALESCE(p.received_on, p.created_at::date), p.created_at` : [];
+  const deposits = lease ? await sql`
     SELECT id, kind, amount, txn_date, basis, created_at
-    FROM deposit_ledger WHERE unit_number = ${unit}
-    ORDER BY txn_date, created_at`;
+    FROM deposit_ledger WHERE lease_id = ${lease.id}
+    ORDER BY txn_date, created_at` : [];
 
   const effectivePayment = (p) => p.purpose !== "deposit" &&
     ["authorised", "settled"].includes(p.state) ? Number(p.amount) : 0;
@@ -417,15 +457,18 @@ r.get("/units/:unit/ledger", require_("units.view"), async (c) => {
 
   const totalDebits = transactions.reduce((n, x) => n + Number(x.debit), 0);
   const totalCredits = transactions.reduce((n, x) => n + Number(x.credit), 0);
+  const balance = cents(totalDebits - totalCredits);
   const overdue = charges.filter((x) => ["open", "partial"].includes(x.state) &&
     new Date(x.due_date) < new Date()).reduce((n, x) =>
       n + Number(x.amount) - Number(x.paid_amount), 0);
 
   return c.json({
-    unit, transactions: transactions.reverse(), deposits,
+    unit, lease_id: lease?.id ?? null, transactions: transactions.reverse(), deposits,
     deposit_payments: payments.filter((x) => x.purpose === "deposit"),
     summary: {
-      balance: cents(totalDebits - totalCredits),
+      balance,
+      outstanding: Math.max(0, balance),
+      prepayment: Math.max(0, cents(-balance)),
       total_debits: cents(totalDebits), total_credits: cents(totalCredits),
       overdue: cents(overdue),
       deposit_held: cents(deposits.reduce((n, x) => n + Number(x.amount), 0)),

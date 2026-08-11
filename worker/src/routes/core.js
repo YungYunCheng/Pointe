@@ -16,6 +16,53 @@ import { require_, audit, uid } from "../lib/auth.js";
 
 const r = new Hono();
 
+const cents = (n) => Math.round((Number(n) + Number.EPSILON) * 100) / 100;
+
+/* Rent status is derived, never stored as a checkbox.  A stored "paid" flag
+ * becomes false information on the first of the next month; deriving it from
+ * the active lease, this month's rent charge and the account balance makes the
+ * rollover automatic. */
+export function rentStatus(resident, financial) {
+  if (!resident) return {
+    code: "vacant", label: "Vacant", period: financial?.period ?? null,
+    is_paid: false, outstanding_balance: 0, prepayment: 0,
+  };
+
+  const f = financial ?? {};
+  const outstanding = Math.max(0, cents(f.balance ?? 0));
+  const prepayment = Math.max(0, cents(-(f.balance ?? 0)));
+  const due = cents(f.current_rent_due ?? 0);
+  const postedPaid = cents(f.current_rent_paid ?? 0);
+  const availableCredit = Math.max(0, cents(f.available_credit ?? 0));
+  const paid = cents(postedPaid + Math.min(availableCredit, Math.max(0, due - postedPaid)));
+  const remaining = Math.max(0, cents(due - paid));
+  const common = {
+    period: f.period ?? null,
+    current_rent_due: due,
+    current_rent_paid: paid,
+    current_rent_outstanding: remaining,
+    outstanding_balance: outstanding,
+    prepayment,
+  };
+
+  if (String(resident.start_date).slice(0, 10) > String(f.local_today ?? ""))
+    return { ...common, code: "awaiting_move_in", label: "Awaiting move-in",
+      is_paid: false };
+
+  if (due <= 0.005)
+    return prepayment > 0.005
+      ? { ...common, code: "prepaid", label: "Prepaid", is_paid: true }
+      : { ...common, code: "not_billed", label: "Not billed", is_paid: false };
+
+  if (prepayment > 0.005)
+    return { ...common, code: "prepaid", label: "Prepaid", is_paid: true };
+  if (paid >= due - 0.005 || (remaining > 0.005 && outstanding <= 0.005))
+    return { ...common, code: "paid", label: "Rent paid", is_paid: true };
+  if (paid > 0.005)
+    return { ...common, code: "partial", label: "Partially paid", is_paid: false };
+  return { ...common, code: "outstanding", label: "Rent outstanding", is_paid: false };
+}
+
 /* ---------- Units ---------- */
 
 r.get("/units", require_("units.view"), async (c) => {
@@ -60,6 +107,55 @@ r.get("/units", require_("units.view"), async (c) => {
     ORDER BY l.unit_number, l.start_date DESC, l.created_at DESC`;
   const residentBy = Object.fromEntries(residents.map((x) => [x.unit_number, x]));
 
+  /* Scope every amount to the active lease.  A suite can have years of prior
+   * residents; an old tenant's arrears must never make the new resident look
+   * unpaid.  Dates use Edmonton time because that is where the property is. */
+  const financials = await sql`
+    WITH clock AS (
+      SELECT (now() AT TIME ZONE 'America/Edmonton')::date AS local_today
+    ), charge_totals AS (
+      SELECT c.lease_id, COALESCE(SUM(c.amount), 0) AS charges
+      FROM ar_charges c, clock
+      WHERE c.state <> 'void' AND c.lease_id IS NOT NULL
+        AND c.charge_date <= clock.local_today
+      GROUP BY c.lease_id
+    ), payment_totals AS (
+      SELECT p.lease_id, COALESCE(SUM(p.amount), 0) AS payments
+      FROM payments p, clock
+      WHERE p.lease_id IS NOT NULL AND p.purpose <> 'deposit'
+        AND p.state IN ('authorised','settled')
+        AND COALESCE(p.received_on, p.created_at::date) <= clock.local_today
+      GROUP BY p.lease_id
+    ), current_rent AS (
+      SELECT c.lease_id, COALESCE(SUM(c.amount), 0) AS amount,
+             COALESCE(SUM(c.paid_amount), 0) AS paid
+      FROM ar_charges c, clock
+      WHERE c.state <> 'void' AND c.kind = 'rent'
+        AND c.period = to_char(clock.local_today, 'YYYY-MM')
+      GROUP BY c.lease_id
+    ), application_totals AS (
+      SELECT p.lease_id, COALESCE(SUM(pa.amount), 0) AS applied
+      FROM payments p
+      JOIN payment_applications pa ON pa.payment_id = p.id
+      WHERE p.lease_id IS NOT NULL AND p.purpose <> 'deposit'
+        AND p.state IN ('authorised','settled')
+      GROUP BY p.lease_id
+    )
+    SELECT l.unit_number, l.id AS lease_id,
+      clock.local_today::text AS local_today,
+      to_char(clock.local_today, 'YYYY-MM') AS period,
+      COALESCE(cr.amount, 0) AS current_rent_due,
+      COALESCE(cr.paid, 0) AS current_rent_paid,
+      GREATEST(0, COALESCE(pt.payments, 0) - COALESCE(at.applied, 0)) AS available_credit,
+      COALESCE(ct.charges, 0) - COALESCE(pt.payments, 0) AS balance
+    FROM leases l CROSS JOIN clock
+    LEFT JOIN charge_totals ct ON ct.lease_id = l.id
+    LEFT JOIN payment_totals pt ON pt.lease_id = l.id
+    LEFT JOIN current_rent cr ON cr.lease_id = l.id
+    LEFT JOIN application_totals at ON at.lease_id = l.id
+    WHERE l.status = 'active'`;
+  const financialBy = Object.fromEntries(financials.map((x) => [x.unit_number, x]));
+
   const parking = await sql`
     SELECT unit_number, json_agg(json_build_object(
       'id', id, 'pool_code', pool_code, 'status', status,
@@ -78,6 +174,7 @@ r.get("/units", require_("units.view"), async (c) => {
       current_rent: resident?.rent ?? marketRent,
       resident,
       parking: parkingBy[u.unit_number] ?? [],
+      rent_status: rentStatus(resident, financialBy[u.unit_number]),
     };
   });
 
