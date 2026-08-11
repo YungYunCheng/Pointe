@@ -14,6 +14,10 @@ const RENT_STATUS = {
   awaiting_move_in: { color: "#718096" }, not_billed: { color: "#1C6FA6" },
   vacant: { color: "#98A4AF" },
 };
+const RENT_FILTERS = {
+  paid: { label: "Paid", color: "#0E8577", states: new Set(["paid", "prepaid"]) },
+  unpaid: { label: "Unpaid", color: "#B23A54", states: new Set(["partial", "outstanding"]) },
+};
 const money = (n) => n == null || n === "" ? "—" : new Intl.NumberFormat("en-CA", {
   style: "currency", currency: "CAD", maximumFractionDigits: 0,
 }).format(Number(n));
@@ -47,8 +51,11 @@ export default function UnitsConsole({ session }) {
 
   const shown = useMemo(() => {
     const q = query.trim().toLowerCase();
+    const rentFilter = RENT_FILTERS[filter];
     return units.filter((u) => u.building_code === building &&
-      (filter === "all" || u.status === filter) && (!q || [u.unit_number,
+      (filter === "all" || (rentFilter
+        ? rentFilter.states.has(u.rent_status?.code)
+        : u.status === filter)) && (!q || [u.unit_number,
         u.resident?.full_name, u.resident?.email, u.resident?.phone]
         .some((value) => String(value ?? "").toLowerCase().includes(q))));
   }, [units, building, filter, query]);
@@ -99,6 +106,10 @@ export default function UnitsConsole({ session }) {
             onChange={(e) => setQuery(e.target.value)} />
           <button className={filter === "all" ? "on" : ""} onClick={() => setFilter("all")}>All</button>
           {Object.entries(STATUS).map(([key, st]) => <button key={key}
+            className={filter === key ? "on" : ""} onClick={() => setFilter(key)}>
+            <i style={{ background: st.color }} />{st.label}
+          </button>)}
+          {Object.entries(RENT_FILTERS).map(([key, st]) => <button key={key}
             className={filter === key ? "on" : ""} onClick={() => setFilter(key)}>
             <i style={{ background: st.color }} />{st.label}
           </button>)}

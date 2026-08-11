@@ -391,7 +391,8 @@ async function sweepExpired(sql) {
  */
 async function drainOutbox(sql, env, limit) {
   const rows = await sql`
-    SELECT * FROM outbox WHERE state = 'queued' AND attempts < 5
+    SELECT * FROM outbox
+    WHERE state = 'queued' AND attempts < 5 AND channel IN ('email', 'both')
     ORDER BY created_at LIMIT ${limit}`;
   if (!rows.length) return { attempted: 0, sent: 0 };
 
@@ -407,6 +408,12 @@ async function drainOutbox(sql, env, limit) {
         continue;
       }
 
+      if (!row.to_email || !/^[^\\s@]+@[^\\s@]+\\.[^\\s@]+$/.test(row.to_email)) {
+        await sql`UPDATE outbox SET attempts = 5, state = 'failed',
+          last_error = 'Missing or invalid email address' WHERE id = ${row.id}`;
+        continue;
+      }
+
       const res = await fetch("https://api.resend.com/emails", {
         method: "POST",
         headers: { Authorization: `Bearer ${env.RESEND_API_KEY}`,
@@ -416,6 +423,7 @@ async function drainOutbox(sql, env, limit) {
           to: [row.to_email],
           subject: row.subject ?? "A message from Baydo Pointe",
           text: row.body,
+          reply_to: env.REPLY_TO_EMAIL ?? "rentals@themizar.ca",
         }),
       });
 

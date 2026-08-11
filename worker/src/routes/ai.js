@@ -20,23 +20,22 @@ r.post("/ai/:task", async (c) => {
   const input = body.input ?? {};
   const encoded = JSON.stringify(input);
   if (encoded.length > 80_000) return c.json({ code: "AI_INPUT_TOO_LARGE" }, 413);
-  if (!c.env.ANTHROPIC_API_KEY) return c.json({ code: "AI_NOT_CONFIGURED" }, 503);
+  if (!c.env.OPENAI_API_KEY) return c.json({ code: "AI_NOT_CONFIGURED" }, 503);
 
   const system = PROMPTS[task] ??
     `Assist a property-management employee with the named task. Use only supplied facts, do not take actions, move money, make legal decisions, or promise an outcome. Return a draft for human review.`;
-  const response = await fetch("https://api.anthropic.com/v1/messages", {
+  const response = await fetch("https://api.openai.com/v1/responses", {
     method: "POST",
     headers: {
       "content-type": "application/json",
-      "x-api-key": c.env.ANTHROPIC_API_KEY,
-      "anthropic-version": "2023-06-01",
+      "authorization": `Bearer ${c.env.OPENAI_API_KEY}`,
     },
     body: JSON.stringify({
-      model: c.env.ANTHROPIC_MODEL ?? "claude-3-5-haiku-latest",
-      max_tokens: 1400,
-      temperature: 0.2,
-      system,
-      messages: [{ role: "user", content: `Task: ${task}\nFacts/input:\n${encoded}` }],
+      model: c.env.OPENAI_MODEL ?? "gpt-5.6-luna",
+      max_output_tokens: 1400,
+      reasoning: { effort: "low" },
+      instructions: system,
+      input: [{ role: "user", content: `Task: ${task}\nFacts/input:\n${encoded}` }],
     }),
   });
   if (!response.ok) {
@@ -44,11 +43,41 @@ r.post("/ai/:task", async (c) => {
     return c.json({ code: "AI_PROVIDER_ERROR" }, 502);
   }
   const result = await response.json();
-  const text = (result.content ?? []).filter((x) => x.type === "text").map((x) => x.text).join("\n");
+  const text = (result.output ?? [])
+    .flatMap((item) => item.type === "message" ? (item.content ?? []) : [])
+    .filter((item) => item.type === "output_text")
+    .map((item) => item.text ?? "").join("\n");
+  if (!text) return c.json({ code: "AI_EMPTY_RESPONSE" }, 502);
   await audit(c, { action: `ai.${task}`, entityType: body.ref_type ?? "ai_task",
     entityId: body.ref_id ?? null, after: { model: result.model, input_chars: encoded.length,
       output_chars: text.length } });
   return c.json({ text, model: result.model });
+});
+
+/* Human-approved examples are training candidates, not live instructions.
+   They remain reviewable data until an administrator deliberately exports a
+   clean set for evals, prompt examples or fine-tuning. */
+r.post("/ai/feedback", async (c) => {
+  const body = await c.req.json().catch(() => ({}));
+  const original = String(body.original ?? "").trim();
+  const draft = String(body.draft ?? "").trim();
+  const final = String(body.final ?? "").trim();
+  if (!body.task || !original || !draft || !final)
+    return c.json({ code: "MISSING_FIELDS" }, 400);
+  if ([original, draft, final].some((value) => value.length > 20_000))
+    return c.json({ code: "AI_FEEDBACK_TOO_LARGE" }, 413);
+
+  const [row] = await c.get("db")`
+    INSERT INTO ai_feedback_examples (id, task, source_ref_type, source_ref_id,
+      original_input, ai_draft, approved_output, was_edited, model, created_by)
+    VALUES (${`aif_${crypto.randomUUID().replace(/-/g, "").slice(0, 12)}`},
+      ${body.task}, ${body.ref_type ?? null}, ${body.ref_id ?? null}, ${original},
+      ${draft}, ${final}, ${draft !== final},
+      ${body.model ?? c.env.OPENAI_MODEL ?? "gpt-5.6-luna"}, ${c.get("user").id})
+    RETURNING id, was_edited, created_at`;
+  await audit(c, { action: "ai.feedback.approved", entityType: "ai_feedback",
+    entityId: row.id, after: { task: body.task, was_edited: row.was_edited } });
+  return c.json({ feedback: row }, 201);
 });
 
 export default r;

@@ -17,6 +17,19 @@ const SRC = "src";
 const problems = [];
 const warnings = [];
 
+/* ---------- Deployment email links ---------- */
+
+const wrangler = readFileSync("wrangler.jsonc", "utf8");
+const publicUrl = wrangler.match(/"PUBLIC_URL"\\s*:\\s*"([^"]+)"/)?.[1];
+const tenantUrl = wrangler.match(/"PUBLIC_TENANT_URL"\\s*:\\s*"([^"]+)"/)?.[1];
+const fromEmail = wrangler.match(/"FROM_EMAIL"\\s*:\\s*"([^"]+)"/)?.[1];
+if (!publicUrl || /pointe-backend|example\\.com/.test(publicUrl))
+  problems.push("wrangler.jsonc — PUBLIC_URL must be the staff front end so reset and invite links open a page, not the API.");
+if (!tenantUrl || /example\\.com|pointe-backend/.test(tenantUrl))
+  problems.push("wrangler.jsonc — PUBLIC_TENANT_URL must be the tenant front end so claim, verify and reset links work.");
+if (!fromEmail || !/@themizar\\.ca$/i.test(fromEmail))
+  problems.push("wrangler.jsonc — FROM_EMAIL must use the verified themizar.ca sending domain.");
+
 function walk(dir) {
   const out = [];
   for (const entry of readdirSync(dir, { withFileTypes: true })) {

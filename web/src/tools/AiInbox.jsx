@@ -290,8 +290,15 @@ useEffect(() => {
     for (const m of msgs.filter((x) => x.state === "new")) await process(m);
   };
 
-  const send = (m, body) =>
+  const send = async (m, body) => {
+    await fetch("/api/ai/feedback", {
+      method: "POST", credentials: "include",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ task: "inbox_draft", ref_type: "message", ref_id: m.id,
+        original: m.body, draft: m.draft, final: body, model: "gpt-5.6-luna" }),
+    }).catch(() => null);
     patch(m.id, { state: "sent", draft: body, sentAt: Date.now(), edited: body !== m.draft });
+  };
 
   const addMessage = () => {
     if (!compose.body.trim()) return;
@@ -491,7 +498,7 @@ useEffect(() => {
                       intent: selected.intent,
                       intent_confidence: selected.confidence,
                       facts_used: selected.factsUsed || [],
-                      model: "claude-sonnet-4-6",
+                      model: "gpt-5.6-luna",
                       prompt_version: "v1.0",
                       draft_edited_by_human: !!selected.edited,
                       sent_at: selected.sentAt ? new Date(selected.sentAt).toISOString() : null,
