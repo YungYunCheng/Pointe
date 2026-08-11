@@ -19,6 +19,7 @@ const money = (n) => (n == null || isNaN(n) ? "—"
 const cents = (n) => Math.round((Number(n) + Number.EPSILON) * 100) / 100;
 const uid = (p) => p + Date.now().toString(36) + Math.random().toString(36).slice(2, 5);
 const nowISO = () => new Date().toISOString();
+const today = () => new Date().toISOString().slice(0, 10);
 const thisPeriod = () => new Date().toISOString().slice(0, 7);
 
 /* What a component can be worked out from. These cover the arrangements
