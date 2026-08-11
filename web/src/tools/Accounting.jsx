@@ -2,7 +2,9 @@ import React, { useState, useEffect, useMemo, useCallback } from "react";
 import Banking from "./AccountingBanking.jsx";
 import { AmendDialog, VersionHistory, ChangeLog, InterestRates } from "./AccountingAmend.jsx";
 import MonthEnd, { MONTH_END_CSS } from "./MonthEnd.jsx";
+import AccountingDocumentReview from "./AccountingDocumentReview.jsx";
 import { ai } from "../lib/ai.js";
+import api from "../lib/api.js";
 
 /* ============================================================
    BAYDO POINTE — Accounting
@@ -176,6 +178,16 @@ export default function Accounting() {
       setAssets(await read("acct:assets", []));
       setDepreciationRuns(await read("acct:depreciation", []));
       setArrearsFiles(await read("acct:arrears", []));
+      try {
+        const shared = await api.accountingReviewCenter();
+        setVendors(shared.vendors?.length ? shared.vendors : VENDOR_SEED);
+        setInvoices(shared.invoices ?? []);
+        setReports(shared.reports ?? []);
+        if (shared.accounts?.length) setCoa(shared.accounts);
+      } catch {
+        // The local prototype remains readable while the migration or API is
+        // unavailable. The review page explains what needs to be connected.
+      }
       setLoading(false);
     })();
   }, []);
@@ -211,6 +223,13 @@ export default function Accounting() {
     depreciationRuns: (v) => { setDepreciationRuns(v); persist("acct:depreciation", v); },
     arrears: (v) => { setArrearsFiles(v); persist("acct:arrears", v); },
   };
+
+  const syncReviewData = useCallback((shared) => {
+    if (shared.vendors) setVendors(shared.vendors);
+    if (shared.invoices) setInvoices(shared.invoices);
+    if (shared.reports) setReports(shared.reports);
+    if (shared.accounts?.length) setCoa(shared.accounts);
+  }, []);
 
   /* ---------- posting ----------
      Mirrors the server. Balanced or it does not post, and a closed
@@ -303,6 +322,7 @@ export default function Accounting() {
     ["dashboard", "Overview"],
     ["ar", "Rent and AR"],
     ["ap", "Bills and AP"],
+    ["review", "Invoice & report review"],
     ["search", "Transactions"],
     ["banking", "Banking"],
     ["reports", "Reports"],
@@ -363,12 +383,13 @@ export default function Accounting() {
       {tab === "ar" && <AR {...{ schedules, charges, receipts, save, post, canPost,
         session, glName, coa, periodStateOf, amendments }} />}
       {tab === "ap" && <AP {...{ vendors, invoices, save, post, canPost, coa, glName,
-        session, amendments }} />}
+        session, amendments }} onOpenReview={() => setTab("review")} />}
+      {tab === "review" && <AccountingDocumentReview session={session} onData={syncReviewData} />}
       {tab === "search" && <Search {...{ entries, glName, vendors }} />}
       {tab === "banking" && <Banking {...{ statements, entries, receipts, invoices, periods,
         balances, save, canPost, session, coa }} />}
       {tab === "reports" && <Reports {...{ reports, periods, entries, charges, receipts,
-        coa, save, canPost, session }} />}
+        coa, save, canPost, session }} onOpenReview={() => setTab("review")} />}
       {tab === "coa" && <ChartOfAccounts {...{ coa, balances, setCoa, canPost }} />}
       {tab === "arrears" && <ArrearsFiles {...{ charges, files: arrearsFiles,
         canPost, session, save, flash: (t) => setSaveState("saved") }} />}
@@ -1016,9 +1037,9 @@ function ReceiptDialog({ charge, charges, receipts, post, onClose, onSave }) {
 
 /* ══════════════════ AP ══════════════════ */
 
-function AP({ vendors, invoices, save, post, canPost, coa, glName, session, amendments }) {
+function AP({ vendors, invoices, save, post, canPost, coa, glName, session, amendments,
+              onOpenReview }) {
   const [view, setView] = useState("invoices");
-  const [newInv, setNewInv] = useState(false);
   const [newVendor, setNewVendor] = useState(false);
   const [payFor, setPayFor] = useState(null);
   const [amendFor, setAmendFor] = useState(null);
@@ -1038,21 +1059,6 @@ function AP({ vendors, invoices, save, post, canPost, coa, glName, session, amen
     setAmendFor(null);
   };
 
-  const approve = (inv) => {
-    setErr("");
-    try {
-      const lines = inv.lines.map((l) => ({ gl: l.gl_code, debit: l.amount,
-        unit: l.unit_number, vendorId: inv.vendor_id, memo: l.description }));
-      if (inv.gst > 0) lines.push({ gl: "1210", debit: inv.gst, vendorId: inv.vendor_id,
-        memo: "GST input tax credit" });
-      lines.push({ gl: "2010", credit: inv.total, vendorId: inv.vendor_id, memo: inv.invoice_no });
-      const entry = post({ date: inv.invoice_date, building: inv.building_code,
-        source: "ap_invoice", sourceId: inv.id, memo: `AP ${inv.invoice_no}`, lines });
-      save.invoices(invoices.map((i) => i.id === inv.id
-        ? { ...i, state: "approved", entry_id: entry.id, approved_at: new Date().toISOString() } : i));
-    } catch (e) { setErr(e.message); }
-  };
-
   const open = invoices.filter((i) => ["approved", "partial"].includes(i.state));
 
   return (
@@ -1069,19 +1075,15 @@ function AP({ vendors, invoices, save, post, canPost, coa, glName, session, amen
             <h2>Vendor invoices <span className="ac-n">{invoices.length}</span></h2>
             <div className="ac-cardh-r">
               <span className="ac-dim">{money(cents(open.reduce((t, i) => t + (i.total - i.paid_amount), 0)))} owed</span>
-              {canPost && <button className="ac-btn ac-btn--sm" onClick={() => setNewInv(!newInv)}>
+              {canPost && <button className="ac-btn ac-btn--sm" onClick={onOpenReview}>
                 Enter an invoice
               </button>}
             </div>
           </div>
           <p className="ac-note-p">
-            A draft invoice is outside the ledger. Approving it is what posts it,
-            so a bill keyed by mistake never reaches the accounts.
+            A draft invoice is outside the ledger. Accounting and PM must confirm
+            the same file in Invoice & report review before it posts.
           </p>
-
-          {newInv && <NewInvoice vendors={vendors} coa={coa}
-            onAdd={(inv) => { save.invoices([inv, ...invoices]); setNewInv(false); }}
-            onCancel={() => setNewInv(false)} />}
 
           {err && <div className="ac-err">{err}</div>}
 
@@ -1106,8 +1108,8 @@ function AP({ vendors, invoices, save, post, canPost, coa, glName, session, amen
                     <span className={`ac-mono ${late ? "ac-bad" : "ac-dim"}`}>{i.due_date}</span>
                     <span className="ac-actions">
                       <span className="ac-tag" style={{ "--c": st.color }}>{st.label}</span>
-                      {canPost && i.state === "draft" &&
-                        <button className="ac-btn ac-btn--xs" onClick={() => approve(i)}>Approve</button>}
+                      {i.state === "draft" &&
+                        <button className="ac-btn ac-btn--xs" onClick={onOpenReview}>Review</button>}
                       {canPost && owing > 0 && i.state !== "draft" &&
                         <button className="ac-btn ac-btn--xs" onClick={() => setPayFor(i)}>Pay</button>}
                       {canPost && i.state !== "void" &&
@@ -1485,7 +1487,8 @@ function Search({ entries, glName, vendors }) {
 
 /* ══════════════════ Reports ══════════════════ */
 
-function Reports({ reports, periods, entries, charges, receipts, coa, save, canPost, session }) {
+function Reports({ reports, periods, entries, charges, receipts, coa, save, canPost, session,
+                   onOpenReview }) {
   const [period, setPeriod] = useState(thisPeriod());
   const [busy, setBusy] = useState(null);
   const [err, setErr] = useState("");
@@ -1551,7 +1554,7 @@ function Reports({ reports, periods, entries, charges, receipts, coa, save, canP
     `Arrears: charges open or part paid with a due date already past — ${money(f.arrears_total)} across ${f.arrears_count} charges. A running figure, not confined to this period.`,
   ].join("\n");
 
-  const generate = () => {
+  const generate = async () => {
     setErr("");
     if (state === "open") {
       setErr("The period is not reconciled. A report written from open figures describes numbers that are still moving.");
@@ -1559,10 +1562,19 @@ function Reports({ reports, periods, entries, charges, receipts, coa, save, canP
     }
     const made = BUILDINGS.map((b) => {
       const f = figuresFor(b);
-      return { id: uid("mr_"), period, building_code: b, figures: f, method: methodFor(f),
+      return { period, building_code: b, figures: f, method: methodFor(f),
                narrative: null, state: "draft", generated_at: new Date().toISOString() };
     });
-    save.reports([...made, ...reports.filter((r) => r.period !== period)]);
+    setBusy("generate");
+    try {
+      const result = await api.generateMonthlyReports(made);
+      save.reports([...(result.reports ?? []), ...reports.filter((r) => r.period !== period)]);
+    } catch (e) {
+      setErr(e?.code === "INTERNAL_ERROR"
+        ? "Run 016_accounting_document_review.sql before generating reports."
+        : "The reports could not be saved to the shared review queue.");
+    }
+    setBusy(null);
   };
 
   const writeNarrative = async (rep) => {
@@ -1571,9 +1583,10 @@ function Reports({ reports, periods, entries, charges, receipts, coa, save, canP
       const text = await ai("report_narrative",
         { building: rep.building_code, figures: rep.figures, method: rep.method },
         { ref_type: "monthly_report", ref_id: rep.id });
-      save.reports(reports.map((r) => r.id === rep.id
-        ? { ...r, narrative: text || null, state: text ? "review" : r.state,
-            model: "claude-sonnet-4-6" } : r));
+      const result = await api.updateMonthlyReport(rep.id, {
+        narrative: text || null, model: "claude-sonnet-4-6",
+      });
+      save.reports(reports.map((r) => r.id === rep.id ? result.report : r));
     } catch {
       setErr("The AI service did not respond. The figures stand on their own; write the commentary by hand.");
     }
@@ -1593,8 +1606,9 @@ function Reports({ reports, periods, entries, charges, receipts, coa, save, canP
             <span className="ac-tag" style={{ "--c": PERIOD_STATE[state].color }}>
               {PERIOD_STATE[state].label}
             </span>
-            {canPost && <button className="ac-btn ac-btn--sm" onClick={generate}>
-              Generate for all three
+            {canPost && <button className="ac-btn ac-btn--sm" onClick={generate}
+              disabled={busy === "generate"}>
+              {busy === "generate" ? "Generating…" : "Generate for all three"}
             </button>}
           </div>
         </div>
@@ -1625,14 +1639,8 @@ function Reports({ reports, periods, entries, charges, receipts, coa, save, canP
                   {busy === rep.id ? "Writing…" : "Write the commentary"}
                 </button>
               )}
-              {canPost && rep.narrative && rep.state !== "final" && (
-                <button className="ac-btn ac-btn--sm"
-                        onClick={() => save.reports(reports.map((r) => r.id === rep.id
-                          ? { ...r, state: "final", approved_by: session?.name,
-                              approved_at: new Date().toISOString() } : r))}>
-                  Approve
-                </button>
-              )}
+              {rep.state !== "final" && <button className="ac-btn ac-btn--sm"
+                onClick={onOpenReview}>PM + Accounting review</button>}
             </div>
           </div>
 

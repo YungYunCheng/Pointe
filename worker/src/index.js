@@ -13,6 +13,7 @@ import leases from "./routes/leases.js";
 import payments from "./routes/payments.js";
 import operations from "./routes/operations.js";
 import ai from "./routes/ai.js";
+import accounting from "./routes/accounting.js";
 
 /* ============================================================
    Baydo Pointe — one API on Cloudflare Workers
@@ -68,7 +69,10 @@ app.use("/api/*", async (c, next) => {
       return c.json({ code: "ORIGIN_REQUIRED" }, 403);
 
     const length = Number(c.req.header("content-length") ?? 0);
-    if (length > 1_048_576) return c.json({ code: "PAYLOAD_TOO_LARGE" }, 413);
+    const accountingFile = /^\/api\/accounting\/documents\/[^/]+\/[^/]+\/upload$/.test(c.req.path);
+    // Multipart framing adds a little overhead around the 10 MB file itself.
+    const limit = accountingFile ? 11 * 1024 * 1024 : 1_048_576;
+    if (length > limit) return c.json({ code: "PAYLOAD_TOO_LARGE", max_bytes: limit }, 413);
   }
   return next();
 });
@@ -297,7 +301,7 @@ app.route("/api", health);
    worth being deliberate about. */
 app.route("/api", auth);
 app.route("/api", core);
-// app.route("/api", accounting);
+app.route("/api", accounting);
 app.route("/api", tenant);
 app.route("/api", signup);
 app.route("/api", renewals);

@@ -161,6 +161,27 @@ export const api = {
   markAgreementSigned: (id, note)  => request("POST", `/agreements/issues/${id}/signed`, { note }),
   agreementIssues: (q = "")        => request("GET", `/agreements/issues${q}`),
 
+  /* ---- accounting document review ---- */
+  accountingReviewCenter: () => request("GET", "/accounting/review-center"),
+  createVendorInvoice: (payload) => request("POST", "/accounting/ap/invoices", payload),
+  uploadAccountingDocument(type, id, file) {
+    const fd = new FormData();
+    fd.append("file", file);
+    return request("POST", `/accounting/documents/${type}/${id}/upload`, fd);
+  },
+  generateAccountingDocument: (type, id) =>
+    request("POST", `/accounting/documents/${type}/${id}/generate`, {}),
+  reviewAccountingDocument: (type, id, decision, note = "", lane = null) =>
+    request("POST", `/accounting/documents/${type}/${id}/review`, {
+      decision, note, ...(lane ? { lane } : {}),
+    }),
+  generateMonthlyReports: (reports) =>
+    request("POST", "/accounting/reports/batch", { reports }),
+  updateMonthlyReport: (id, patch) =>
+    request("PATCH", `/accounting/reports/${id}`, patch),
+  accountingFileUrl: (id, download = false) =>
+    `${BASE}/api/accounting/files/${id}${download ? "?download=1" : ""}`,
+
   /* ---- admin ---- */
   users:       ()            => request("GET", "/admin/users"),
   createUser:  (payload)     => request("POST", "/admin/users", payload),
