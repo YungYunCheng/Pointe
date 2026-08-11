@@ -34,9 +34,55 @@ r.get("/units", require_("units.view"), async (c) => {
       AND (p.effective_to IS NULL OR p.effective_to >= CURRENT_DATE)`;
   const rentBy = Object.fromEntries(rents.map((x) => [x.unit_type_code, x.base_rent]));
 
+  /* A unit register without the current resident is only a vacancy board.
+   * Keep tenancy data relational and assemble the Yardi-style unit card here:
+   * lease/contact is the source of truth, the portal account only says whether
+   * that resident can sign in, and parking remains its own allocation record. */
+  const residents = await sql`
+    SELECT DISTINCT ON (l.unit_number)
+      l.unit_number, l.id AS lease_id, l.start_date, l.end_date, l.term_type,
+      l.rent, l.deposit, l.occupants, l.status AS lease_status,
+      ct.id AS contact_id, ct.full_name, ct.email, ct.phone, ct.locale,
+      ta.id AS account_id, ta.account_state, ta.email_verified_at,
+      app.pets, app.wants_parking, app.wants_storage
+    FROM leases l
+    LEFT JOIN contacts ct ON ct.id = l.contact_id
+    LEFT JOIN tenant_accounts ta
+      ON ta.lease_id = l.id AND ta.is_active AND ta.account_state = 'tenant'
+    LEFT JOIN LATERAL (
+      SELECT a.pets, a.wants_parking, a.wants_storage
+      FROM applications a
+      WHERE (ta.id IS NOT NULL AND a.account_id = ta.id)
+         OR (ct.email IS NOT NULL AND lower(a.email) = lower(ct.email))
+      ORDER BY a.created_at DESC LIMIT 1
+    ) app ON TRUE
+    WHERE l.status = 'active'
+    ORDER BY l.unit_number, l.start_date DESC, l.created_at DESC`;
+  const residentBy = Object.fromEntries(residents.map((x) => [x.unit_number, x]));
+
+  const parking = await sql`
+    SELECT unit_number, json_agg(json_build_object(
+      'id', id, 'pool_code', pool_code, 'status', status,
+      'assigned_at', assigned_at, 'requested_at', requested_at
+    ) ORDER BY requested_at) AS allocations
+    FROM parking_allocations
+    WHERE status IN ('assigned','waiting')
+    GROUP BY unit_number`;
+  const parkingBy = Object.fromEntries(parking.map((x) => [x.unit_number, x.allocations ?? []]));
+
+  const enriched = units.map((u) => {
+    const resident = residentBy[u.unit_number] ?? null;
+    const marketRent = u.rent_override ?? rentBy[u.unit_type_code] ?? null;
+    return { ...u,
+      market_rent: marketRent,
+      current_rent: resident?.rent ?? marketRent,
+      resident,
+      parking: parkingBy[u.unit_number] ?? [],
+    };
+  });
+
   return c.json({
-    units: units.map((u) => ({ ...u,
-      current_rent: u.rent_override ?? rentBy[u.unit_type_code] ?? null })),
+    units: enriched,
     counts: units.reduce((acc, u) => {
       acc[u.status] = (acc[u.status] ?? 0) + 1;
       return acc;

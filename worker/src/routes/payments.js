@@ -35,6 +35,23 @@ const ref = () => "PAY-" + crypto.randomUUID().slice(0, 8).toUpperCase();
 const SETTLEMENT_ORDER = ["rent", "parking", "storage", "pet", "utilities",
                           "late_fee", "damage", "other"];
 
+const CHARGE_ACCOUNTS = {
+  rent: "4010", parking: "4020", storage: "4030", pet: "4040",
+  late_fee: "4060", damage: "4070", utilities: "4090", other: "4090",
+  adjustment: "4090",
+};
+
+/* Ledger writes are deliberately role-bound as well as permission-bound.
+ * A one-off permission grant must not accidentally turn a PM/BM session into
+ * an accounting posting session. */
+const ledgerEditor = async (c, next) => {
+  const user = c.get("user");
+  if (!["admin", "accounting"].includes(user?.role) ||
+      !user?.perms?.has("accounting.ar"))
+    return c.json({ code: "FORBIDDEN", needs: "accounting.ar" }, 403);
+  return next();
+};
+
 function orderCharges(charges) {
   return [...charges].sort((a, b) => {
     const ai = SETTLEMENT_ORDER.indexOf(a.kind);
@@ -134,6 +151,14 @@ r.post("/tenant/pay", async (c) => {
 
 /* ---------- Accounting entering what arrived ---------- */
 
+r.get("/payment-methods/manual", ledgerEditor, async (c) => c.json({
+  methods: await c.get("db")`
+    SELECT code, label_en, label_zh, trust_capable
+    FROM payment_methods
+    WHERE is_active AND channel = 'manual'
+    ORDER BY sort_order`,
+}));
+
 /**
  * A cheque, an e-transfer, cash across the counter.
  *
@@ -141,7 +166,7 @@ r.post("/tenant/pay", async (c) => {
  * month, and a receipt issued the day it was handed over is a receipt against
  * money that may not be there — so it settles rather than being received.
  */
-r.post("/payments/manual", require_("accounting.ar"), async (c) => {
+r.post("/payments/manual", ledgerEditor, async (c) => {
   const sql = c.get("db");
   const { unit_number, method_code, amount, purpose = "rent", received_on,
           cheque_number, bank_name, reference: theirRef, note,
@@ -259,7 +284,7 @@ async function applyToCharges(tx, payment, unit, directed) {
  *  Not a deletion. The payment happened, the reversal happened, and both are
  *  part of the history — a receipt that vanishes leaves a tenant holding one
  *  the system does not recognise. */
-r.post("/payments/:id/reverse", require_("accounting.ar"), async (c) => {
+r.post("/payments/:id/reverse", ledgerEditor, async (c) => {
   const sql = c.get("db");
   const { reason, fee } = await c.req.json();
   if (!reason?.trim()) return c.json({ code: "REASON_REQUIRED" }, 400);
@@ -332,6 +357,141 @@ r.get("/payments", require_("accounting.view"), async (c) => {
     fees_last_year: { total: Number(fees.total), payments: Number(fees.with_fee) } });
 });
 
+/* ---------- Staff unit ledger ----------
+ *
+ * Every staff role that may open Units can read the same tenant statement.
+ * Posting remains behind accounting.ar, which only Admin and Accounting have.
+ * Corrections are additional adjustments or reversals; posted history is never
+ * overwritten or deleted. */
+r.get("/units/:unit/ledger", require_("units.view"), async (c) => {
+  const sql = c.get("db");
+  const unit = c.req.param("unit");
+  const [known] = await sql`SELECT unit_number FROM units WHERE unit_number = ${unit}`;
+  if (!known) return c.json({ code: "NOT_FOUND" }, 404);
+
+  const charges = await sql`
+    SELECT id, period, kind, description, amount, paid_amount, charge_date,
+           due_date, state, created_at
+    FROM ar_charges
+    WHERE unit_number = ${unit} AND state <> 'void'
+    ORDER BY charge_date, created_at`;
+  const payments = await sql`
+    SELECT p.id, p.reference, p.purpose, p.amount, p.state, p.received_on,
+           p.settled_on, p.failure_note, p.note, p.created_at,
+           m.label_en AS method_label
+    FROM payments p
+    JOIN payment_methods m ON m.code = p.method_code
+    WHERE p.unit_number = ${unit}
+    ORDER BY COALESCE(p.received_on, p.created_at::date), p.created_at`;
+  const deposits = await sql`
+    SELECT id, kind, amount, txn_date, basis, created_at
+    FROM deposit_ledger WHERE unit_number = ${unit}
+    ORDER BY txn_date, created_at`;
+
+  const effectivePayment = (p) => p.purpose !== "deposit" &&
+    ["authorised", "settled"].includes(p.state) ? Number(p.amount) : 0;
+  const transactions = [
+    ...charges.map((x) => {
+      const amount = Number(x.amount);
+      return {
+        id: x.id, source: "charge", date: x.charge_date, created_at: x.created_at,
+        kind: x.kind, description: x.description || x.kind,
+        debit: amount > 0 ? amount : 0, credit: amount < 0 ? Math.abs(amount) : 0,
+        state: x.state,
+      };
+    }),
+    ...payments.filter((x) => x.purpose !== "deposit").map((x) => ({
+      id: x.id, source: "payment", date: x.received_on || x.created_at,
+      created_at: x.created_at, kind: x.purpose,
+      description: `${x.method_label} · ${x.reference}${x.failure_note ? ` · ${x.failure_note}` : ""}`,
+      debit: 0, credit: effectivePayment(x), amount: Number(x.amount), state: x.state,
+    })),
+  ].sort((a, b) => String(a.date).localeCompare(String(b.date)) ||
+    String(a.created_at).localeCompare(String(b.created_at)));
+
+  let running = 0;
+  for (const row of transactions) {
+    running = cents(running + Number(row.debit) - Number(row.credit));
+    row.balance = running;
+  }
+
+  const totalDebits = transactions.reduce((n, x) => n + Number(x.debit), 0);
+  const totalCredits = transactions.reduce((n, x) => n + Number(x.credit), 0);
+  const overdue = charges.filter((x) => ["open", "partial"].includes(x.state) &&
+    new Date(x.due_date) < new Date()).reduce((n, x) =>
+      n + Number(x.amount) - Number(x.paid_amount), 0);
+
+  return c.json({
+    unit, transactions: transactions.reverse(), deposits,
+    deposit_payments: payments.filter((x) => x.purpose === "deposit"),
+    summary: {
+      balance: cents(totalDebits - totalCredits),
+      total_debits: cents(totalDebits), total_credits: cents(totalCredits),
+      overdue: cents(overdue),
+      deposit_held: cents(deposits.reduce((n, x) => n + Number(x.amount), 0)),
+    },
+    can_edit: ["admin", "accounting"].includes(c.get("user")?.role),
+  });
+});
+
+r.post("/units/:unit/ledger/charges", ledgerEditor, async (c) => {
+  const sql = c.get("db");
+  const unit = c.req.param("unit");
+  const body = await c.req.json().catch(() => ({}));
+  const amount = cents(body.amount);
+  const direction = body.direction === "credit" ? "credit" : "debit";
+  const kind = CHARGE_ACCOUNTS[body.kind] ? body.kind : "other";
+  const chargeDate = body.date || today();
+  if (!(amount > 0) || !/^\d{4}-\d{2}-\d{2}$/.test(chargeDate))
+    return c.json({ code: "INVALID_LEDGER_ENTRY" }, 400);
+  if (!String(body.description ?? "").trim())
+    return c.json({ code: "DESCRIPTION_REQUIRED" }, 400);
+
+  const [context] = await sql`
+    SELECT u.building_code, l.id AS lease_id, l.contact_id
+    FROM units u
+    LEFT JOIN leases l ON l.unit_number = u.unit_number AND l.status = 'active'
+    WHERE u.unit_number = ${unit}
+    ORDER BY l.created_at DESC NULLS LAST LIMIT 1`;
+  if (!context) return c.json({ code: "NOT_FOUND" }, 404);
+
+  const signed = direction === "credit" ? -amount : amount;
+  const [charge] = await sql`
+    INSERT INTO ar_charges (id, lease_id, unit_number, contact_id, building_code,
+      period, kind, gl_code, description, amount, charge_date, due_date, state)
+    VALUES (${uid("ch_")}, ${context.lease_id ?? null}, ${unit},
+      ${context.contact_id ?? null}, ${context.building_code}, ${chargeDate.slice(0, 7)},
+      ${kind}, ${CHARGE_ACCOUNTS[kind]}, ${String(body.description).trim()}, ${signed},
+      ${chargeDate}, ${body.due_date || chargeDate}, 'open')
+    RETURNING *`;
+  await audit(c, { action: direction === "credit" ? "ledger.credit" : "ledger.charge",
+    entityType: "ar_charge", entityId: charge.id,
+    after: { unit, amount: signed, kind, description: charge.description } });
+  return c.json({ charge }, 201);
+});
+
+r.post("/units/:unit/ledger/charges/:id/void", ledgerEditor, async (c) => {
+  const sql = c.get("db");
+  const unit = c.req.param("unit");
+  const { reason } = await c.req.json().catch(() => ({}));
+  if (!String(reason ?? "").trim()) return c.json({ code: "REASON_REQUIRED" }, 400);
+  const [applied] = await sql`
+    SELECT COALESCE(SUM(amount), 0) AS total FROM payment_applications
+    WHERE charge_id = ${c.req.param("id")}`;
+  if (Number(applied?.total) > 0)
+    return c.json({ code: "CHARGE_HAS_PAYMENTS", detail: "Reverse the applied payment before voiding this charge." }, 409);
+  const [before] = await sql`SELECT * FROM ar_charges
+    WHERE id = ${c.req.param("id")} AND unit_number = ${unit}`;
+  if (!before) return c.json({ code: "NOT_FOUND" }, 404);
+  if (before.state === "void") return c.json({ code: "ALREADY_VOID" }, 409);
+  const [charge] = await sql`UPDATE ar_charges SET state = 'void',
+    description = ${`${before.description || before.kind} · Voided: ${String(reason).trim()}`}
+    WHERE id = ${before.id} RETURNING *`;
+  await audit(c, { action: "ledger.charge.void", entityType: "ar_charge",
+    entityId: before.id, before, after: { ...charge, void_reason: String(reason).trim() } });
+  return c.json({ charge });
+});
+
 r.get("/tenant/payments", async (c) => {
   const unit = tenantUnit(c);
   return c.json({ payments: await c.get("db")`
@@ -342,4 +502,3 @@ r.get("/tenant/payments", async (c) => {
 });
 
 export default r;
-

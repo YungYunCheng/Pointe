@@ -78,6 +78,15 @@ export const api = {
   /* ---- property ---- */
   units:      ()                => request("GET", "/units"),
   setStatus:  (unit, patch)     => request("PATCH", `/units/${unit}`, patch),
+  unitLedger: (unit)            => request("GET", `/units/${unit}/ledger`),
+  addLedgerCharge: (unit, body) => request("POST", `/units/${unit}/ledger/charges`, body),
+  voidLedgerCharge: (unit, id, reason) =>
+    request("POST", `/units/${unit}/ledger/charges/${id}/void`, { reason }),
+  manualPayment: (body)         => request("POST", "/payments/manual", body),
+  reversePayment: (id, reason)  => request("POST", `/payments/${id}/reverse`, { reason }),
+  manualPaymentMethods: ()      => request("GET", "/payment-methods/manual"),
+  createLease:(payload)         => request("POST", "/leases", payload),
+  updateResident: (lease, patch)=> request("PATCH", `/leases/${lease}/resident`, patch),
   pricing:    ()                => request("GET", "/pricing"),
   publishPricing: (payload)     => request("POST", "/pricing", payload),
 

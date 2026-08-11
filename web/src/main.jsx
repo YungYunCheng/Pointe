@@ -22,7 +22,6 @@ const LeadsCrm        = lazy(() => import("./tools/LeadsCrm.jsx"));
 const Schedule        = lazy(() => import("./tools/Schedule.jsx"));
 const AiInbox         = lazy(() => import("./tools/AiInbox.jsx"));
 const LeaseIntake     = lazy(() => import("./tools/LeaseIntake.jsx"));
-const Documents       = lazy(() => import("./tools/Documents.jsx"));
 const Operations      = lazy(() => import("./tools/Operations.jsx"));
 const BuildingManager = lazy(() => import("./tools/BuildingManager.jsx"));
 const AuditLog        = lazy(() => import("./tools/AuditLog.jsx"));
@@ -47,8 +46,7 @@ const TOOLS = [
   { path: "/inbox",       label: "AI inbox",    el: AiInbox,         roles: ["admin", "property_manager"] },
   { path: "/intake",      label: "Lease intake",el: LeaseIntake,     roles: ["admin", "property_manager"] },
   { path: "/operations",  label: "Operations",  el: Operations,      roles: ["admin", "property_manager", "building_manager"] },
-  { path: "/agreements",  label: "Agreements",  el: Agreements,      roles: LEASING },
-  { path: "/documents",   label: "Documents",   el: Documents,       roles: LEASING },
+  { path: "/agreements",  label: "Agreements",  el: Agreements,      roles: ["admin", "property_manager"] },
   { path: "/portfolio",   label: "Portfolio",   el: Portfolio,       roles: ["admin", "property_manager", "building_manager"] },
   { path: "/accounting",  label: "Accounting",  el: Accounting,      roles: ["admin", "accounting", "property_manager"] },
   { path: "/audit",       label: "Audit",       el: AuditLog,        roles: ["admin"] },

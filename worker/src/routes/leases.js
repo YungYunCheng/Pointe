@@ -31,7 +31,7 @@ r.post("/leases", require_("lease.sign"), async (c) => {
 
   const { unit_number, contact_id, start_date, end_date, term_type = "fixed_12",
           rent, deposit, occupants, charge_day, signed_on, external_ref,
-          extras } = b;
+          extras, tenant } = b;
 
   if (!unit_number || !start_date || !rent)
     return c.json({ code: "MISSING_FIELDS",
@@ -66,10 +66,48 @@ r.post("/leases", require_("lease.sign"), async (c) => {
           detail: `${unit_number} has an active tenancy from ${existing.start_date}` +
                   `${existing.end_date ? ` to ${existing.end_date}` : " with no end date"}.` });
 
+      let resolvedContactId = contact_id ?? null;
+      if (!resolvedContactId) {
+        const fullName = String(tenant?.full_name ?? "").trim();
+        const email = String(tenant?.email ?? "").trim() || null;
+        const phone = String(tenant?.phone ?? "").trim() || null;
+        if (!fullName)
+          throw Object.assign(new Error("TENANT_NAME_REQUIRED"), { status: 400 });
+
+        let contact = null;
+        if (email) {
+          [contact] = await tx`
+            SELECT ct.* FROM contacts ct
+            WHERE lower(ct.email) = lower(${email})
+              AND NOT EXISTS (
+                SELECT 1 FROM leases existing
+                WHERE existing.contact_id = ct.id AND existing.status = 'active'
+              )
+            ORDER BY created_at DESC LIMIT 1 FOR UPDATE`;
+        }
+        if (contact) {
+          [contact] = await tx`
+            UPDATE contacts SET full_name = ${fullName}, email = ${email},
+              phone = COALESCE(${phone}, phone),
+              normalised_email = lower(${email}),
+              normalised_phone = ${phone ? phone.replace(/\D/g, "") : null}
+            WHERE id = ${contact.id} RETURNING *`;
+        } else {
+          [contact] = await tx`
+            INSERT INTO contacts (id, full_name, email, phone, locale,
+              normalised_email, normalised_phone)
+            VALUES (${uid("ct_")}, ${fullName}, ${email}, ${phone},
+                    ${tenant?.locale ?? "en"}, ${email?.toLowerCase() ?? null},
+                    ${phone ? phone.replace(/\D/g, "") : null})
+            RETURNING *`;
+        }
+        resolvedContactId = contact.id;
+      }
+
       const [lease] = await tx`
         INSERT INTO leases (id, unit_number, contact_id, start_date, end_date,
           term_type, rent, deposit, occupants, status, external_ref, created_by)
-        VALUES (${uid("ls_")}, ${unit_number}, ${contact_id ?? null},
+        VALUES (${uid("ls_")}, ${unit_number}, ${resolvedContactId},
                 ${start_date}, ${end_date ?? null}, ${term_type},
                 ${cents(rent)}, ${deposit == null ? null : cents(deposit)},
                 ${occupants ?? null}, 'active', ${external_ref ?? null},
@@ -94,7 +132,7 @@ r.post("/leases", require_("lease.sign"), async (c) => {
 
       await tx`INSERT INTO charge_schedules (id, lease_id, unit_number, contact_id,
         kind, gl_code, amount, charge_day, due_day, start_date, end_date, is_active)
-        VALUES (${uid("cs_")}, ${lease.id}, ${unit_number}, ${contact_id ?? null},
+        VALUES (${uid("cs_")}, ${lease.id}, ${unit_number}, ${resolvedContactId},
                 'rent', '4010', ${cents(rent)}, ${day}, ${day},
                 ${start_date}, ${end_date ?? null}, TRUE)`;
 
@@ -104,13 +142,14 @@ r.post("/leases", require_("lease.sign"), async (c) => {
         if (!x.amount) continue;
         await tx`INSERT INTO charge_schedules (id, lease_id, unit_number, contact_id,
           kind, gl_code, amount, charge_day, due_day, start_date, end_date, is_active)
-          VALUES (${uid("cs_")}, ${lease.id}, ${unit_number}, ${contact_id ?? null},
+          VALUES (${uid("cs_")}, ${lease.id}, ${unit_number}, ${resolvedContactId},
                   ${x.kind}, ${x.gl_code ?? "4090"}, ${cents(x.amount)},
                   ${day}, ${day}, ${x.start_date ?? start_date},
                   ${end_date ?? null}, TRUE)`;
       }
 
-      await tx`UPDATE units SET status = 'occupied', updated_at = now()
+      const unitStatus = start_date > today() ? "signed" : "occupied";
+      await tx`UPDATE units SET status = ${unitStatus}, available_from = NULL, updated_at = now()
         WHERE unit_number = ${unit_number}`;
 
       return lease;
@@ -195,6 +234,61 @@ r.get("/leases/:id", require_("units.view"), async (c) => {
       ORDER BY effective_on DESC`,
     note: "Every anniversary runs from the commencement date on the agreement, not from when it was signed or entered.",
   });
+});
+
+/** Resident contact details shown in the unit register.  The lease remains
+ * the assignment; editing the person's phone or email must not create a
+ * second tenancy or silently move an account between suites. */
+r.patch("/leases/:id/resident", require_("lease.sign"), async (c) => {
+  const sql = c.get("db");
+  const b = await c.req.json().catch(() => ({}));
+  const fullName = String(b.full_name ?? "").trim();
+  if (!fullName) return c.json({ code: "TENANT_NAME_REQUIRED" }, 400);
+
+  try {
+    const out = await sql.begin(async (tx) => {
+      const [lease] = await tx`
+        SELECT * FROM leases WHERE id = ${c.req.param("id")} FOR UPDATE`;
+      if (!lease) throw Object.assign(new Error("LEASE_NOT_FOUND"), { status: 404 });
+
+      const email = String(b.email ?? "").trim() || null;
+      const phone = String(b.phone ?? "").trim() || null;
+      let contactId = lease.contact_id;
+      let before = null;
+      let contact;
+      if (contactId) {
+        [before] = await tx`SELECT * FROM contacts WHERE id = ${contactId} FOR UPDATE`;
+        [contact] = await tx`
+          UPDATE contacts SET full_name = ${fullName}, email = ${email}, phone = ${phone},
+            normalised_email = ${email?.toLowerCase() ?? null},
+            normalised_phone = ${phone ? phone.replace(/\D/g, "") : null}
+          WHERE id = ${contactId} RETURNING *`;
+      } else {
+        [contact] = await tx`
+          INSERT INTO contacts (id, full_name, email, phone, locale,
+            normalised_email, normalised_phone)
+          VALUES (${uid("ct_")}, ${fullName}, ${email}, ${phone}, ${b.locale ?? "en"},
+                  ${email?.toLowerCase() ?? null},
+                  ${phone ? phone.replace(/\D/g, "") : null}) RETURNING *`;
+        contactId = contact.id;
+        await tx`UPDATE leases SET contact_id = ${contactId} WHERE id = ${lease.id}`;
+      }
+      const [updatedLease] = await tx`
+        UPDATE leases SET occupants = ${b.occupants === "" || b.occupants == null
+          ? null : Number(b.occupants)} WHERE id = ${lease.id} RETURNING *`;
+      return { lease: updatedLease, contact, before };
+    });
+
+    await audit(c, { action: "lease.resident.update", entityType: "lease",
+      entityId: out.lease.id,
+      before: out.before ? { name: out.before.full_name, email: out.before.email,
+        phone: out.before.phone } : null,
+      after: { name: out.contact.full_name, email: out.contact.email,
+        phone: out.contact.phone, occupants: out.lease.occupants } });
+    return c.json({ lease: out.lease, contact: out.contact });
+  } catch (e) {
+    return c.json({ code: e.message, detail: e.detail }, e.status ?? 500);
+  }
 });
 
 export default r;
