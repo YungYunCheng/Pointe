@@ -448,7 +448,20 @@ async function drainOutbox(sql, env, limit) {
         }),
       });
 
-      if (!res.ok) throw new Error(`EMAIL_${res.status}`);
+      if (!res.ok) {
+        // Resend returns the useful reason in its JSON body (for example an
+        // unverified sending domain or a restricted API key). Keeping only
+        // the HTTP status made every configuration problem look identical.
+        const raw = await res.text().catch(() => "");
+        let detail = raw;
+        try {
+          const parsed = JSON.parse(raw);
+          detail = parsed.message ?? parsed.name ?? parsed.error ?? raw;
+        } catch (_) {}
+        detail = String(detail || res.statusText || "Provider rejected the message")
+          .replace(/\s+/g, " ").slice(0, 350);
+        throw new Error(`EMAIL_${res.status}: ${detail}`);
+      }
       const { id } = await res.json();
       await sql`UPDATE outbox SET state='sent', sent_at=now(), provider_id=${id ?? null},
         attempts = attempts + 1 WHERE id = ${row.id}`;

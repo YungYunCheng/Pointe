@@ -92,18 +92,22 @@ r.get("/outbox-health", async (c) => {
 
   const configured = !!c.env.RESEND_API_KEY;
   const from = c.env.FROM_EMAIL ?? null;
+  const deliveryErrors = [...new Set(stuck.map((x) => x.last_error).filter(Boolean))];
+  const hasProviderFailure = deliveryErrors.some((x) => /^EMAIL_[45]\d\d/.test(x));
 
   return c.json({
-    ok: configured && counts.overdue === 0,
+    ok: configured && counts.overdue === 0 && !hasProviderFailure,
     provider_configured: configured,
     from,
     counts,
     // The most useful line when something is wrong. A single repeated error
     // across every message is a setting; different errors are addresses.
-    recent_errors: [...new Set(stuck.map((x) => x.last_error).filter(Boolean))],
+    recent_errors: deliveryErrors,
     stuck: stuck.slice(0, 5),
     note: !configured
       ? "No RESEND_API_KEY. Messages are queuing and will go out once it is set — nothing has been lost."
+      : hasProviderFailure
+      ? "The email provider is configured but is rejecting messages. Check the error below and the sending domain/API key in Resend."
       : counts.overdue > 0
       ? `${counts.overdue} message${counts.overdue === 1 ? "" : "s"} past the time they had to go out. A notice of entry or a rent increase in here has not given the notice it claims to.`
       : from && !String(from).includes("@")

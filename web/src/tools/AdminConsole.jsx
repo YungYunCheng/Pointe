@@ -495,7 +495,7 @@ function Health() {
   const overdue = outbox.counts?.overdue ?? 0;
 
   const checks = [
-    { label: "Email delivery", ok: outbox.provider_configured && overdue === 0,
+    { label: "Email delivery", ok: outbox.ok === true,
       detail: outbox.provider_configured ? `${outbox.counts?.sent_today ?? 0} sent today.` : "No provider configured.",
       consequence: outbox.note || (outbox.recent_errors?.length
         ? `Recent error: ${outbox.recent_errors.join(", ")}` : "Provider is configured."),
