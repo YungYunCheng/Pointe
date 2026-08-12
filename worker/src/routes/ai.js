@@ -12,6 +12,7 @@ const PROMPTS = {
   purchase_order: `Draft a purchase-order description, scope and expense lines from the maintenance facts. Output JSON only with description, scope, gl_code, lines and needs_quote. Amounts must be blank unless a vendor quote is supplied.`,
   parking_advice: `Analyse the supplied parking allocation facts. Explain operational risks and practical next checks without inventing availability or policy. Return concise staff guidance.`,
   report_narrative: `Turn the supplied accounting figures into a concise factual management narrative. Do not change or infer figures. Flag missing comparisons.`,
+  public_chat: `Answer a prospective tenant using only the supplied public property data and approved company rules. Reply in the visitor's language. Never invent or guarantee availability, rent, fees, parking, dates, policies, approval, a reservation or an outcome. Counts are a current snapshot and may change. If the answer is not present, say the leasing team must confirm it. Do not reveal unit numbers, tenant information, leases, payments, vehicle information or internal notes. Keep the answer concise and do not output JSON.`,
 };
 
 const adminOnly = async (c, next) => {
@@ -48,6 +49,68 @@ async function trainingContext(c, task) {
     console.warn("[ai-training-context]", error?.message ?? error);
     return "";
   }
+}
+
+/** A deliberately narrow, public snapshot. The model never receives rows
+ * containing tenants, leases, payments, vehicles, unit numbers or notes. */
+async function publicPropertyFacts(sql) {
+  const types = await sql`
+    SELECT replace(u.unit_type_code, ' (M)', '') AS code,
+      MIN(t.bedroom_label_en) AS label_en,
+      MIN(t.bedroom_label_zh) AS label_zh,
+      MIN(t.area_sqft) AS area_sqft,
+      COUNT(*) FILTER (WHERE u.status = 'available')::int AS available,
+      MIN(u.available_from) FILTER (WHERE u.status = 'available') AS earliest,
+      MIN(COALESCE(u.rent_override, r.base_rent))
+        FILTER (WHERE u.status = 'available') AS rent_from,
+      MAX(COALESCE(u.rent_override, r.base_rent))
+        FILTER (WHERE u.status = 'available') AS rent_to
+    FROM units u
+    JOIN unit_types t ON t.code = u.unit_type_code
+    LEFT JOIN pricing_profiles p
+      ON p.effective_from <= CURRENT_DATE
+     AND (p.effective_to IS NULL OR p.effective_to >= CURRENT_DATE)
+    LEFT JOIN unit_type_rents r
+      ON r.pricing_profile_id = p.id AND r.unit_type_code = u.unit_type_code
+    GROUP BY replace(u.unit_type_code, ' (M)', '')
+    ORDER BY MIN(t.area_sqft)`;
+
+  const parking = await sql`
+    SELECT p.code, p.label_en, p.label_zh, p.is_surface,
+      p.total_stalls,
+      COUNT(a.id) FILTER (WHERE a.status = 'assigned')::int AS assigned,
+      GREATEST(p.total_stalls -
+        COUNT(a.id) FILTER (WHERE a.status = 'assigned')::int, 0) AS available,
+      COUNT(a.id) FILTER (WHERE a.status = 'waiting')::int AS waiting
+    FROM parking_pools p
+    LEFT JOIN parking_allocations a ON a.pool_code = p.code
+    GROUP BY p.code, p.label_en, p.label_zh, p.is_surface, p.total_stalls
+    ORDER BY p.is_surface, p.code`;
+
+  const [fees] = await sql`
+    SELECT f.deposit_mode, f.deposit_fixed, f.cat_deposit, f.dog_deposit,
+      f.pet_rent, f.pet_limit, f.parking_underground, f.parking_surface,
+      f.storage_fee, f.application_fee, f.utilities_included
+    FROM fee_settings f
+    JOIN pricing_profiles p ON p.id = f.pricing_profile_id
+    WHERE p.effective_from <= CURRENT_DATE
+      AND (p.effective_to IS NULL OR p.effective_to >= CURRENT_DATE)
+    ORDER BY p.effective_from DESC LIMIT 1`;
+
+  return {
+    property: "Baydo Pointe, Clareview, Edmonton",
+    snapshot_at: new Date().toISOString(),
+    unit_types: types,
+    parking,
+    fees: fees ?? null,
+  };
+}
+
+function responseText(result) {
+  return (result.output ?? [])
+    .flatMap((item) => item.type === "message" ? (item.content ?? []) : [])
+    .filter((item) => item.type === "output_text")
+    .map((item) => item.text ?? "").join("\n");
 }
 
 /* Human-approved examples are training candidates, not live instructions.
@@ -159,6 +222,52 @@ r.patch("/admin/ai-training/rules/:id", adminOnly, async (c) => {
   return c.json({ rule: row });
 });
 
+/** Public tenant/prospect chat. Rate limiting is applied by the global
+ * /api/public middleware before this handler runs. */
+r.post("/public/ai/chat", async (c) => {
+  const body = await c.req.json().catch(() => ({}));
+  const message = clipped(body.message, 2000).trim();
+  const history = clipped(body.history, 5000).trim();
+  const language = body.language === "zh" ? "Traditional Chinese" : "English";
+  if (!message) return c.json({ code: "MESSAGE_REQUIRED" }, 400);
+  if (!c.env.OPENAI_API_KEY) return c.json({ code: "AI_NOT_CONFIGURED" }, 503);
+
+  try {
+    const [facts, learned] = await Promise.all([
+      publicPropertyFacts(c.get("db")), trainingContext(c, "public_chat"),
+    ]);
+    const response = await fetch("https://api.openai.com/v1/responses", {
+      method: "POST",
+      headers: {
+        "content-type": "application/json",
+        "authorization": `Bearer ${c.env.OPENAI_API_KEY}`,
+      },
+      body: JSON.stringify({
+        model: c.env.OPENAI_MODEL ?? "gpt-5.6-luna",
+        max_output_tokens: 500,
+        reasoning: { effort: "low" },
+        instructions: PROMPTS.public_chat + (learned ? `\n\n${learned}` : ""),
+        input: [{ role: "user", content:
+          `Reply language: ${language}\nRecent conversation:\n${history || "None"}` +
+          `\n\nCurrent public database snapshot:\n${JSON.stringify(facts)}` +
+          `\n\nVisitor question:\n${message}` }],
+      }),
+    });
+    if (!response.ok) {
+      const detail = clipped(await response.text().catch(() => ""), 500);
+      console.error("[public-ai]", response.status, detail);
+      return c.json({ code: "AI_PROVIDER_ERROR" }, 502);
+    }
+    const result = await response.json();
+    const text = responseText(result).trim();
+    if (!text) return c.json({ code: "AI_EMPTY_RESPONSE" }, 502);
+    return c.json({ text, model: result.model, snapshot_at: facts.snapshot_at });
+  } catch (error) {
+    console.error("[public-ai]", error?.message ?? error);
+    return c.json({ code: "AI_CHAT_ERROR" }, 500);
+  }
+});
+
 r.post("/ai/:task", async (c) => {
   const task = c.req.param("task");
   const body = await c.req.json().catch(() => ({}));
@@ -190,10 +299,7 @@ r.post("/ai/:task", async (c) => {
     return c.json({ code: "AI_PROVIDER_ERROR" }, 502);
   }
   const result = await response.json();
-  const text = (result.output ?? [])
-    .flatMap((item) => item.type === "message" ? (item.content ?? []) : [])
-    .filter((item) => item.type === "output_text")
-    .map((item) => item.text ?? "").join("\n");
+  const text = responseText(result);
   if (!text) return c.json({ code: "AI_EMPTY_RESPONSE" }, 502);
   await audit(c, { action: `ai.${task}`, entityType: body.ref_type ?? "ai_task",
     entityId: body.ref_id ?? null, after: { model: result.model, input_chars: encoded.length,
