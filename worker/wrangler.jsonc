@@ -59,7 +59,7 @@
     // The address messages come from. Its domain has to be one verified in
     // Resend — sending as @gmail.com is refused, because Gmail does not let
     // anybody send on its behalf.
-    "FROM_EMAIL": "noreply@themizar.ca",
+    "FROM_EMAIL": "onboarding@resend.dev",
     "FROM_NAME": "Baydo Pointe",
 
     "ENVIRONMENT": "production",

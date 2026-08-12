@@ -27,8 +27,11 @@ if (!publicUrl || /pointe-backend|example\.com/.test(publicUrl))
   problems.push("wrangler.jsonc — PUBLIC_URL must be the staff front end so reset and invite links open a page, not the API.");
 if (!tenantUrl || /example\.com|pointe-backend/.test(tenantUrl))
   problems.push("wrangler.jsonc — PUBLIC_TENANT_URL must be the tenant front end so claim, verify and reset links work.");
-if (!fromEmail || !/@themizar\.ca$/i.test(fromEmail))
-  problems.push("wrangler.jsonc — FROM_EMAIL must use the verified themizar.ca sending domain.");
+const isResendTestSender = /^onboarding@resend\.dev$/i.test(fromEmail ?? "");
+if (!fromEmail || (!/@themizar\.ca$/i.test(fromEmail) && !isResendTestSender))
+  problems.push("wrangler.jsonc — FROM_EMAIL must use themizar.ca or Resend's onboarding test sender.");
+if (isResendTestSender)
+  warnings.push("wrangler.jsonc — Resend test mode: onboarding@resend.dev can only send to the Resend account email.");
 
 function walk(dir) {
   const out = [];
