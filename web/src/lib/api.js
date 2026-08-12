@@ -190,6 +190,11 @@ export const api = {
   backups:     ()            => request("GET", "/admin/backups"),
   createBackup:()            => request("POST", "/admin/backups"),
   restore:     (id)          => request("POST", `/admin/backups/${id}/restore`),
+  aiTraining:  (q = "")      => request("GET", `/admin/ai-training${q}`),
+  reviewAiExample: (id, status, reason = "") =>
+    request("PATCH", `/admin/ai-training/examples/${id}`, { status, reason }),
+  createAiRule: (payload) => request("POST", "/admin/ai-training/rules", payload),
+  updateAiRule: (id, patch) => request("PATCH", `/admin/ai-training/rules/${id}`, patch),
 };
 
 export default api;
