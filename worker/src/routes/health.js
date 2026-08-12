@@ -79,7 +79,7 @@ r.get("/outbox-health", async (c) => {
       COUNT(*) FILTER (WHERE state = 'failed')::int          AS failed,
       COUNT(*) FILTER (WHERE state = 'queued'
         AND required_by IS NOT NULL
-        AND required_by < now())::int                        AS overdue,
+        AND required_by::timestamptz < now())::int           AS overdue,
       COUNT(*) FILTER (WHERE state = 'sent'
         AND sent_at > now() - INTERVAL '24 hours')::int      AS sent_today,
       MAX(sent_at)                                           AS last_sent
@@ -113,4 +113,3 @@ r.get("/outbox-health", async (c) => {
 });
 
 export default r;
-

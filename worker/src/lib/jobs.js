@@ -528,7 +528,7 @@ async function raiseDeliveryAlerts(sql) {
     SELECT id, kind, to_email, ref_type, ref_id, required_by, attempts, last_error
     FROM outbox
     WHERE state IN ('queued','failed')
-      AND required_by IS NOT NULL AND required_by < now()
+      AND required_by IS NOT NULL AND required_by::timestamptz < now()
       AND NOT EXISTS (
         SELECT 1 FROM notifications n
         WHERE n.code = 'DELIVERY_OVERDUE'
