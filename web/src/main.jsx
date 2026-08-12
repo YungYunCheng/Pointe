@@ -21,7 +21,6 @@ const UnitsConsole    = lazy(() => import("./tools/UnitsConsole.jsx"));
 const LeadsCrm        = lazy(() => import("./tools/LeadsCrm.jsx"));
 const Schedule        = lazy(() => import("./tools/Schedule.jsx"));
 const AiInbox         = lazy(() => import("./tools/AiInbox.jsx"));
-const Messages        = lazy(() => import("./tools/Messages.jsx"));
 const LeaseIntake     = lazy(() => import("./tools/LeaseIntake.jsx"));
 const Operations      = lazy(() => import("./tools/Operations.jsx"));
 const BuildingManager = lazy(() => import("./tools/BuildingManager.jsx"));
@@ -51,7 +50,6 @@ const TOOLS = [
   { path: "/agreements",  label: "Agreements",  el: Agreements,      roles: ["admin", "property_manager"] },
   { path: "/portfolio",   label: "Portfolio",   el: Portfolio,       roles: ["admin", "property_manager", "building_manager"] },
   { path: "/accounting",  label: "Accounting",  el: Accounting,      roles: ["admin", "accounting", "property_manager"] },
-  { path: "/messages",    label: "Messages",    el: Messages,        roles: ["admin", "property_manager", "building_manager"] },
   { path: "/audit",       label: "Audit",       el: AuditLog,        roles: ["admin"] },
   { path: "/ai-training", label: "AI Training", el: AiTrainingCenter, roles: ["admin"] },
   { path: "/admin",       label: "Admin",       el: AdminConsole,    roles: ["admin"] },
