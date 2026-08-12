@@ -20,14 +20,14 @@ const warnings = [];
 /* ---------- Deployment email links ---------- */
 
 const wrangler = readFileSync("wrangler.jsonc", "utf8");
-const publicUrl = wrangler.match(/"PUBLIC_URL"\\s*:\\s*"([^"]+)"/)?.[1];
-const tenantUrl = wrangler.match(/"PUBLIC_TENANT_URL"\\s*:\\s*"([^"]+)"/)?.[1];
-const fromEmail = wrangler.match(/"FROM_EMAIL"\\s*:\\s*"([^"]+)"/)?.[1];
-if (!publicUrl || /pointe-backend|example\\.com/.test(publicUrl))
+const publicUrl = wrangler.match(/"PUBLIC_URL"\s*:\s*"([^"]+)"/)?.[1];
+const tenantUrl = wrangler.match(/"PUBLIC_TENANT_URL"\s*:\s*"([^"]+)"/)?.[1];
+const fromEmail = wrangler.match(/"FROM_EMAIL"\s*:\s*"([^"]+)"/)?.[1];
+if (!publicUrl || /pointe-backend|example\.com/.test(publicUrl))
   problems.push("wrangler.jsonc — PUBLIC_URL must be the staff front end so reset and invite links open a page, not the API.");
-if (!tenantUrl || /example\\.com|pointe-backend/.test(tenantUrl))
+if (!tenantUrl || /example\.com|pointe-backend/.test(tenantUrl))
   problems.push("wrangler.jsonc — PUBLIC_TENANT_URL must be the tenant front end so claim, verify and reset links work.");
-if (!fromEmail || !/@themizar\\.ca$/i.test(fromEmail))
+if (!fromEmail || !/@themizar\.ca$/i.test(fromEmail))
   problems.push("wrangler.jsonc — FROM_EMAIL must use the verified themizar.ca sending domain.");
 
 function walk(dir) {
@@ -62,7 +62,12 @@ for (const { path, text } of files) {
     const writes = (body.match(/await\s+(sql|tx)`\s*\n?\s*(INSERT|UPDATE|DELETE)/gi) ?? []).length;
     const hasTxn = body.includes(".begin(");
 
-    if (writes >= 2 && !hasTxn)
+    /* Writes in opposite branches of the same if are not two writes — exactly
+       one of them runs. Flagging those teaches people to ignore the check,
+       which costs more than the case it was meant to catch. */
+    const branched = /\bif\s*\([^)]*\)\s*\{[^]*?\}\s*else\s*\{/.test(body);
+
+    if (writes >= 2 && !hasTxn && !branched)
       problems.push(`${path} · ${h[2]} — ${writes} writes and no transaction. ` +
         `If the second fails, the first stays.`);
   }
