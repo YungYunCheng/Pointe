@@ -59,15 +59,13 @@
     // The address messages come from. Its domain has to be one verified in
     // Resend — sending as @gmail.com is refused, because Gmail does not let
     // anybody send on its behalf.
-    "FROM_EMAIL": "noreply@themizar.ca",
+    "FROM_EMAIL": "admin@themizar.ca",
     "FROM_NAME": "Baydo Pointe",
 
     "ENVIRONMENT": "production",
     "OPENAI_MODEL": "gpt-5.6-luna",
     "PUBLIC_URL": "https://pointe-worker.dcheng0726.workers.dev",
     "PUBLIC_TENANT_URL": "https://pointe.dcheng0726.workers.dev",
-    "FROM_EMAIL": "noreply@themizar.ca",
-    "FROM_NAME": "Baydo Pointe",
     "REPLY_TO_EMAIL": "rentals@themizar.ca"
   }
 
