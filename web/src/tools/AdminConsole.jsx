@@ -1,5 +1,6 @@
 import React, { useState, useEffect, useMemo, useCallback } from "react";
 import { ROLE_THEME } from "../lib/theme.jsx";
+import api from "../lib/api.js";
 
 /* ============================================================
    BAYDO POINTE — Admin console
@@ -476,32 +477,40 @@ function AddUser({ onCancel, onAdd }) {
 
 /** Whether the plumbing is working. Each line says what it means when it is
  *  off, because "S3: not configured" tells somebody nothing about what breaks. */
-function Health({ outbox }) {
-  const queued = outbox.filter((m) => m.state === "queued").length;
-  const overdue = outbox.filter((m) => m.state === "queued" && m.required_by
-    && m.required_by < nowISO()).length;
+function Health() {
+  const [live, setLive] = useState(null);
+  const [failed, setFailed] = useState(false);
+  useEffect(() => {
+    Promise.all([api.get("/db-health"), api.get("/outbox-health")])
+      .then(([database, outbox]) => setLive({ database, outbox }))
+      .catch(() => setFailed(true));
+  }, []);
+
+  if (!live) return <div className="ad2-body"><div className="ad2-empty">
+    {failed ? "Could not read live system status." : "Checking live services…"}
+  </div></div>;
+
+  const { database, outbox } = live;
+  const queued = outbox.counts?.queued ?? 0;
+  const overdue = outbox.counts?.overdue ?? 0;
 
   const checks = [
-    { label: "Email delivery", ok: false,
-      detail: "No provider configured.",
-      consequence: "Every notice, receipt and reset link is queuing and none of them are arriving. Set RESEND_API_KEY.",
+    { label: "Email delivery", ok: outbox.provider_configured && overdue === 0,
+      detail: outbox.provider_configured ? `${outbox.counts?.sent_today ?? 0} sent today.` : "No provider configured.",
+      consequence: outbox.note || (outbox.recent_errors?.length
+        ? `Recent error: ${outbox.recent_errors.join(", ")}` : "Provider is configured."),
       severity: "high" },
     { label: "SMS delivery", ok: false,
       detail: "No provider configured.",
       consequence: "Anything set to send by text falls back to email alone. Entry reminders lose their second channel.",
       severity: "medium" },
-    { label: "AI", ok: false,
-      detail: "No key configured.",
-      consequence: "Drafting and classification return an error and every message goes to a person. The tenant chat sends its fallback message.",
-      severity: "medium" },
     { label: "File storage", ok: true,
-      detail: "Local disk.",
-      consequence: "Evidence photographs and approved agreements do not survive the container being replaced on another host. Move to object storage before production.",
+      detail: "Cloudflare R2.",
+      consequence: "Files are stored outside the Worker deployment.", severity: "low" },
+    { label: "Database", ok: database.ok,
+      detail: database.ok ? `PostgreSQL · ${database.tables} tables.` : "Unavailable.",
+      consequence: database.note || (database.ok ? "Connected through Cloudflare Hyperdrive." : database.detail),
       severity: "high" },
-    { label: "Database", ok: true,
-      detail: "SQLite.",
-      consequence: "Fine for one process. Two API containers writing one file is not, so this has to change before scaling out.",
-      severity: "medium" },
     { label: "Outbox", ok: overdue === 0,
       detail: `${queued} queued, ${overdue} past due.`,
       consequence: overdue > 0

@@ -60,5 +60,57 @@ r.get("/db-health", async (c) => {
   }
 });
 
+/**
+ * Whether messages are actually going out.
+ *
+ * Separate from db-health because "the database answers" and "notices are
+ * reaching tenants" are different questions, and the second one is the one
+ * that matters legally. A notice of entry that never left looks exactly like
+ * one that did — same row, same green tick on screen — and the difference is
+ * everything if a tenant refuses at the door.
+ */
+r.get("/outbox-health", async (c) => {
+  const sql = c.get("db");
+
+  const [counts] = await sql`
+    SELECT
+      COUNT(*) FILTER (WHERE state = 'queued')::int          AS queued,
+      COUNT(*) FILTER (WHERE state = 'sent')::int            AS sent,
+      COUNT(*) FILTER (WHERE state = 'failed')::int          AS failed,
+      COUNT(*) FILTER (WHERE state = 'queued'
+        AND required_by IS NOT NULL
+        AND required_by < now())::int                        AS overdue,
+      COUNT(*) FILTER (WHERE state = 'sent'
+        AND sent_at > now() - INTERVAL '24 hours')::int      AS sent_today,
+      MAX(sent_at)                                           AS last_sent
+    FROM outbox`;
+
+  const stuck = await sql`
+    SELECT kind, to_email, attempts, last_error, created_at
+    FROM outbox WHERE state IN ('queued','failed') AND attempts > 0
+    ORDER BY created_at LIMIT 10`;
+
+  const configured = !!c.env.RESEND_API_KEY;
+  const from = c.env.FROM_EMAIL ?? null;
+
+  return c.json({
+    ok: configured && counts.overdue === 0,
+    provider_configured: configured,
+    from,
+    counts,
+    // The most useful line when something is wrong. A single repeated error
+    // across every message is a setting; different errors are addresses.
+    recent_errors: [...new Set(stuck.map((x) => x.last_error).filter(Boolean))],
+    stuck: stuck.slice(0, 5),
+    note: !configured
+      ? "No RESEND_API_KEY. Messages are queuing and will go out once it is set — nothing has been lost."
+      : counts.overdue > 0
+      ? `${counts.overdue} message${counts.overdue === 1 ? "" : "s"} past the time they had to go out. A notice of entry or a rent increase in here has not given the notice it claims to.`
+      : from && !String(from).includes("@")
+      ? "FROM_EMAIL does not look like an address."
+      : null,
+  });
+});
+
 export default r;
 

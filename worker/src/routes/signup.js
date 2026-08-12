@@ -476,6 +476,34 @@ r.post("/public/signup", async (c) => {
     // The same answer as a new sign-up. Saying "that email is taken" tells
     // anybody who asks which addresses have accounts here, and the person who
     // genuinely forgot gets the note below instead.
+    if (!existing.email_verified_at) {
+      const raw = randToken();
+      const zh = locale === "zh";
+      await sql.begin(async (tx) => {
+        await tx`UPDATE email_verifications SET used_at = now()
+          WHERE purpose = 'signup' AND email = ${norm} AND used_at IS NULL`;
+        await tx`INSERT INTO email_verifications (id, purpose, email, full_name,
+          locale, token_hash, expires_at, requested_ip)
+          VALUES (${uid("ev_")}, 'signup', ${norm}, ${full_name.trim()},
+            ${locale ?? "en"}, ${await sha256(raw)},
+            ${hoursFromNow(CLAIM_TTL_HOURS)}, ${ip})`;
+        await tx`INSERT INTO outbox (id, channel, to_email, to_name, locale, kind,
+          subject, body, ref_type, ref_id, required_by)
+          VALUES (${uid("ob_")}, 'email', ${String(email).trim()}, ${full_name.trim()},
+            ${locale ?? "en"}, 'signup_verify',
+            ${zh ? "確認你的 Email" : "Confirm your email · Baydo Pointe"},
+            ${(zh ? [
+              `${full_name.trim()} 你好，`, "", "請點以下連結確認這個 Email：", "",
+              `${c.env.PUBLIC_TENANT_URL}/verify?token=${raw}`, "", "連結 48 小時內有效。",
+            ] : [
+              `Hello ${full_name.trim()},`, "", "Confirm this address:", "",
+              `${c.env.PUBLIC_TENANT_URL}/verify?token=${raw}`, "", "The link is good for 48 hours.",
+            ]).join("\n")}, 'account', ${existing.id}, ${hoursFromNow(1)})`;
+      });
+      await log("verification_resent");
+      return c.json(SAME_ANSWER);
+    }
+
     await log("already_exists");
     await sql`INSERT INTO outbox (id, channel, to_email, kind, subject, body,
       ref_type, ref_id)

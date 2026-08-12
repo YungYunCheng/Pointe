@@ -389,10 +389,31 @@ async function sweepExpired(sql) {
  * caused them, so a provider outage delays a message instead of losing it
  * with nobody knowing which ones went missing.
  */
+/**
+ * Messages an agent claimed and never reported on.
+ *
+ * An agent can die between pulling and sending — a crashed script, a machine
+ * rebooted, a network that went away mid-batch. Without this they sit marked
+ * as in flight forever and nobody sends them, which looks identical on screen
+ * to having been sent.
+ */
+async function reclaimLeases(sql) {
+  const back = await sql`
+    UPDATE outbox SET state = 'queued', lease_id = NULL, leased_until = NULL,
+      last_error = 'The agent that claimed this never reported back'
+    WHERE state = 'sending' AND leased_until < now()
+    RETURNING id`;
+  if (back.length) console.warn(`[outbox] ${back.length} leases expired and returned`);
+  return back.length;
+}
+
 async function drainOutbox(sql, env, limit) {
+  // Anything abandoned comes back before deciding what to send.
+  await reclaimLeases(sql);
+
   const rows = await sql`
     SELECT * FROM outbox
-    WHERE state = 'queued' AND attempts < 5 AND channel IN ('email', 'both')
+    WHERE state = 'queued' AND channel IN ('email', 'both')
     ORDER BY created_at LIMIT ${limit}`;
   if (!rows.length) return { attempted: 0, sent: 0 };
 
@@ -403,12 +424,12 @@ async function drainOutbox(sql, env, limit) {
         // No provider. Recorded as unattempted rather than failed, because a
         // message nobody tried to send is a different problem from one that
         // bounced.
-        await sql`UPDATE outbox SET attempts = attempts + 1,
+        await sql`UPDATE outbox SET
           last_error = 'No delivery provider configured' WHERE id = ${row.id}`;
         continue;
       }
 
-      if (!row.to_email || !/^[^\\s@]+@[^\\s@]+\\.[^\\s@]+$/.test(row.to_email)) {
+      if (!row.to_email || !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(row.to_email)) {
         await sql`UPDATE outbox SET attempts = 5, state = 'failed',
           last_error = 'Missing or invalid email address' WHERE id = ${row.id}`;
         continue;
@@ -439,12 +460,164 @@ async function drainOutbox(sql, env, limit) {
     }
   }
 
-  // Anything past the time it had to go out. This is the number worth an
-  // alert: a notice of entry that never left looks identical to one that did.
-  const [{ count: overdue }] = await sql`
-    SELECT COUNT(*)::int AS count FROM outbox
-    WHERE state='queued' AND required_by IS NOT NULL AND required_by < now()`;
-  if (overdue > 0) console.warn(`[outbox] ${overdue} past their deadline`);
+  const alerts = await raiseDeliveryAlerts(sql);
+  return { attempted: rows.length, sent, ...alerts };
+}
 
-  return { attempted: rows.length, sent, overdue };
+/**
+ * One notification a day saying what went out.
+ *
+ * Not nine hundred. A message per message would mean seven interruptions a
+ * day each, of which perhaps one a month needs anybody to do anything — and
+ * a list at that ratio is a list people stop opening.
+ *
+ * One a day is different. It is a thing somebody glances at with their
+ * coffee, and the value is not the total: it is that a morning with no
+ * receipts, or forty notices of entry, looks wrong at a glance in a way no
+ * individual message ever does.
+ */
+async function dailyDigest(sql) {
+  const [already] = await sql`SELECT 1 FROM notifications
+    WHERE code = 'DAILY_DIGEST' AND created_at > CURRENT_DATE`;
+  if (already) return { skipped: true };
+
+  const rows = await sql`
+    SELECT kind,
+           COUNT(*) FILTER (WHERE state = 'sent')::int   AS sent,
+           COUNT(*) FILTER (WHERE state = 'failed')::int AS failed,
+           COUNT(*) FILTER (WHERE state = 'queued')::int AS waiting
+    FROM outbox
+    WHERE created_at > CURRENT_DATE - INTERVAL '1 day'
+    GROUP BY kind ORDER BY 2 DESC`;
+
+  if (!rows.length) return { sent: 0 };
+
+  const total = rows.reduce((s, x) => s + x.sent, 0);
+  const failed = rows.reduce((s, x) => s + x.failed, 0);
+
+  await sql`INSERT INTO notifications (id, audience, kind, code, params, link)
+    VALUES (${uid("nt_")}, 'property_manager', 'system', 'DAILY_DIGEST',
+            ${JSON.stringify({ total, failed,
+              by_kind: rows.map((r) => ({ kind: r.kind, sent: r.sent,
+                failed: r.failed, waiting: r.waiting })) })},
+            '/messages')`;
+
+  return { sent: total, failed };
+}
+
+/**
+ * Telling somebody a message did not go.
+ *
+ * Three kinds of failure with three different consequences, so three
+ * different responses. Treating them the same means either a stream of
+ * notifications nobody reads, or a silence that hides the one that mattered.
+ *
+ * Who hears about it matters as much as whether. A dead email address is
+ * fixable by whoever manages that tenancy; a mail server that has stopped
+ * accepting anything is not, and telling the Property Manager about it just
+ * moves the problem to somebody who cannot act on it.
+ */
+async function raiseDeliveryAlerts(sql) {
+  /* 1. Past its deadline.
+     
+     The one that matters legally. A notice of entry still sitting in the
+     queue has not given twenty-four hours whatever the screen says, and
+     somebody may be standing at a door right now. A rent increase past its
+     date is a notice that will not support the increase. */
+  const overdue = await sql`
+    SELECT id, kind, to_email, ref_type, ref_id, required_by, attempts, last_error
+    FROM outbox
+    WHERE state IN ('queued','failed')
+      AND required_by IS NOT NULL AND required_by < now()
+      AND NOT EXISTS (
+        SELECT 1 FROM notifications n
+        WHERE n.code = 'DELIVERY_OVERDUE'
+          AND n.params::jsonb->>'outbox_id' = outbox.id
+          -- Repeated every six hours while it is still true, rather than
+          -- once. Something this consequential should keep asking.
+          AND n.created_at > now() - INTERVAL '6 hours')`;
+
+  for (const m of overdue) {
+    // Legal notices go to the Property Manager, who can serve another one.
+    // Everything else to whoever runs the building.
+    const audience = ["entry_notice", "rent_increase", "renewal", "arrears"]
+      .includes(m.kind) ? "property_manager" : "building_manager";
+
+    await sql`INSERT INTO notifications (id, audience, kind, code, params, link)
+      VALUES (${uid("nt_")}, ${audience}, 'system', 'DELIVERY_OVERDUE',
+              ${JSON.stringify({ outbox_id: m.id, message_kind: m.kind,
+                to: m.to_email, required_by: m.required_by,
+                attempts: m.attempts, error: m.last_error,
+                consequence: m.kind === "entry_notice"
+                  ? "The 24 hours have not run. Do not attend without serving another notice."
+                  : m.kind === "rent_increase"
+                  ? "This notice will not support the increase. It has to be served again, and the period starts over."
+                  : null })},
+              '/admin?outbox=' || ${m.id})`;
+  }
+
+  /* 2. Permanently failed — a dead address.
+     
+     Retrying does not fix it. Somebody has to correct the address, and until
+     they do every future message to that tenancy fails the same way. */
+  const dead = await sql`
+    SELECT o.id, o.kind, o.to_email, o.last_error, o.ref_type, o.ref_id,
+           c.id AS contact_id, c.full_name
+    FROM outbox o
+    LEFT JOIN contacts c ON lower(c.email) = lower(o.to_email)
+    WHERE o.state = 'failed'
+      AND NOT EXISTS (
+        SELECT 1 FROM notifications n
+        WHERE n.code = 'ADDRESS_UNDELIVERABLE'
+          AND n.params::jsonb->>'email' = o.to_email
+          -- Once per address, not once per message. A tenancy with four
+          -- pending messages to a dead mailbox is one problem.
+          AND n.created_at > now() - INTERVAL '7 days')`;
+
+  const seen = new Set();
+  for (const m of dead) {
+    if (seen.has(m.to_email)) continue;
+    seen.add(m.to_email);
+
+    await sql`INSERT INTO notifications (id, audience, kind, code, params, link)
+      VALUES (${uid("nt_")}, 'property_manager', 'system', 'ADDRESS_UNDELIVERABLE',
+              ${JSON.stringify({ email: m.to_email, name: m.full_name,
+                contact_id: m.contact_id, message_kind: m.kind,
+                error: m.last_error,
+                note: "Nothing will reach this address until it is corrected. Every message to this tenancy is failing the same way." })},
+              ${m.contact_id ? `/leads?contact=${m.contact_id}` : "/admin"})`;
+  }
+
+  /* 3. Nothing is going out at all.
+     
+     A backlog with no successes is not several failed messages — it is a
+     provider or an agent that has stopped, and it needs somebody who can
+     restart something rather than somebody who manages tenancies. */
+  const [health] = await sql`
+    SELECT
+      COUNT(*) FILTER (WHERE state = 'queued')::int AS queued,
+      COUNT(*) FILTER (WHERE state = 'sent'
+        AND sent_at > now() - INTERVAL '2 hours')::int AS recent,
+      MAX(sent_at) AS last_sent
+    FROM outbox`;
+
+  if (health.queued >= 5 && health.recent === 0) {
+    const [existing] = await sql`SELECT 1 FROM notifications
+      WHERE code = 'DELIVERY_STOPPED' AND created_at > now() - INTERVAL '2 hours'`;
+    if (!existing)
+      await sql`INSERT INTO notifications (id, audience, kind, code, params, link)
+        VALUES (${uid("nt_")}, 'admin', 'system', 'DELIVERY_STOPPED',
+                ${JSON.stringify({ queued: health.queued,
+                  last_sent: health.last_sent,
+                  note: "Nothing has gone out in two hours and messages are stacking up. Check the delivery agent and the mail server." })},
+                '/admin')`;
+  }
+
+  if (overdue.length)
+    console.warn(`[outbox] ${overdue.length} past their deadline`);
+  if (seen.size)
+    console.warn(`[outbox] ${seen.size} undeliverable address(es)`);
+
+  return { overdue: overdue.length, undeliverable: seen.size,
+           stopped: health.queued >= 5 && health.recent === 0 };
 }
