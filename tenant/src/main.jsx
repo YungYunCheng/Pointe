@@ -106,7 +106,15 @@ function Header() {
   const checkSession = useCallback(async () => {
     try {
       const res = await fetch("/api/tenant/me", { credentials: "include" });
-      setSignedIn(res.ok);
+      const type = res.headers.get("content-type") ?? "";
+      if (!res.ok || !type.toLowerCase().includes("application/json")) {
+        setSignedIn(false);
+        return;
+      }
+      const data = await res.json();
+      // A Pages/Worker fallback can return 200 without returning a tenant
+      // session. The header must validate the payload, not only the status.
+      setSignedIn(Boolean(data?.tenant?.id || data?.tenant?.email || data?.account_state));
     } catch {
       setSignedIn(false);
     }

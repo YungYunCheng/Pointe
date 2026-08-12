@@ -21,6 +21,7 @@ const UnitsConsole    = lazy(() => import("./tools/UnitsConsole.jsx"));
 const LeadsCrm        = lazy(() => import("./tools/LeadsCrm.jsx"));
 const Schedule        = lazy(() => import("./tools/Schedule.jsx"));
 const AiInbox         = lazy(() => import("./tools/AiInbox.jsx"));
+const Messages        = lazy(() => import("./tools/Messages.jsx"));
 const LeaseIntake     = lazy(() => import("./tools/LeaseIntake.jsx"));
 const Operations      = lazy(() => import("./tools/Operations.jsx"));
 const BuildingManager = lazy(() => import("./tools/BuildingManager.jsx"));
