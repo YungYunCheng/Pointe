@@ -19,6 +19,14 @@ const uid = (p) => p + Date.now().toString(36) + Math.random().toString(36).slic
 const nowISO = () => new Date().toISOString();
 const stamp = (s) => (s ? String(s).slice(0, 16).replace("T", " ") : "—");
 const daysUntil = (iso) => (iso ? Math.ceil((new Date(iso) - Date.now()) / 864e5) : null);
+const today = () => new Date().toLocaleDateString("en-CA");
+
+const UNIT_TYPES = [
+  ["1C", "1 bed", 462.8], ["1A", "1 bed", 484.4],
+  ["1A (M)", "1 bed · mirrored", 484.4], ["1B", "1 bed + den", 602.8],
+  ["3A", "2 bed + den", 731.9], ["3A (M)", "2 bed + den · mirrored", 731.9],
+  ["2A", "2 bed 2 bath", 742.7], ["2A (M)", "2 bed 2 bath · mirrored", 742.7],
+];
 
 /* Grouped so a permission list of thirty-odd reads as a handful of areas
    rather than as an alphabetical wall. */
@@ -177,7 +185,7 @@ export default function AdminConsole() {
       </div>
     );
 
-  const TABS = [["users", "Accounts"], ["health", "System"],
+  const TABS = [["users", "Accounts"], ["pricing", "Pricing"], ["health", "System"],
                 ["retention", "Retention"], ["outbox", "Messages"]];
 
   return (
@@ -203,12 +211,131 @@ export default function AdminConsole() {
           onSaveOverrides={(v) => save("baydo:permissions", v, setOverrides)}
           flash={flash} />
       )}
+      {tab === "pricing" && <Pricing flash={flash} />}
       {tab === "health" && <Health outbox={outbox} />}
       {tab === "retention" && <Retention flash={flash} />}
       {tab === "outbox" && <Outbox outbox={outbox}
         onSave={(v) => save("baydo:outbox", v, setOutbox)} flash={flash} />}
     </div>
   );
+}
+
+/* ══════════════════ Pricing ══════════════════ */
+
+function Pricing({ flash }) {
+  const blankFees = { parking_underground:"", parking_surface:"", storage_fee:"",
+    cat_deposit:"", dog_deposit:"", pet_rent:"", pet_limit:"",
+    application_fee:"", utilities_included:"" };
+  const [loading, setLoading] = useState(true);
+  const [publishing, setPublishing] = useState(false);
+  const [error, setError] = useState("");
+  const [current, setCurrent] = useState(null);
+  const [effective, setEffective] = useState(today());
+  const [name, setName] = useState("");
+  const [rents, setRents] = useState({});
+  const [fees, setFees] = useState(blankFees);
+
+  const load = useCallback(async () => {
+    setLoading(true); setError("");
+    try {
+      const data = await api.pricing();
+      setCurrent(data);
+      setRents(Object.fromEntries((data.rents ?? []).map((r) =>
+        [r.unit_type_code, r.base_rent == null ? "" : String(r.base_rent)])));
+      setFees((old) => data.fees ? Object.fromEntries(Object.keys(old).map((k) =>
+        [k, data.fees[k] ?? ""])) : old);
+    } catch (e) {
+      setError(e.code === "FORBIDDEN" ? "Your account cannot edit pricing."
+        : "Could not load current pricing from the database.");
+    } finally { setLoading(false); }
+  }, []);
+
+  useEffect(() => { load(); }, [load]);
+  const numeric = (v) => v === "" || v == null ? null : Number(v);
+
+  const publish = async () => {
+    const rows = UNIT_TYPES.map(([code]) => ({ unit_type_code:code,
+      base_rent:numeric(rents[code]) }))
+      .filter((r) => Number.isFinite(r.base_rent) && r.base_rent >= 0);
+    if (!effective) return setError("Choose an effective date.");
+    if (!rows.length) return setError("Enter at least one monthly rent.");
+    setPublishing(true); setError("");
+    try {
+      await api.publishPricing({ name:name.trim() || `Pricing ${effective}`,
+        effective_from:effective, rents:rows, fees:{
+          parking_underground:numeric(fees.parking_underground),
+          parking_surface:numeric(fees.parking_surface), storage_fee:numeric(fees.storage_fee),
+          cat_deposit:numeric(fees.cat_deposit), dog_deposit:numeric(fees.dog_deposit),
+          pet_rent:numeric(fees.pet_rent), pet_limit:fees.pet_limit.trim() || null,
+          application_fee:numeric(fees.application_fee),
+          utilities_included:fees.utilities_included.trim() || null,
+        } });
+      flash("Pricing published to the database.");
+      await load();
+    } catch (e) {
+      setError(e.code === "FORBIDDEN" ? "Your account cannot publish pricing."
+        : `Could not publish pricing (${e.code ?? "unknown error"}).`);
+    } finally { setPublishing(false); }
+  };
+
+  if (loading) return <div className="ad2-body"><div className="ad2-empty">Loading pricing…</div></div>;
+  return <div className="ad2-body">
+    <div className="ad2-priceintro"><div><strong>Current price list</strong>
+      <span>{current?.profile ? `${current.profile.name} · effective ${current.profile.effective_from}`
+        : "No active price list yet."}</span></div>
+      <p>Publish a dated price list to the database. Tenant pages and AI use the active list automatically.</p>
+    </div>
+    {error && <div className="ad2-alert"><strong>{error}</strong></div>}
+    <section className="ad2-pricecard"><h2>Rent by unit type</h2>
+      <p className="ad2-note-p">This is the standard monthly rent. A unit-specific override under Units takes priority.</p>
+      <div className="ad2-pricetable">
+        <div className="ad2-pricerow head"><span>Type</span><span>Layout</span><span>Interior</span><span>Monthly rent</span><span>Per ft²</span></div>
+        {UNIT_TYPES.map(([code, layout, area]) => {
+          const rent = Number(rents[code]);
+          return <div className="ad2-pricerow" key={code}><strong className="ad2-mono">{code}</strong>
+            <span>{layout}</span><span className="ad2-dim">{area} ft²</span>
+            <Money value={rents[code] ?? ""} onChange={(v) => setRents({ ...rents, [code]:v })} />
+            <span className="ad2-dim">{Number.isFinite(rent) && rent > 0 ? `$${(rent / area).toFixed(2)}` : "—"}</span>
+          </div>;
+        })}
+      </div>
+    </section>
+    <section className="ad2-pricecard"><h2>Parking and other fees</h2>
+      <div className="ad2-row">
+        <PriceField label="Underground parking / month" k="parking_underground" {...{fees,setFees}} />
+        <PriceField label="Surface parking / month" k="parking_surface" {...{fees,setFees}} />
+        <PriceField label="Storage / month" k="storage_fee" {...{fees,setFees}} />
+      </div><div className="ad2-row">
+        <PriceField label="Cat deposit" k="cat_deposit" {...{fees,setFees}} />
+        <PriceField label="Dog deposit" k="dog_deposit" {...{fees,setFees}} />
+        <PriceField label="Pet rent / month" k="pet_rent" {...{fees,setFees}} />
+        <PriceField label="Application fee" k="application_fee" {...{fees,setFees}} />
+      </div><div className="ad2-row">
+        <TextField label="Pet limit" k="pet_limit" placeholder="e.g. 2 animals" {...{fees,setFees}} />
+        <TextField label="Included in rent" k="utilities_included" placeholder="e.g. heat and hot water" {...{fees,setFees}} />
+      </div>
+    </section>
+    <section className="ad2-pricecard ad2-publish">
+      <label className="ad2-f"><span>Price list name <em>(optional)</em></span>
+        <input className="ad2-in" value={name} placeholder={`Pricing ${effective}`} onChange={(e) => setName(e.target.value)} /></label>
+      <label className="ad2-f"><span>Effective from</span>
+        <input className="ad2-in" type="date" value={effective} onChange={(e) => setEffective(e.target.value)} /></label>
+      <button className="ad2-btn" disabled={publishing} onClick={publish}>{publishing ? "Publishing…" : "Publish pricing"}</button>
+    </section>
+  </div>;
+}
+
+function Money({ value, onChange }) {
+  return <label className="ad2-money"><i>$</i><input type="number" min="0" step="1"
+    value={value} placeholder="—" onChange={(e) => onChange(e.target.value)} /></label>;
+}
+function PriceField({ label, k, fees, setFees }) {
+  return <label className="ad2-f"><span>{label}</span><Money value={fees[k]}
+    onChange={(v) => setFees({ ...fees, [k]:v })} /></label>;
+}
+function TextField({ label, k, placeholder, fees, setFees }) {
+  return <label className="ad2-f"><span>{label}</span><input className="ad2-in"
+    value={fees[k]} placeholder={placeholder} onChange={(e) => setFees({ ...fees, [k]:e.target.value })} /></label>;
 }
 
 /* ══════════════════ Accounts ══════════════════ */
@@ -788,6 +915,18 @@ const CSS = `
 .ad2-seg button:last-child{border-right:0}
 .ad2-seg button.on{background:var(--brand);color:#fff}
 
+.ad2-priceintro,.ad2-pricecard{background:var(--paper);border:1px solid var(--rule);border-radius:4px;padding:16px 18px}
+.ad2-priceintro{display:flex;justify-content:space-between;gap:20px;align-items:flex-start}
+.ad2-priceintro div{display:flex;flex-direction:column}.ad2-priceintro span{font-size:12px;color:var(--dim)}
+.ad2-priceintro p{margin:0;max-width:58ch;color:var(--ink2);font-size:12.5px}
+.ad2-pricecard{display:flex;flex-direction:column;gap:12px}.ad2-pricecard h2{font-family:'Archivo',sans-serif;font-size:17px;margin:0}
+.ad2-pricetable{border:1px solid var(--rule);border-radius:4px;overflow:hidden}
+.ad2-pricerow{display:grid;grid-template-columns:90px 1.3fr 110px 150px 90px;align-items:center;gap:12px;padding:9px 12px;border-bottom:1px solid #EDF1F3}
+.ad2-pricerow:last-child{border-bottom:0}.ad2-pricerow.head{background:#F5F7F9;color:var(--dim);font-size:11px;font-weight:600;text-transform:uppercase}
+.ad2-money{height:34px;border:1px solid var(--rule);border-radius:3px;background:#fff;display:flex;align-items:center;overflow:hidden}
+.ad2-money i{font-style:normal;color:var(--dim);padding-left:9px}.ad2-money input{font:inherit;width:100%;min-width:0;border:0;outline:0;padding:7px 9px;background:transparent}
+.ad2-publish{display:grid;grid-template-columns:1fr 200px auto;align-items:end}.ad2-publish .ad2-btn{height:35px}
+
 .ad2-row{display:flex;gap:11px;flex-wrap:wrap}
 .ad2-row>*{flex:1 1 160px}
 .ad2-f{display:flex;flex-direction:column;gap:4px}
@@ -815,5 +954,7 @@ const CSS = `
   .ad2-split{grid-template-columns:1fr}
   .ad2-head,.ad2-tabs,.ad2-body{padding-left:16px;padding-right:16px}
   .ad2-override{grid-template-columns:1fr}
+  .ad2-priceintro{flex-direction:column}.ad2-pricetable{overflow-x:auto}.ad2-pricerow{min-width:720px}
+  .ad2-publish{grid-template-columns:1fr}
 }
 `;
