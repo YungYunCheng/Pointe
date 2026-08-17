@@ -75,25 +75,19 @@ export function Claim() {
   const zh = locale === "zh";
   const [params] = useSearchParams();
   const token = params.get("token");
-  return token ? <SetClaimPassword token={token} zh={zh} /> : <RequestClaim zh={zh} />;
+  return token ? <SetClaimPassword token={token} zh={zh} /> : <InvitationOnly zh={zh} />;
 }
 
-function RequestClaim({ zh }) {
-  const [email, setEmail] = useState(""), [unit, setUnit] = useState("");
-  const [busy, setBusy] = useState(false), [done, setDone] = useState(false), [err, setErr] = useState("");
-  const submit = async () => {
-    setBusy(true); setErr("");
-    try { await post("/api/public/tenant/claim", { email: email.trim(), unit_number: unit.trim() }); setDone(true); }
-    catch { setErr(zh ? "暫時無法送出，請稍後再試。" : "We could not send that request. Try again shortly."); }
-    finally { setBusy(false); }
-  };
-  if (done) return <Shell title={zh ? "請查看 Email" : "Check your email"}><div className="bt-ok">{zh ? "如果房號與租約上的 Email 相符，設定連結已寄出。" : "If the suite and lease email match, a setup link is on its way."}</div></Shell>;
+function InvitationOnly({ zh }) {
   return <Shell title={zh ? "設定住戶專區" : "Set up tenant access"}>
-    <p className="bt-body">{zh ? "已簽約或已入住的租客，請輸入房號與租約上的 Email。" : "For signed or current tenants. Use the suite and email shown on your lease."}</p>
-    <Field label="Email" type="email" value={email} onChange={setEmail} />
-    <Field label={zh ? "房號" : "Suite"} value={unit} onChange={setUnit} />
-    {err && <div className="bt-err">{err}</div>}
-    <button className="bt-btn" disabled={busy || !email.trim() || !unit.trim()} onClick={submit}>{busy ? "…" : (zh ? "寄送設定連結" : "Send setup link")}</button>
+    <div className="bt-note">
+      {zh
+        ? "已签约或已经入住的租客，请联系管理办公室。Admin 会按照有效租约中的姓名、Email 和房号寄出专属邀请。你不需要、也无法自行选择房号。"
+        : "Signed and current tenants receive a private invitation from management using the name, email and suite on the active lease. You do not need to—and cannot—choose a suite yourself."}
+    </div>
+    <a className="bt-btn" style={{ marginTop:18 }} href="mailto:rentals@themizar.ca">
+      {zh ? "联系管理办公室" : "Contact management"}
+    </a>
   </Shell>;
 }
 
