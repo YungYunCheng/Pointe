@@ -14,6 +14,8 @@ import payments from "./routes/payments.js";
 import operations from "./routes/operations.js";
 import ai from "./routes/ai.js";
 import accounting from "./routes/accounting.js";
+import messages from "./routes/messages.js";
+import notifications from "./routes/notifications.js";
 
 /* ============================================================
    Baydo Pointe — one API on Cloudflare Workers
@@ -309,6 +311,8 @@ app.route("/api", increases);
 app.route("/api", leases);
 app.route("/api", payments);
 app.route("/api", operations);
+app.route("/api", messages);
+app.route("/api", notifications);
 app.route("/api", ai);
 
 /* Re-exported so a route can import either from here or from lib/auth.js.
