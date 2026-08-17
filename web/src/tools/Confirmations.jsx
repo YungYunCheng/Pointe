@@ -4,7 +4,7 @@ import { ROLE_THEME } from "../lib/theme.jsx";
 /* ============================================================
    BAYDO POINTE — Confirmations
 
-   Everything the AI has produced that needs somebody to say yes.
+   Everything an automation has produced that needs somebody to say yes.
 
    One page rather than a badge on each tool. The question people
    actually have is "what is waiting on me", and a confirmation list
@@ -81,6 +81,7 @@ export const KINDS = {
 export default function Confirmations() {
   const [session, setSession] = useState(undefined);
   const [proposals, setProposals] = useState([]);
+  const [chatConfirmations, setChatConfirmations] = useState([]);
   const [view, setView] = useState("yours");
   const [open, setOpen] = useState(null);
   const [loading, setLoading] = useState(true);
@@ -94,6 +95,10 @@ export default function Confirmations() {
       };
       setSession(await read("baydo:session", null));
       setProposals(await read("baydo:proposals", []));
+      try {
+        const response = await fetch("/api/escalations", { credentials:"include" });
+        if (response.ok) setChatConfirmations((await response.json()).escalations ?? []);
+      } catch { /* Local proposals remain usable if the API is offline. */ }
       setLoading(false);
     })();
   }, []);
@@ -143,6 +148,33 @@ export default function Confirmations() {
     tenant: enriched.filter((p) => p.state === "pending" && p.spec.tenant).length,
   }), [enriched]);
 
+  const chatShown = useMemo(() => chatConfirmations.filter((item) => {
+    const pending = ["open", "claimed"].includes(item.state);
+    if (view === "yours" || view === "pending") return pending;
+    if (view === "done") return !pending;
+    if (view === "rejected") return false;
+    return true;
+  }), [chatConfirmations, view]);
+  const chatPending = chatConfirmations.filter((item) =>
+    ["open", "claimed"].includes(item.state));
+  const chatDone = chatConfirmations.filter((item) =>
+    !["open", "claimed"].includes(item.state));
+
+  const confirmChat = async (item) => {
+    try {
+      const response = await fetch(`/api/escalations/${item.id}/confirm`, {
+        method:"POST", credentials:"include",
+        headers:{ "content-type":"application/json" },
+        body:JSON.stringify({ note:"Reviewed and confirmed by staff" }),
+      });
+      if (!response.ok) throw new Error("confirm failed");
+      const { escalation } = await response.json();
+      setChatConfirmations((items) => items.map((x) =>
+        x.id === item.id ? { ...x, ...escalation } : x));
+      flash("Confirmed. This item is recorded as handled.");
+    } catch { flash("Could not confirm this item. Please try again."); }
+  };
+
   const confirm = (p, edited, note) => {
     const role = p.outstanding.includes(session?.role) ? session.role : p.outstanding[0];
     const given = [...(p.confirmations ?? []), { id: uid("pc_"), role_code: role,
@@ -175,9 +207,9 @@ export default function Confirmations() {
   if (loading || session === undefined)
     return <div className="cf"><style>{CSS}</style><div className="cf-load">Loading…</div></div>;
 
-  const TABS = [["yours", "Waiting on you", counts.yours],
-                ["pending", "All pending", counts.pending],
-                ["done", "Done", counts.done],
+  const TABS = [["yours", "Waiting on you", counts.yours + chatPending.length],
+                ["pending", "All pending", counts.pending + chatPending.length],
+                ["done", "Done", counts.done + chatDone.length],
                 ["rejected", "Rejected", counts.rejected]];
 
   return (
@@ -187,7 +219,9 @@ export default function Confirmations() {
       <header className="cf-head">
         <div>
           <div className="cf-eyebrow">Baydo Pointe · Confirmations</div>
-          <h1>{counts.yours > 0 ? `${counts.yours} waiting on you` : "Nothing waiting on you"}</h1>
+          <h1>{counts.yours + chatPending.length > 0
+            ? `${counts.yours + chatPending.length} waiting on you`
+            : "Nothing waiting on you"}</h1>
         </div>
         {msg && <span className="cf-flash">{msg}</span>}
       </header>
@@ -202,14 +236,14 @@ export default function Confirmations() {
 
       <div className="cf-body">
         <p className="cf-note">
-          Nothing the AI produces applies itself. Everything here is a draft waiting on
-          a person, sorted by what it would affect rather than when it arrived —
+          Nothing an automation cannot verify applies itself. Everything here is waiting on
+          the responsible person, sorted by what it would affect rather than when it arrived —
           anything that reaches a tenant or moves money comes first.
         </p>
 
-        {counts.tenant > 0 && view !== "done" && (
+        {counts.tenant + chatPending.length > 0 && view !== "done" && (
           <div className="cf-alert">
-            <strong>{counts.tenant} would reach a tenant.</strong>
+            <strong>{counts.tenant + chatPending.length} customer items need review.</strong>
             <span>
               {" "}Those are worth reading in full rather than scanning. A message that
               lands wrong is harder to take back than a bookkeeping entry.
@@ -217,7 +251,38 @@ export default function Confirmations() {
           </div>
         )}
 
-        {shown.length === 0 ? (
+        {chatShown.length > 0 && (
+          <div className="cf-list">
+            {chatShown.map((item) => {
+              const pending = ["open", "claimed"].includes(item.state);
+              const late = pending && item.due_by && new Date(item.due_by) < new Date();
+              return (
+                <article className="cf-card tenant" key={item.id}>
+                  <div className="cf-cardh">
+                    <span className="cf-tag" style={{ "--c": late ? "#B93855" : "#C98A15" }}>
+                      {late ? "overdue" : pending ? "needs confirmation" : "handled"}
+                    </span>
+                    <strong>Customer chat · {item.topic || "unrecognised"}</strong>
+                    <span>{ROLE_THEME[item.assigned_role]?.label ?? item.assigned_role}</span>
+                    <span className="cf-mono">{stamp(item.created_at)}</span>
+                  </div>
+                  <div style={{ padding:"0 20px 18px" }}>
+                    {item.body_included === false || !item.body
+                      ? <p>Message content is withheld for this protected-topic rule. Review the original contact directly.</p>
+                      : <p>{item.body}</p>}
+                    {pending && <button className="cf-btn" onClick={() => confirmChat(item)}>
+                      Confirm handled
+                    </button>}
+                    {!pending && item.claimed_name &&
+                      <p className="cf-dim">Handled by {item.claimed_name}.</p>}
+                  </div>
+                </article>
+              );
+            })}
+          </div>
+        )}
+
+        {shown.length === 0 && chatShown.length === 0 ? (
           <div className="cf-empty">
             {view === "yours"
               ? "Nothing waiting on you. Anything needing another role is under All pending."
