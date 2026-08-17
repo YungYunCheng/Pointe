@@ -185,7 +185,8 @@ export default function AdminConsole() {
       </div>
     );
 
-  const TABS = [["users", "Accounts"], ["pricing", "Pricing"], ["health", "System"],
+  const TABS = [["users", "Staff accounts"], ["tenantInvites", "Tenant invites"],
+                ["pricing", "Pricing"], ["health", "System"],
                 ["retention", "Retention"], ["outbox", "Messages"]];
 
   return (
@@ -211,6 +212,7 @@ export default function AdminConsole() {
           onSaveOverrides={(v) => save("baydo:permissions", v, setOverrides)}
           flash={flash} />
       )}
+      {tab === "tenantInvites" && <TenantInvites flash={flash} />}
       {tab === "pricing" && <Pricing flash={flash} />}
       {tab === "health" && <Health outbox={outbox} />}
       {tab === "retention" && <Retention flash={flash} />}
@@ -218,6 +220,92 @@ export default function AdminConsole() {
         onSave={(v) => save("baydo:outbox", v, setOutbox)} flash={flash} />}
     </div>
   );
+}
+
+/* ══════════════════ Tenant portal invitations ══════════════════ */
+
+function TenantInvites({ flash }) {
+  const [rows, setRows] = useState([]);
+  const [loading, setLoading] = useState(true);
+  const [error, setError] = useState("");
+  const [search, setSearch] = useState("");
+  const [sending, setSending] = useState(null);
+
+  const load = useCallback(async () => {
+    setLoading(true); setError("");
+    try {
+      const data = await api.get("/admin/tenant-invites");
+      setRows(data.tenants ?? []);
+    } catch (e) {
+      setError(e.code === "FORBIDDEN" ? "Only Admin can manage tenant invitations."
+        : "Could not load active leases from the database.");
+    } finally { setLoading(false); }
+  }, []);
+
+  useEffect(() => { load(); }, [load]);
+
+  const send = async (row) => {
+    setSending(row.lease_id); setError("");
+    try {
+      const result = await api.post(`/admin/tenant-invites/${row.lease_id}/send`, {});
+      flash(`Invitation queued for ${result.to_email} · ${result.unit_number}.`);
+      await load();
+    } catch (e) {
+      setError(e.code === "LEASE_EMAIL_REQUIRED"
+        ? "This lease contact has no valid email. Update the resident contact first."
+        : e.code === "TENANT_ACCOUNT_EXISTS"
+        ? "This lease already has an active tenant portal account."
+        : `Could not queue the invitation (${e.code ?? "unknown error"}).`);
+    } finally { setSending(null); }
+  };
+
+  const q = search.trim().toLowerCase();
+  const shown = rows.filter((row) => !q ||
+    [row.unit_number, row.full_name, row.email].some((value) =>
+      String(value ?? "").toLowerCase().includes(q)));
+  const counts = {
+    waiting:rows.filter((x) => x.portal_status === "not_invited").length,
+    invited:rows.filter((x) => x.portal_status === "invited").length,
+    active:rows.filter((x) => x.portal_status === "active").length,
+  };
+
+  return <div className="ad2-body">
+    <div className="ad2-priceintro">
+      <div><strong>Tenant portal invitations</strong>
+        <span>{counts.waiting} not invited · {counts.invited} pending · {counts.active} active</span>
+      </div>
+      <p>The suite, tenant name and recipient email come from the active lease. The tenant only chooses a password and cannot change the suite.</p>
+    </div>
+    {error && <div className="ad2-alert"><strong>{error}</strong></div>}
+    <div className="ad2-invite-tools">
+      <input className="ad2-in" value={search} onChange={(e) => setSearch(e.target.value)}
+        placeholder="Search unit, tenant or lease email" />
+      <button className="ad2-btn ad2-btn--ghost" onClick={load} disabled={loading}>Refresh</button>
+    </div>
+    {loading ? <div className="ad2-empty">Loading active leases…</div>
+      : shown.length === 0 ? <div className="ad2-empty">No active leases match.</div>
+      : <div className="ad2-invites">
+        <div className="ad2-invite-row head">
+          <span>Unit</span><span>Tenant</span><span>Lease email</span><span>Status</span><span></span>
+        </div>
+        {shown.map((row) => {
+          const active = row.portal_status === "active";
+          const invited = row.portal_status === "invited";
+          return <div className="ad2-invite-row" key={row.lease_id}>
+            <strong className="ad2-mono">{row.unit_number}</strong>
+            <span><strong>{row.full_name}</strong><small>Lease {stamp(row.start_date)} – {stamp(row.end_date)}</small></span>
+            <span>{row.email || <em className="ad2-badtext">Email required</em>}</span>
+            <span className={`ad2-tag ${active ? "grant" : invited ? "" : "revoke"}`}>
+              {active ? "Account active" : invited ? "Invite pending" : "Not invited"}
+            </span>
+            <button className="ad2-btn" disabled={active || !row.email || sending === row.lease_id}
+              onClick={() => send(row)}>
+              {sending === row.lease_id ? "Queuing…" : invited ? "Resend invite" : "Send invite"}
+            </button>
+          </div>;
+        })}
+      </div>}
+  </div>;
 }
 
 /* ══════════════════ Pricing ══════════════════ */
@@ -920,6 +1008,12 @@ const CSS = `
 .ad2-priceintro div{display:flex;flex-direction:column}.ad2-priceintro span{font-size:12px;color:var(--dim)}
 .ad2-priceintro p{margin:0;max-width:58ch;color:var(--ink2);font-size:12.5px}
 .ad2-pricecard{display:flex;flex-direction:column;gap:12px}.ad2-pricecard h2{font-family:'Archivo',sans-serif;font-size:17px;margin:0}
+.ad2-invite-tools{display:flex;gap:9px;max-width:720px}.ad2-invite-tools .ad2-in{flex:1}
+.ad2-invites{background:var(--rule);border:1px solid var(--rule);border-radius:4px;overflow:hidden;display:flex;flex-direction:column;gap:1px}
+.ad2-invite-row{background:var(--paper);display:grid;grid-template-columns:80px 1.2fr 1.4fr 130px 125px;gap:12px;align-items:center;padding:10px 12px;font-size:12.5px}
+.ad2-invite-row.head{background:#F5F7F9;color:var(--dim);font-size:11px;font-weight:600;text-transform:uppercase}
+.ad2-invite-row span{min-width:0;overflow-wrap:anywhere}.ad2-invite-row span>strong{display:block}.ad2-invite-row small{display:block;color:var(--dim);font-size:10.5px}
+.ad2-invite-row .ad2-btn{justify-self:end;min-width:112px}.ad2-badtext{font-style:normal;color:var(--red);font-weight:600}
 .ad2-pricetable{border:1px solid var(--rule);border-radius:4px;overflow:hidden}
 .ad2-pricerow{display:grid;grid-template-columns:90px 1.3fr 110px 150px 90px;align-items:center;gap:12px;padding:9px 12px;border-bottom:1px solid #EDF1F3}
 .ad2-pricerow:last-child{border-bottom:0}.ad2-pricerow.head{background:#F5F7F9;color:var(--dim);font-size:11px;font-weight:600;text-transform:uppercase}
@@ -955,6 +1049,7 @@ const CSS = `
   .ad2-head,.ad2-tabs,.ad2-body{padding-left:16px;padding-right:16px}
   .ad2-override{grid-template-columns:1fr}
   .ad2-priceintro{flex-direction:column}.ad2-pricetable{overflow-x:auto}.ad2-pricerow{min-width:720px}
+  .ad2-invite-tools{max-width:none}.ad2-invites{overflow-x:auto}.ad2-invite-row{min-width:820px}
   .ad2-publish{grid-template-columns:1fr}
 }
 `;
