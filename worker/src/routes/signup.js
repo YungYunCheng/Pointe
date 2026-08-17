@@ -421,6 +421,109 @@ r.post("/admin/users/:id/reinvite", require_("users.manage"), async (c) => {
   return c.json({ ok: true, note: "Any earlier link has stopped working." });
 });
 
+/* ============================================================
+   Admin: invite an existing tenant from the active lease
+   ============================================================ */
+
+/** The recipient, suite and lease all come from company records. Admin chooses
+ * a lease row, not an arbitrary email/unit pair, so an invitation cannot be
+ * pointed at the wrong suite by a typing mistake. */
+r.get("/admin/tenant-invites", require_("users.manage"), async (c) => {
+  const rows = await c.get("db")`
+    SELECT l.id AS lease_id, l.unit_number, l.start_date, l.end_date,
+      ct.id AS contact_id, ct.full_name, ct.email, ct.locale,
+      ta.id AS account_id, ta.email_verified_at, ta.created_at AS account_created_at,
+      pending.id AS pending_invite_id, pending.expires_at AS invite_expires_at,
+      pending.last_sent_at AS invite_sent_at,
+      CASE
+        WHEN ta.id IS NOT NULL THEN 'active'
+        WHEN pending.id IS NOT NULL AND pending.expires_at > now() THEN 'invited'
+        ELSE 'not_invited'
+      END AS portal_status
+    FROM leases l
+    JOIN contacts ct ON ct.id = l.contact_id
+    LEFT JOIN LATERAL (
+      SELECT id, email_verified_at, created_at
+      FROM tenant_accounts
+      WHERE is_active AND (lease_id = l.id OR unit_number = l.unit_number)
+      ORDER BY created_at DESC LIMIT 1
+    ) ta ON TRUE
+    LEFT JOIN LATERAL (
+      SELECT id, expires_at, last_sent_at
+      FROM email_verifications
+      WHERE purpose = 'tenant_claim' AND lease_id = l.id AND used_at IS NULL
+      ORDER BY last_sent_at DESC LIMIT 1
+    ) pending ON TRUE
+    WHERE l.status = 'active'
+    ORDER BY l.unit_number`;
+  return c.json({ tenants: rows });
+});
+
+r.post("/admin/tenant-invites/:leaseId/send", require_("users.manage"), async (c) => {
+  const sql = c.get("db");
+  const [lease] = await sql`
+    SELECT l.id, l.unit_number, l.contact_id, l.start_date, l.end_date,
+      ct.full_name, ct.email, ct.locale
+    FROM leases l JOIN contacts ct ON ct.id = l.contact_id
+    WHERE l.id = ${c.req.param("leaseId")} AND l.status = 'active'`;
+  if (!lease) return c.json({ code:"ACTIVE_LEASE_NOT_FOUND" }, 404);
+  if (!lease.email || !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(lease.email))
+    return c.json({ code:"LEASE_EMAIL_REQUIRED",
+      detail:"Add a valid email to the lease contact before sending an invitation." }, 409);
+
+  const [existing] = await sql`
+    SELECT id, email FROM tenant_accounts
+    WHERE is_active AND (lease_id = ${lease.id} OR unit_number = ${lease.unit_number})
+    LIMIT 1`;
+  if (existing) return c.json({ code:"TENANT_ACCOUNT_EXISTS",
+    detail:`${lease.unit_number} already has an active portal account.` }, 409);
+
+  const raw = randToken();
+  const link = `${c.env.PUBLIC_TENANT_URL}/claim?token=${raw}`;
+  const zh = lease.locale === "zh";
+  const verificationId = uid("ev_");
+  const outboxId = uid("ob_");
+
+  await sql.begin(async (tx) => {
+    // A resend invalidates every earlier invitation for this lease. There is
+    // only one live path into the account at a time.
+    await tx`UPDATE email_verifications SET used_at = now()
+      WHERE purpose = 'tenant_claim' AND lease_id = ${lease.id} AND used_at IS NULL`;
+    await tx`INSERT INTO email_verifications (id, purpose, email, unit_number,
+      lease_id, contact_id, full_name, locale, token_hash, expires_at, created_by)
+      VALUES (${verificationId}, 'tenant_claim', ${normaliseEmail(lease.email)},
+        ${lease.unit_number}, ${lease.id}, ${lease.contact_id}, ${lease.full_name},
+        ${lease.locale ?? "en"}, ${await sha256(raw)},
+        ${hoursFromNow(CLAIM_TTL_HOURS)}, ${c.get("user").id})`;
+    await tx`INSERT INTO outbox (id, channel, to_email, to_name, locale, kind,
+      subject, body, ref_type, ref_id, required_by, created_by)
+      VALUES (${outboxId}, 'email', ${lease.email}, ${lease.full_name},
+        ${lease.locale ?? "en"}, 'tenant_claim',
+        ${zh ? `設定 ${lease.unit_number} 的住戶專區` : `Set up your Baydo Pointe tenant portal · ${lease.unit_number}`},
+        ${(zh ? [
+          `${lease.full_name} 你好，`, "",
+          `Baydo Pointe 管理人员已为租约上的 ${lease.unit_number} 建立住户专区邀请。`,
+          "请使用以下专属链接设置密码：", "", link, "",
+          "房号已由管理人员从租约资料确认，无法在注册链接中修改。",
+          "链接只能使用一次，并会在 48 小时后失效。",
+          "", "如果你没有预期收到这封信，请联系管理办公室。",
+        ] : [
+          `Hello ${lease.full_name},`, "",
+          `Baydo Pointe management has prepared tenant portal access for ${lease.unit_number} from the active lease record.`,
+          "Use this private link to choose your password:", "", link, "",
+          "Management has already confirmed the suite from the lease; it cannot be changed from the invitation.",
+          "The link works once and expires in 48 hours.",
+          "", "If you were not expecting this email, contact the management office.",
+        ]).join("\n")}, 'lease', ${lease.id}, ${hoursFromNow(1)}, ${c.get("user").id})`;
+  });
+
+  await audit(c, { action:"tenant.portal_invite", entityType:"lease",
+    entityId:lease.id, after:{ unit:lease.unit_number, email:lease.email,
+      verification_id:verificationId, outbox_id:outboxId } });
+  return c.json({ ok:true, lease_id:lease.id, unit_number:lease.unit_number,
+    to_email:lease.email, expires_at:hoursFromNow(CLAIM_TTL_HOURS) }, 201);
+});
+
 
 /* ============================================================
    Prospects: signing up before there is a suite
