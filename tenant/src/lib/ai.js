@@ -27,7 +27,20 @@ export async function publicAi(input) {
     const err = await res.json().catch(() => ({}));
     throw new Error(err.code || `AI_${res.status}`);
   }
-  return (await res.json()).text;
+  return res.json();
+}
+
+export async function publicHandoff(input) {
+  const res = await fetch("/api/public/chat/handoff", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(input),
+  });
+  if (!res.ok) {
+    const err = await res.json().catch(() => ({}));
+    throw new Error(err.code || `HANDOFF_${res.status}`);
+  }
+  return res.json();
 }
 
 export async function ai(task, input, ref = {}) {
