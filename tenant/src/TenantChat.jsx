@@ -1,5 +1,5 @@
 import React, { useState, useEffect, useRef, useCallback } from "react";
-import { publicAi } from "./lib/ai.js";
+import { publicAi, publicHandoff } from "./lib/ai.js";
 
 /* ============================================================
    BAYDO POINTE — tenant chat widget
@@ -8,18 +8,18 @@ import { publicAi } from "./lib/ai.js";
    the tenant writes in.
 
    The same routing rules as the reply console apply here:
-     · Hard stops run before the model. A message about income source,
+     · Hard stops run before automation. A message about income source,
        accessibility, a protected ground, a dispute or lease terms goes
-       straight to a person, with no draft and no AI reply.
-     · The AI answers only from the property data it is given.
-       Anything it cannot find, it says it will confirm.
+       straight to the responsible person.
+     · Known questions use fixed answer rules and current database facts.
+       Anything the rules cannot identify becomes a confirmation task.
      · Every reply carries a note that it is automated, with a way
        through to a person.
    ============================================================ */
 
 const HANDOFF_HOURS = { start: 9, end: 18 };   // when a person is normally around
 
-/* ---------- Hard stops: rules, before the model ---------- */
+/* ---------- Hard stops: rules, before automation ---------- */
 const HARD_STOPS = [
   { id: "R-101", topic: "eligibility",
     re: /收入|所得|income|AISH|ODSP|社會?補助|福利金|welfare|assistance|credit\s*score|信用(分數|評分|紀錄)|薪資證明|pay\s*stub|工作證明|employment\s*letter|保證人|guarantor|qualify|qualif/i },
@@ -46,8 +46,8 @@ const T = {
     autoNote: "Automated reply",
     toHuman: "Talk to a person",
     handedOff: "Passed to our team",
-    handoffBody: "Someone will reply here, usually within one business day.",
-    handoffAfterHours: "It is outside office hours, so this will be picked up on the next business day.",
+    handoffBody: "The appropriate staff member has been notified. Please contact the office so they can reply to you.",
+    handoffAfterHours: "The team has been notified. It is outside office hours, so please contact the office on the next business day.",
     close: "Close",
     minimize: "Minimise",
     greeting: "Hello. Ask me about available units, rent, parking or the pet policy and I will check for you. Anything else goes to our team.",
@@ -67,8 +67,8 @@ const T = {
     autoNote: "自動回覆",
     toHuman: "轉真人",
     handedOff: "已轉給我們的同事",
-    handoffBody: "同事會在這裡回覆你，通常一個工作天內。",
-    handoffAfterHours: "現在是非上班時間，下一個工作日會有人接手。",
+    handoffBody: "已通知對應的同事。請聯絡辦公室，讓同事可以回覆你。",
+    handoffAfterHours: "已通知同事。現在是非上班時間，請在下一個工作日聯絡辦公室。",
     close: "關閉",
     minimize: "縮小",
     greeting: "你好。空房、租金、車位、寵物政策都可以問我，我幫你查。其他問題我會轉給同事。",
@@ -80,7 +80,7 @@ const T = {
   },
 };
 
-/* Messages the hard stops produce. No model involved. */
+/* Messages the hard stops produce. */
 const STOP_REPLY = {
   en: {
     eligibility: "That is something our leasing team answers directly, so I have passed it to them.",
@@ -117,25 +117,9 @@ export default function TenantChat() {
   const [busy, setBusy] = useState(false);
   const [handedOff, setHandedOff] = useState(false);
   const [unread, setUnread] = useState(0);
-  const [facts, setFacts] = useState(null);
   const [threadId] = useState(() => uid("th_"));
   const bodyRef = useRef(null);
   const t = T[lang];
-
-  /* ---------- Read the property data the answers come from ---------- */
-  useEffect(() => {
-    (async () => {
-      const read = async (k) => {
-        try { const r = await window.storage.get(k); return r?.value ? JSON.parse(r.value) : null; }
-        catch (e) { return null; }
-      };
-      setFacts({
-        pricing: (await read("baydo:pricing")) || {},
-        overrides: (await read("baydo:overrides")) || {},
-        parking: (await read("baydo:parking")) || { pools: [], records: [] },
-      });
-    })();
-  }, []);
 
   useEffect(() => {
     if (bodyRef.current) bodyRef.current.scrollTop = bodyRef.current.scrollHeight;
@@ -146,66 +130,19 @@ export default function TenantChat() {
   const push = (m) => setMsgs((x) => [...x, { id: uid("m_"), at: nowISO(), ...m }]);
 
   /* ---------- Hand off to a person ---------- */
-  const handOff = useCallback((reason, ruleId) => {
+  const handOff = useCallback((reason, ruleId, message, language = lang) => {
     setHandedOff(true);
-    // In production this creates a thread in the staff inbox. The rule id is
-    // recorded; the message content is not copied for R-101 to R-103.
+    // The server creates a database confirmation assigned to the responsible
+    // role. The message content is not copied for R-101 to R-103.
     const sensitive = ["R-101", "R-102", "R-103"].includes(ruleId);
     push({ role: "system",
            text: `${t.handedOff}. ${inHours() ? t.handoffBody : t.handoffAfterHours}`,
            meta: { thread: threadId, rule: ruleId ?? "manual",
                    content_copied: !sensitive } });
     if (!open) setUnread((n) => n + 1);
-  }, [t, open, threadId]);
-
-  /* ---------- Build the fact sheet the model may use ---------- */
-  const factSheet = useCallback(() => {
-    if (!facts) return "No property data loaded.";
-    const p = facts.pricing, ov = facts.overrides, pk = facts.parking;
-    const TYPES = {
-      "1C": ["1 bed", 462.8], "1A": ["1 bed", 484.4], "1A (M)": ["1 bed", 484.4],
-      "1B": ["1 bed + den", 602.8], "3A": ["2 bed + den", 731.9], "3A (M)": ["2 bed + den", 731.9],
-      "2A": ["2 bed 2 bath", 742.7], "2A (M)": ["2 bed 2 bath", 742.7],
-    };
-    const money = (n) => (n === "" || n == null || isNaN(n) ? null : "$" + Math.round(Number(n)).toLocaleString("en-CA"));
-    const L = [];
-    L.push("PROPERTY: Baydo Pointe, 370/374/378 Clareview Station Drive NW, Edmonton AB. 330 units, three six-storey buildings, beside Clareview LRT station.");
-    L.push("AMENITIES: gym, lounge and games room, pet wash and bike storage in each building. Bike racks, outdoor patio and a bus pad on site.");
-    L.push("UNIT TYPES AND VACANCY:");
-    const counts = {};
-    for (const [id, o] of Object.entries(ov)) {
-      const type = o.type; if (!type) continue;
-      counts[type] ||= { free: 0, dates: [] };
-      if ((o.status || "available") === "available") {
-        counts[type].free++; if (o.date) counts[type].dates.push(o.date);
-      }
-    }
-    for (const [code, [bed, sf]] of Object.entries(TYPES)) {
-      const rent = money(p.base?.[code]);
-      const c = counts[code];
-      L.push(`  ${code} (${bed}, ${sf} ft², 71 ft² balcony): ${rent ? `rent ${rent}` : "rent not set"}` +
-             (c ? `, ${c.free} available${c.dates.length ? `, earliest ${c.dates.sort()[0]}` : ""}` : ""));
-    }
-    L.push("DEPOSIT: " + (p.depositMode === "fixed"
-      ? (money(p.depositFixed) ? `fixed at ${money(p.depositFixed)}` : "not set")
-      : "one month's rent"));
-    L.push("PETS: " +
-      (money(p.catDeposit) ? `cat deposit ${money(p.catDeposit)}; ` : "cat deposit not set; ") +
-      (money(p.dogDeposit) ? `dog deposit ${money(p.dogDeposit)}; ` : "dog deposit not set; ") +
-      (money(p.petRent) ? `pet rent ${money(p.petRent)} per animal; ` : "pet rent not set; ") +
-      (p.petLimit ? `limit ${p.petLimit}` : "limit not set"));
-    const pools = (pk.pools || []).map((pool) => {
-      const used = (pk.records || []).filter((r) => r.status === "assigned" && r.poolId === pool.id).length;
-      return `${pool.label}: ${Number(pool.total) - used} free of ${pool.total}`;
-    });
-    L.push("PARKING: first come, first served. " + (pools.length ? pools.join("; ") : "no data") +
-           `. Stall rent ${money(p.parkUnderground) || "not set"} underground, ${money(p.parkSurface) || "not set"} surface.`);
-    L.push("OTHER: " +
-      (money(p.storage) ? `storage ${money(p.storage)}/month; ` : "storage not set; ") +
-      (money(p.appFee) ? `application fee ${money(p.appFee)}; ` : "application fee not set; ") +
-      (p.utilities ? `rent includes: ${p.utilities}` : "what rent includes is not set"));
-    return L.join("\n");
-  }, [facts]);
+    if (message) publicHandoff({ message, topic: reason, rule_id: ruleId,
+      language, thread_id: threadId }).catch(() => {});
+  }, [t, open, threadId, lang]);
 
   /* ---------- Send ---------- */
   const send = async (text) => {
@@ -219,11 +156,11 @@ export default function TenantChat() {
     if (detected !== lang) setLang(detected);
     const tt = T[detected];
 
-    // 1. Hard stops run first, before any model call
+    // 1. Hard stops run first, before any automated answer
     const hit = HARD_STOPS.find((r) => r.re.test(body));
     if (hit) {
       push({ role: "bot", text: STOP_REPLY[detected][hit.topic], stop: hit.id });
-      handOff(hit.topic, hit.id);
+      handOff(hit.topic, hit.id, body, detected);
       return;
     }
 
@@ -231,16 +168,17 @@ export default function TenantChat() {
     setBusy(true);
     try {
   const reply = await publicAi({
-    facts: factSheet(),
     message: body,
     history: msgs
       .slice(-6)
       .map((m) => `${m.role === "tenant" ? "Tenant" : "You"}: ${m.text}`)
       .join("\n"),
-    language: detected
+    language: detected,
+    thread_id: threadId,
     });
-      if (reply) push({ role: "bot", text: reply, auto: true });
+      if (reply?.text) push({ role: "bot", text: reply.text, auto: true });
       else { push({ role: "bot", text: tt.offlineErr }); }
+      if (reply?.needs_confirmation) setHandedOff(true);
     } catch (e) {
       push({ role: "bot", text: tt.offlineErr });
     }
@@ -353,7 +291,9 @@ export default function TenantChat() {
                     </svg>
                   </button>
                 </div>
-                <button className="tc-human" onClick={() => handOff("requested", null)}>
+                <button className="tc-human" onClick={() => handOff("requested", null,
+                  [...msgs].reverse().find((m) => m.role === "tenant")?.text ||
+                    (lang === "zh" ? "訪客要求真人協助" : "Visitor requested staff assistance"))}>
                   {t.toHuman}
                 </button>
               </>
