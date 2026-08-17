@@ -80,9 +80,9 @@ export function Privacy() {
       </p>
       <ul>
         <li>
-          <strong>{zh ? "AI 服務商（Anthropic）" : "An AI provider (Anthropic)"}</strong> — {zh
-            ? "你在聊天視窗或來信中的訊息，會送到 AI 服務進行分類與草擬回覆。涉及收入來源、無障礙需求或其他受保護特徵的訊息不會送出，會直接由專人處理。"
-            : "messages you send us through the chat or by email are processed by an AI service to classify them and draft a reply. Messages touching on source of income, accessibility needs or other protected grounds are not sent to it — they go straight to a person."}
+          <strong>{zh ? "自動化與人工確認" : "Automation and human confirmation"}</strong> — {zh
+            ? "公開聊天使用固定問題分類與目前的物業資料回答，不會將訊息送到 AI 服務。系統無法識別的問題，以及涉及收入來源、無障礙需求或其他受保護特徵的訊息，會交由專人確認。"
+            : "public chat messages are matched to fixed question categories and current property data and are not sent to an AI provider. Questions the system cannot identify, and messages touching on source of income, accessibility needs or other protected grounds, go to a person for confirmation."}
         </li>
         <li>
           <strong>{zh ? "Email 與簡訊服務商" : "Email and SMS providers"}</strong> — {zh
