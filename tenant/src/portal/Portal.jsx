@@ -224,7 +224,7 @@ function SignIn({ onIn }) {
           {t("portal.forgot")}
         </button>
         <Link className="bt-linkbtn bt-linkbtn--muted" to="/claim">
-          {t("portal.firstTime")}
+          {locale === "zh" ? "已签约？请取得住户邀请" : "Signed a lease? Get a tenant invitation"}
         </Link>
         <Link className="bt-linkbtn bt-linkbtn--muted" to="/signup">
           {locale === "zh" ? "尚未簽約？建立租屋帳戶" : "Looking to rent? Create an account"}
