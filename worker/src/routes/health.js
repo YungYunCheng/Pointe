@@ -116,4 +116,47 @@ r.get("/outbox-health", async (c) => {
   });
 });
 
+/** Workers AI binding plus the Supabase audit tables used by the public chat.
+ * This does not call the model: a health-page refresh must not spend inference
+ * quota or create a fake conversation. */
+r.get("/ai-health", async (c) => {
+  const configured = !!c.env.AI;
+  const model = c.env.WORKERS_AI_MODEL ?? "@cf/zai-org/glm-4.7-flash";
+  try {
+    const [today] = await c.get("db")`
+      SELECT COALESCE(SUM(request_count), 0)::int AS requests,
+        COALESCE(SUM(error_count), 0)::int AS errors,
+        COALESCE(SUM(request_count) FILTER (WHERE provider = 'workers_ai'), 0)::int
+          AS model_requests,
+        COALESCE(SUM(request_count) FILTER (WHERE provider = 'database'), 0)::int
+          AS database_answers,
+        COALESCE(SUM(request_count) FILTER (WHERE provider = 'human'), 0)::int
+          AS human_handoffs
+      FROM ai_usage_daily WHERE usage_date = CURRENT_DATE`;
+    return c.json({
+      ok: configured,
+      provider: "cloudflare_workers_ai",
+      provider_configured: configured,
+      model,
+      audit_storage: true,
+      today,
+      note: configured
+        ? "Live property questions use Supabase first; Workers AI handles only safe unmatched questions."
+        : "No Workers AI binding named AI. Database answers still work; unmatched questions go to Confirmations.",
+    });
+  } catch (error) {
+    return c.json({
+      ok: false,
+      provider: "cloudflare_workers_ai",
+      provider_configured: configured,
+      model,
+      audit_storage: false,
+      today: { requests:0, errors:0, model_requests:0,
+        database_answers:0, human_handoffs:0 },
+      note: "Run worker/schema/019_workers_ai_cloud.sql in Supabase so AI decisions and usage can be recorded.",
+      detail: error?.message,
+    });
+  }
+});
+
 export default r;

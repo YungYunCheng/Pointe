@@ -33,9 +33,38 @@ npx wrangler hyperdrive create pointe-db --connection-string="postgres://..."
 Put the id in `wrangler.jsonc`, load the schema, and check
 `/api/db-health` returns 330 units.
 
+Do not commit a `localConnectionString` containing a database password. Keep
+local credentials in an untracked Wrangler override or use a remote binding
+for local development.
+
 **Hyperdrive is not optional.** A Worker has no long-lived process to hold a
 connection pool in, so without it every request opens its own connection and
 the database runs out of them long before the traffic justifies it.
+
+### Workers AI
+
+`wrangler.jsonc` contains a Workers AI binding named `AI` and uses the
+multilingual `@cf/zai-org/glm-4.7-flash` model. There is no OpenAI key and no
+Python service to keep running.
+
+On an existing Supabase database, run `schema/019_workers_ai_cloud.sql` once.
+Then deploy the Worker. `/api/ai-health` (staff session required) shows the
+binding, model, Supabase audit storage, database answers, model calls and human
+handoffs without calling the model or spending inference quota.
+
+The public chat uses this order:
+
+1. Query current Supabase pricing, vacancy, parking and fee rows.
+2. Answer known questions directly from those rows, without AI usage.
+3. Send only safe unmatched questions plus a narrow public data snapshot to
+   Workers AI.
+4. Create a real Confirmations item when facts are missing, the model fails,
+   or the question involves eligibility, accommodation, legal matters or a
+   private account.
+
+Every outcome is recorded in `ai_chat_runs`; daily provider counts are stored
+in `ai_usage_daily`. Sensitive handoffs store a withheld marker rather than the
+visitor's message text.
 
 ---
 
@@ -88,7 +117,7 @@ whoever is trying numbers.
 | `src/routes/renewals.js` | Renewal workflow and tenant response |
 | `src/routes/increases.js` | Alberta rent-increase eligibility and service |
 | `src/routes/payments.js` | Tenant/manual payments, application and reversal |
-| `src/routes/health.js` | Health and db-health |
+| `src/routes/health.js` | Runtime, database, email and Workers AI health |
 | `schema/` | Postgres schema and seed |
 
 ---
@@ -101,7 +130,7 @@ The remaining modules in `server-legacy/`. Recommended order:
 1. workflow      staff maintenance, entry notices, documents, move-out
 2. signing       agreement library, R2 files, signature ceremony
 3. accounting    GL, AP, banking, period close, reports
-4. CRM/admin/AI  leads, schedules, audit/admin, bounded AI routes
+4. CRM/admin     leads, schedules and remaining admin routes
 ```
 
 **Every `db.prepare` becomes an awaited query.** There are 793 of them in

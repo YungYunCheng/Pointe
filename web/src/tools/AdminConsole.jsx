@@ -696,8 +696,13 @@ function Health() {
   const [live, setLive] = useState(null);
   const [failed, setFailed] = useState(false);
   useEffect(() => {
-    Promise.all([api.get("/db-health"), api.get("/outbox-health")])
-      .then(([database, outbox]) => setLive({ database, outbox }))
+    Promise.all([
+      api.get("/db-health"),
+      api.get("/outbox-health"),
+      api.get("/ai-health").catch(() => ({ ok:false, provider_configured:false,
+        audit_storage:false, note:"Could not read Workers AI status." })),
+    ])
+      .then(([database, outbox, ai]) => setLive({ database, outbox, ai }))
       .catch(() => setFailed(true));
   }, []);
 
@@ -705,7 +710,7 @@ function Health() {
     {failed ? "Could not read live system status." : "Checking live services…"}
   </div></div>;
 
-  const { database, outbox } = live;
+  const { database, outbox, ai } = live;
   const queued = outbox.counts?.queued ?? 0;
   const overdue = outbox.counts?.overdue ?? 0;
 
@@ -726,6 +731,14 @@ function Health() {
       detail: database.ok ? `PostgreSQL · ${database.tables} tables.` : "Unavailable.",
       consequence: database.note || (database.ok ? "Connected through Cloudflare Hyperdrive." : database.detail),
       severity: "high" },
+    { label: "AI automation", ok: ai.ok === true,
+      detail: ai.provider_configured
+        ? `${ai.model} · ${ai.today?.model_requests ?? 0} model calls today.`
+        : "Workers AI binding missing.",
+      consequence: ai.note || (ai.audit_storage
+        ? `${ai.today?.database_answers ?? 0} database answers and ${ai.today?.human_handoffs ?? 0} human handoffs today.`
+        : "AI audit storage is not ready."),
+      severity: "medium" },
     { label: "Outbox", ok: overdue === 0,
       detail: `${queued} queued, ${overdue} past due.`,
       consequence: overdue > 0

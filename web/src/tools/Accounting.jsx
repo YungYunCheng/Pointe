@@ -1584,7 +1584,7 @@ function Reports({ reports, periods, entries, charges, receipts, coa, save, canP
         { building: rep.building_code, figures: rep.figures, method: rep.method },
         { ref_type: "monthly_report", ref_id: rep.id });
       const result = await api.updateMonthlyReport(rep.id, {
-        narrative: text || null, model: "gpt-5.6-luna",
+        narrative: text || null, model: "@cf/zai-org/glm-4.7-flash",
       });
       save.reports(reports.map((r) => r.id === rep.id ? result.report : r));
     } catch {

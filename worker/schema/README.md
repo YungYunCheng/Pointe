@@ -14,9 +14,21 @@ psql "$DATABASE_URL" -f 008_rent_increase.sql # 調租
 psql "$DATABASE_URL" -f 009_contract_dates.sql# 合約日期規則
 psql "$DATABASE_URL" -f 010_payments.sql      # 付款
 psql "$DATABASE_URL" -f 011_security_hardening.sql # 安全、送達與防重複
+psql "$DATABASE_URL" -f 012_password_reset_function.sql
+psql "$DATABASE_URL" -f 013_password_reset_compatibility.sql
+psql "$DATABASE_URL" -f 014_operations_workflow.sql
+psql "$DATABASE_URL" -f 015_showings_building_manager.sql
+psql "$DATABASE_URL" -f 016_accounting_document_review.sql
+psql "$DATABASE_URL" -f 017_ai_feedback.sql
+psql "$DATABASE_URL" -f 018_ai_training_center.sql
+psql "$DATABASE_URL" -f 019_workers_ai_cloud.sql # AI 对话、来源、转人工与用量
 ```
 
 或直接貼進 Supabase 的 SQL Editor，一份一份來。
+
+已经有数据库的项目只需要执行尚未执行的 migration。升级到 Cloudflare
+Workers AI 时，至少要执行 `019_workers_ai_cloud.sql`；它不会清空或修改现有
+租客、房源、租约和价格资料。
 
 ---
 

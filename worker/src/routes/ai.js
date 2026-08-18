@@ -109,11 +109,62 @@ async function publicPropertyFacts(sql) {
   };
 }
 
-function responseText(result) {
-  return (result.output ?? [])
-    .flatMap((item) => item.type === "message" ? (item.content ?? []) : [])
-    .filter((item) => item.type === "output_text")
-    .map((item) => item.text ?? "").join("\n");
+const DEFAULT_WORKERS_AI_MODEL = "@cf/zai-org/glm-4.7-flash";
+
+function workersAiText(result) {
+  if (typeof result === "string") return result.trim();
+  if (typeof result?.response === "string") return result.response.trim();
+  if (typeof result?.result?.response === "string") return result.result.response.trim();
+  return "";
+}
+
+function workersAiModel(c) {
+  return c.env.WORKERS_AI_MODEL ?? DEFAULT_WORKERS_AI_MODEL;
+}
+
+function modelJson(text) {
+  const clean = String(text ?? "").replace(/```(?:json)?|```/gi, "").trim();
+  const start = clean.indexOf("{");
+  const end = clean.lastIndexOf("}");
+  if (start < 0 || end <= start) return null;
+  try { return JSON.parse(clean.slice(start, end + 1)); }
+  catch { return null; }
+}
+
+async function recordAiRun(sql, data) {
+  try {
+    const id = `airun_${crypto.randomUUID().replace(/-/g, "").slice(0, 16)}`;
+    const provider = data.provider ?? "database";
+    const model = data.model ?? "";
+    const question = clipped(data.question, 4000);
+    const answer = clipped(data.answer, 8000);
+    await sql.begin(async (tx) => {
+      await tx`INSERT INTO ai_chat_runs (id, source, conversation_key, question,
+        answer, language, provider, model, used_ai, needs_human, escalation_id,
+        error_code, input_chars, output_chars, metadata)
+        VALUES (${id}, ${data.source ?? "public_chat"}, ${data.conversationKey ?? null},
+          ${question}, ${answer || null}, ${data.language ?? "en"}, ${provider},
+          ${model}, ${provider === "workers_ai"}, ${!!data.needsHuman},
+          ${data.escalationId ?? null}, ${data.errorCode ?? null}, ${question.length},
+          ${answer.length}, ${JSON.stringify(data.metadata ?? {})})`;
+      await tx`INSERT INTO ai_usage_daily (usage_date, provider, model, request_count,
+        error_count, input_chars, output_chars, updated_at)
+        VALUES (CURRENT_DATE, ${provider}, ${model}, 1, ${data.errorCode ? 1 : 0},
+          ${question.length}, ${answer.length}, now())
+        ON CONFLICT (usage_date, provider, model) DO UPDATE SET
+          request_count = ai_usage_daily.request_count + 1,
+          error_count = ai_usage_daily.error_count + EXCLUDED.error_count,
+          input_chars = ai_usage_daily.input_chars + EXCLUDED.input_chars,
+          output_chars = ai_usage_daily.output_chars + EXCLUDED.output_chars,
+          updated_at = now()`;
+    });
+    return id;
+  } catch (error) {
+    // Migration 019 can be applied after the Worker is deployed. Missing
+    // telemetry must never make rent or vacancy answers unavailable.
+    console.warn("[ai-run-record]", error?.message ?? error);
+    return null;
+  }
 }
 
 const PUBLIC_INTENTS = {
@@ -125,6 +176,17 @@ const PUBLIC_INTENTS = {
   amenities: /amenit|gym|lounge|game room|bike|健身|休息室|遊戲室|游戏室|自行車|自行车/i,
   location: /address|location|where|transit|lrt|地址|位置|在哪|交通|地鐵|地铁/i,
 };
+
+const HUMAN_ONLY_PUBLIC = [
+  { topic: "application_or_eligibility", ruleId: "R-101",
+    re: /application status|approve|approval|eligible|eligibility|qualif|income|credit|background|申请资格|申請資格|审批|審批|收入|信用|背景/i },
+  { topic: "accessibility_or_accommodation", ruleId: "R-102",
+    re: /disab|accessib|accommodat|wheelchair|medical|残疾|殘疾|无障碍|無障礙|便利安排|醫療|医疗/i },
+  { topic: "legal_or_complaint", ruleId: "R-103",
+    re: /legal|lawyer|human rights|discrimin|complaint|evict|法律|律师|律師|人权|人權|歧视|歧視|投诉|投訴|驱逐|驅逐/i },
+  { topic: "account_or_private_record", ruleId: "R-104",
+    re: /my lease|my payment|my account|tenant name|unit number|我的租约|我的租約|我的付款|我的帳號|我的账号|租客姓名|房号|房號/i },
+];
 
 const money = (value) => value == null || value === "" || !Number.isFinite(Number(value))
   ? null : `$${Math.round(Number(value)).toLocaleString("en-CA")}`;
@@ -270,7 +332,7 @@ r.post("/ai/feedback", async (c) => {
     VALUES (${`aif_${crypto.randomUUID().replace(/-/g, "").slice(0, 12)}`},
       ${body.task}, ${body.ref_type ?? null}, ${body.ref_id ?? null}, ${original},
       ${draft}, ${final}, ${draft !== final},
-      ${body.model ?? c.env.OPENAI_MODEL ?? "gpt-5.6-luna"}, ${c.get("user").id})
+      ${body.model ?? workersAiModel(c)}, ${c.get("user").id})
     RETURNING id, was_edited, created_at`;
   await audit(c, { action: "ai.feedback.captured", entityType: "ai_feedback",
     entityId: row.id, after: { task: body.task, was_edited: row.was_edited,
@@ -361,7 +423,9 @@ r.patch("/admin/ai-training/rules/:id", adminOnly, async (c) => {
 });
 
 /** Public tenant/prospect chat. Known questions are answered deterministically
- * from current database facts. No model call, API key or usage charge. */
+ * from current database facts. Workers AI only handles safe questions that do
+ * not map to a known live-data answer. Anything uncertain is a real staff
+ * confirmation rather than a model guess. */
 r.post("/public/ai/chat", async (c) => {
   const body = await c.req.json().catch(() => ({}));
   const message = clipped(body.message, 2000).trim();
@@ -369,19 +433,81 @@ r.post("/public/ai/chat", async (c) => {
   if (!message) return c.json({ code: "MESSAGE_REQUIRED" }, 400);
 
   try {
-    const facts = await publicPropertyFacts(c.get("db"));
-    const answer = publicAnswer(message, facts, language === "zh");
-    if (answer) return c.json({ text: answer.text, automated: true,
-      intent: answer.intent, snapshot_at: facts.snapshot_at });
+    const sql = c.get("db");
+    const conversationKey = clipped(body.thread_id, 100) || null;
+    const facts = await publicPropertyFacts(sql);
+    const humanOnly = HUMAN_ONLY_PUBLIC.find((item) => item.re.test(message));
+    if (humanOnly) {
+      const escalation = await queuePublicConfirmation(sql, {
+        message, language, topic:humanOnly.topic, ruleId:humanOnly.ruleId,
+        threadId:conversationKey,
+      });
+      const text = language === "zh"
+        ? "这个问题需要同事确认，我已经通知对应的工作人员。请直接联系办公室，以便我们回复你。"
+        : "This needs confirmation from our team. The appropriate staff member has been notified; please contact the office so we can reply to you.";
+      const runId = await recordAiRun(sql, {
+        question:["R-101", "R-102", "R-103"].includes(humanOnly.ruleId)
+          ? "[withheld: sensitive handoff]" : message,
+        answer:text, language, provider:"human", conversationKey,
+        needsHuman:true, escalationId:escalation.id,
+        metadata:{ topic:humanOnly.topic, rule_id:humanOnly.ruleId },
+      });
+      return c.json({ text, automated:true, provider:"human", run_id:runId,
+        needs_confirmation:true, escalation_id:escalation.id,
+        assigned_role:escalation.assigned_role });
+    }
 
-    const escalation = await queuePublicConfirmation(c.get("db"), {
+    const answer = publicAnswer(message, facts, language === "zh");
+    if (answer) {
+      const runId = await recordAiRun(sql, { question:message, answer:answer.text,
+        language, provider:"database", conversationKey,
+        metadata:{ intent:answer.intent, snapshot_at:facts.snapshot_at } });
+      return c.json({ text: answer.text, automated: true, provider:"database",
+        run_id:runId, intent: answer.intent, snapshot_at: facts.snapshot_at });
+    }
+
+    if (c.env.AI) {
+      try {
+        const learned = await trainingContext(c, "public_chat");
+        const system = `${PROMPTS.public_chat}\n\nReturn JSON only in this exact shape: {"answer":"short answer in the visitor language","needs_confirmation":false,"topic":"short topic"}. Set needs_confirmation to true whenever the supplied data and rules do not fully support the answer. Never put private data or unit numbers in the answer.${learned ? `\n\n${learned}` : ""}`;
+        const result = await c.env.AI.run(workersAiModel(c), {
+          messages: [
+            { role:"system", content:system },
+            { role:"user", content:`Visitor language: ${language}\nRecent conversation (may be empty):\n${clipped(body.history, 3000)}\n\nCurrent public property data:\n${JSON.stringify(facts)}\n\nVisitor question:\n${message}` },
+          ],
+          max_tokens: 500,
+          temperature: 0.1,
+        });
+        const parsed = modelJson(workersAiText(result));
+        const modelAnswer = clipped(parsed?.answer, 3000).trim();
+        if (parsed && modelAnswer && parsed.needs_confirmation === false) {
+          const runId = await recordAiRun(sql, { question:message, answer:modelAnswer,
+            language, provider:"workers_ai", model:workersAiModel(c), conversationKey,
+            metadata:{ topic:clipped(parsed.topic, 100) || "general",
+              snapshot_at:facts.snapshot_at } });
+          return c.json({ text:modelAnswer, automated:true, provider:"workers_ai",
+            model:workersAiModel(c), run_id:runId, snapshot_at:facts.snapshot_at });
+        }
+      } catch (error) {
+        console.error("[public-workers-ai]", error?.message ?? error);
+        await recordAiRun(sql, { question:message, language, provider:"workers_ai",
+          model:workersAiModel(c), conversationKey, needsHuman:true,
+          errorCode:"AI_PROVIDER_ERROR" });
+      }
+    }
+
+    const escalation = await queuePublicConfirmation(sql, {
       message, language, topic:"unrecognised", threadId:body.thread_id,
     });
+    const text = language === "zh"
+      ? "这个问题需要同事确认，我已经通知对应的工作人员。请直接联系办公室，以便我们回复你。"
+      : "This needs confirmation from our team. The appropriate staff member has been notified; please contact the office so we can reply to you.";
+    const runId = await recordAiRun(sql, { question:message, answer:text, language,
+      provider:"human", conversationKey, needsHuman:true, escalationId:escalation.id,
+      errorCode:c.env.AI ? "AI_NEEDS_CONFIRMATION" : "AI_NOT_CONFIGURED" });
     return c.json({
-      text: language === "zh"
-        ? "这个问题需要同事确认，我已经通知对应的工作人员。请直接联系办公室，以便我们回复你。"
-        : "This needs confirmation from our team. The appropriate staff member has been notified; please contact the office so we can reply to you.",
-      automated: true, needs_confirmation: true, escalation_id: escalation.id,
+      text, automated: true, provider:"human", run_id:runId,
+      needs_confirmation: true, escalation_id: escalation.id,
       assigned_role: escalation.assigned_role,
     });
   } catch (error) {
@@ -459,37 +585,48 @@ r.post("/ai/:task", async (c) => {
   const input = body.input ?? {};
   const encoded = JSON.stringify(input);
   if (encoded.length > 80_000) return c.json({ code: "AI_INPUT_TOO_LARGE" }, 413);
-  if (!c.env.OPENAI_API_KEY) return c.json({ code: "AI_NOT_CONFIGURED" }, 503);
+  if (!c.env.AI) return c.json({ code: "AI_NOT_CONFIGURED" }, 503);
 
   const learned = await trainingContext(c, task);
   const system = (PROMPTS[task] ??
     `Assist a property-management employee with the named task. Use only supplied facts, do not take actions, move money, make legal decisions, or promise an outcome. Return a draft for human review.`)
     + (learned ? `\n\n${learned}` : "");
-  const response = await fetch("https://api.openai.com/v1/responses", {
-    method: "POST",
-    headers: {
-      "content-type": "application/json",
-      "authorization": `Bearer ${c.env.OPENAI_API_KEY}`,
-    },
-    body: JSON.stringify({
-      model: c.env.OPENAI_MODEL ?? "gpt-5.6-luna",
-      max_output_tokens: 1400,
-      reasoning: { effort: "low" },
-      instructions: system,
-      input: [{ role: "user", content: `Task: ${task}\nFacts/input:\n${encoded}` }],
-    }),
-  });
-  if (!response.ok) {
-    console.error("[ai]", task, response.status);
+  let result;
+  try {
+    result = await c.env.AI.run(workersAiModel(c), {
+      messages: [
+        { role:"system", content:system },
+        { role:"user", content:`Task: ${task}\nFacts/input:\n${encoded}` },
+      ],
+      max_tokens: 1400,
+      temperature: 0.1,
+    });
+  } catch (error) {
+    console.error("[ai]", task, error?.message ?? error);
+    await recordAiRun(c.get("db"), { source:"staff_task",
+      question:`Task: ${task}`, language:"en", provider:"workers_ai",
+      model:workersAiModel(c), needsHuman:true, errorCode:"AI_PROVIDER_ERROR",
+      metadata:{ ref_type:body.ref_type ?? null, ref_id:body.ref_id ?? null } });
     return c.json({ code: "AI_PROVIDER_ERROR" }, 502);
   }
-  const result = await response.json();
-  const text = responseText(result);
-  if (!text) return c.json({ code: "AI_EMPTY_RESPONSE" }, 502);
+  const text = workersAiText(result);
+  if (!text) {
+    await recordAiRun(c.get("db"), { source:"staff_task",
+      question:`Task: ${task}`, language:"en", provider:"workers_ai",
+      model:workersAiModel(c), needsHuman:true, errorCode:"AI_EMPTY_RESPONSE",
+      metadata:{ ref_type:body.ref_type ?? null, ref_id:body.ref_id ?? null } });
+    return c.json({ code: "AI_EMPTY_RESPONSE" }, 502);
+  }
+  const model = workersAiModel(c);
+  await recordAiRun(c.get("db"), { source:"staff_task", question:`Task: ${task}`,
+    answer:text, language:"en", provider:"workers_ai", model,
+    metadata:{ ref_type:body.ref_type ?? null, ref_id:body.ref_id ?? null,
+      input_chars:encoded.length } });
   await audit(c, { action: `ai.${task}`, entityType: body.ref_type ?? "ai_task",
-    entityId: body.ref_id ?? null, after: { model: result.model, input_chars: encoded.length,
+    entityId: body.ref_id ?? null, after: { model, provider:"cloudflare_workers_ai",
+      input_chars: encoded.length,
       output_chars: text.length } });
-  return c.json({ text, model: result.model });
+  return c.json({ text, model, provider:"cloudflare_workers_ai" });
 });
 
 export default r;

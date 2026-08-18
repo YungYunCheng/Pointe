@@ -10,6 +10,10 @@
 
   "observability": { "enabled": true },
 
+  // Cloudflare-hosted multilingual model. No OpenAI key or always-on Python
+  // server is required; env.AI runs on Cloudflare's serverless GPUs.
+  "ai": { "binding": "AI" },
+
   // The same Worker answers on both hostnames. That is what removes CORS:
   // the staff site calls /api on its own domain, the tenant site calls /api
   // on its own domain, and neither is a cross-origin request.
@@ -29,8 +33,7 @@
   "hyperdrive": [
     {
       "binding": "DB",
-      "id": "1776a718ec8a4438a39b1d106733c4bb",
-      "localConnectionString": "postgres://baydo:baydo@localhost:5432/baydo"
+      "id": "1776a718ec8a4438a39b1d106733c4bb"
     }
   ],
 
@@ -63,14 +66,13 @@
     "FROM_NAME": "Baydo Pointe",
 
     "ENVIRONMENT": "production",
-    "OPENAI_MODEL": "gpt-5.6-luna",
+    "WORKERS_AI_MODEL": "@cf/zai-org/glm-4.7-flash",
     "PUBLIC_URL": "https://pointe-worker.dcheng0726.workers.dev",
     "PUBLIC_TENANT_URL": "https://pointe.dcheng0726.workers.dev",
     "REPLY_TO_EMAIL": "rentals@themizar.ca"
   }
 
   // Secrets are not here. Set them with:
-  //   npx wrangler secret put OPENAI_API_KEY
   //   npx wrangler secret put RESEND_API_KEY
   //   npx wrangler secret put SESSION_PEPPER
   // Anything in vars is visible in the dashboard and in this file.

@@ -464,7 +464,8 @@ export function ChangeLog({ amendments, entries, save, canPost }) {
     try {
       const text = await ai(taskName, taskInput, taskRef);
       if (text) save.amendments(amendments.map((a) => a.id === row.id
-        ? { ...a, narrative: text, narrative_model: "gpt-5.6-luna" } : a));
+        ? { ...a, narrative: text,
+          narrative_model: "@cf/zai-org/glm-4.7-flash" } : a));
     } catch {
       setErr("The AI service did not respond. The recorded change stands on its own.");
     }
@@ -568,7 +569,8 @@ export function InterestRates({ rates, proposals, save, canPost, session }) {
       const text = await ai(taskName, taskInput, taskRef);
       const json = JSON.parse(text.replace(/```json|```/g, "").trim());
       save.proposals([{ id: uid("irp_"), ...json, state: "proposed",
-        model: "gpt-5.6-luna", created_at: new Date().toISOString() }, ...proposals]);
+        model: "@cf/zai-org/glm-4.7-flash",
+        created_at: new Date().toISOString() }, ...proposals]);
     } catch {
       setErr("Could not retrieve a rate. Enter it by hand from the regulation.");
     }

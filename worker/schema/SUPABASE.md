@@ -51,6 +51,10 @@ npx wrangler hyperdrive create pointe-db --connection-string="postgresql://postg
 
 ## 跑完之後
 
+如果是从旧版本升级，不要重跑完整 schema。请在 Supabase SQL Editor 单独
+执行 `019_workers_ai_cloud.sql`。它会建立公开聊天纪录和每日 AI 用量表，
+现有资料不会被删除。
+
 **1. 在登入頁為 `admin@themizar.ca` 使用 Forgot password。**
 
 Schema 不含初始密碼；由一次性郵件連結設定第一組密碼。

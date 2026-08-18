@@ -126,10 +126,16 @@ a rule id someone can read, not with the model's judgement.
 has approved. A generated clause can be void or worse, and it reads convincingly
 either way.
 
-**It never states an amount.** Rent, deposits and fees are assembled by the
-system and sent verbatim. In accounting this goes further: the monthly report
+**The model never invents an amount.** Rent, deposits and fees are assembled by
+the system from the active Supabase pricing rows and sent verbatim. In accounting this goes further: the monthly report
 figures are computed in SQL from posted entries, and the model is given them
 with an instruction not to recalculate. It writes the commentary, nothing else.
+
+The hosted model is Cloudflare Workers AI. Known vacancy, rent, fee, pet and
+parking questions do not call a model at all; they read the current database.
+Safe unmatched questions can use Workers AI, while uncertain or sensitive
+questions create a staff Confirmations item. Public automation decisions and
+daily usage counters are stored in Supabase.
 
 ---
 
@@ -148,7 +154,7 @@ backend hardening report for the exact P0/P1 list.
 
 ## Before production
 
-1. Run the complete SQL (or migration 011 on an existing database) and execute
+1. Run the complete SQL (or all missing migrations through 019 on an existing database) and execute
    the staging checklist against real Supabase／Hyperdrive.
 2. Replace Cloudflare placeholders and configure KV, R2, Resend and secrets.
 3. Port staff workflow, signing/R2 and the rest of accounting before enabling

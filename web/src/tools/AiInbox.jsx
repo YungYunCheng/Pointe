@@ -295,7 +295,8 @@ useEffect(() => {
       method: "POST", credentials: "include",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ task: "inbox_draft", ref_type: "message", ref_id: m.id,
-        original: m.body, draft: m.draft, final: body, model: "gpt-5.6-luna" }),
+        original: m.body, draft: m.draft, final: body,
+        model: "@cf/zai-org/glm-4.7-flash" }),
     }).catch(() => null);
     patch(m.id, { state: "sent", draft: body, sentAt: Date.now(), edited: body !== m.draft });
   };
@@ -498,7 +499,7 @@ useEffect(() => {
                       intent: selected.intent,
                       intent_confidence: selected.confidence,
                       facts_used: selected.factsUsed || [],
-                      model: "gpt-5.6-luna",
+                      model: "@cf/zai-org/glm-4.7-flash",
                       prompt_version: "v1.0",
                       draft_edited_by_human: !!selected.edited,
                       sent_at: selected.sentAt ? new Date(selected.sentAt).toISOString() : null,
