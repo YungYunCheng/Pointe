@@ -1,6 +1,7 @@
 import { Hono } from "hono";
 import { audit } from "../lib/auth.js";
 import { detectPublicIntents } from "../lib/public-intent.js";
+import { modelJson, PUBLIC_CHAT_RESPONSE_FORMAT, workersAiText } from "../lib/workers-ai.js";
 
 const r = new Hono();
 
@@ -112,24 +113,8 @@ async function publicPropertyFacts(sql) {
 
 const DEFAULT_WORKERS_AI_MODEL = "@cf/zai-org/glm-4.7-flash";
 
-function workersAiText(result) {
-  if (typeof result === "string") return result.trim();
-  if (typeof result?.response === "string") return result.response.trim();
-  if (typeof result?.result?.response === "string") return result.result.response.trim();
-  return "";
-}
-
 function workersAiModel(c) {
   return c.env.WORKERS_AI_MODEL ?? DEFAULT_WORKERS_AI_MODEL;
-}
-
-function modelJson(text) {
-  const clean = String(text ?? "").replace(/```(?:json)?|```/gi, "").trim();
-  const start = clean.indexOf("{");
-  const end = clean.lastIndexOf("}");
-  if (start < 0 || end <= start) return null;
-  try { return JSON.parse(clean.slice(start, end + 1)); }
-  catch { return null; }
 }
 
 async function recordAiRun(sql, data) {
@@ -481,10 +466,12 @@ r.post("/public/ai/chat", async (c) => {
             { role:"system", content:system },
             { role:"user", content:`Visitor language: ${language}\nRecent conversation (may be empty):\n${clipped(body.history, 3000)}\n\nCurrent public property data:\n${JSON.stringify(facts)}\n\nVisitor question:\n${message}` },
           ],
-          max_tokens: 500,
+          response_format: PUBLIC_CHAT_RESPONSE_FORMAT,
+          max_completion_tokens: 500,
           temperature: 0.1,
         });
-        const parsed = modelJson(workersAiText(result));
+        const rawAnswer = workersAiText(result);
+        const parsed = modelJson(rawAnswer);
         const modelAnswer = clipped(parsed?.answer, 3000).trim();
         if (parsed && modelAnswer && parsed.needs_confirmation === false) {
           const runId = await recordAiRun(sql, { question:message, answer:modelAnswer,
@@ -494,6 +481,12 @@ r.post("/public/ai/chat", async (c) => {
           return c.json({ text:modelAnswer, automated:true, provider:"workers_ai",
             model:workersAiModel(c), run_id:runId, snapshot_at:facts.snapshot_at });
         }
+        await recordAiRun(sql, { question:message, answer:modelAnswer, language,
+          provider:"workers_ai", model:workersAiModel(c), conversationKey,
+          needsHuman:true,
+          errorCode:parsed ? "AI_NEEDS_CONFIRMATION" : "AI_INVALID_RESPONSE",
+          metadata:{ topic:clipped(parsed?.topic, 100) || "unrecognised",
+            response_received:!!rawAnswer, snapshot_at:facts.snapshot_at } });
       } catch (error) {
         console.error("[public-workers-ai]", error?.message ?? error);
         await recordAiRun(sql, { question:message, language, provider:"workers_ai",
