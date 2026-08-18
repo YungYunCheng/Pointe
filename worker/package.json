@@ -11,6 +11,7 @@
     "tail": "wrangler tail",
     "types": "wrangler types",
     "check": "node scripts/check.mjs",
+    "test:intents": "node scripts/test-public-intents.mjs",
     "predeploy": "node scripts/check.mjs && node scripts/check-sql.mjs",
     "check:sql": "node scripts/check-sql.mjs"
   },

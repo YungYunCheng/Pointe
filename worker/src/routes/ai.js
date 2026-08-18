@@ -1,5 +1,6 @@
 import { Hono } from "hono";
 import { audit } from "../lib/auth.js";
+import { detectPublicIntents } from "../lib/public-intent.js";
 
 const r = new Hono();
 
@@ -167,16 +168,6 @@ async function recordAiRun(sql, data) {
   }
 }
 
-const PUBLIC_INTENTS = {
-  parking: /parking|park\b|stall|車位|停车|停車/i,
-  pets: /\bpet|\bdog|\bcat|animal|寵物|宠物|養狗|养狗|養貓|养猫|貓|猫|狗/i,
-  rent: /\brent|price|pricing|how much|monthly|租金|多少錢|多少钱|價錢|价钱|價格|价格/i,
-  availability: /available|availability|vacan|empty unit|suite|unit|空房|空屋|幾套|几套|還有|还有|入住|move.?in/i,
-  fees: /deposit|storage|application fee|utilit|included|費用|费用|押金|保證金|保证金|儲物|储物|水電|水电|包含/i,
-  amenities: /amenit|gym|lounge|game room|bike|健身|休息室|遊戲室|游戏室|自行車|自行车/i,
-  location: /address|location|where|transit|lrt|地址|位置|在哪|交通|地鐵|地铁/i,
-};
-
 const HUMAN_ONLY_PUBLIC = [
   { topic: "application_or_eligibility", ruleId: "R-101",
     re: /application status|approve|approval|eligible|eligibility|qualif|income|credit|background|申请资格|申請資格|审批|審批|收入|信用|背景/i },
@@ -197,10 +188,9 @@ const unitTypeFrom = (message) => {
   return m?.[1] ?? null;
 };
 
-function publicAnswer(message, facts, zh) {
+function publicAnswerForIntent(message, facts, zh, intent) {
   const type = unitTypeFrom(message);
   const unit = type ? facts.unit_types.find((x) => x.code === type) : null;
-  const intent = Object.entries(PUBLIC_INTENTS).find(([, re]) => re.test(message))?.[0];
   const snapshot = zh ? "空房與車位為目前資料，可能隨時變動。" : "Availability is a current snapshot and may change.";
 
   if (intent === "parking") {
@@ -269,6 +259,22 @@ function publicAnswer(message, facts, zh) {
     ? "Baydo Pointe 位于 370、374、378 Clareview Station Drive NW, Edmonton，邻近 Clareview LRT。"
     : "Baydo Pointe is at 370, 374 and 378 Clareview Station Drive NW, Edmonton, beside Clareview LRT." };
   return null;
+}
+
+function publicAnswer(message, facts, zh) {
+  const intents = detectPublicIntents(message);
+  if (intents[0] === "clarification") return {
+    intent: "clarification",
+    text: zh
+      ? "你想問的是房租、車位價格、空房數量，還是其他費用？請告訴我項目，我會查目前資料。"
+      : "Are you asking about suite rent, parking price, available suites, or another fee? Tell me the item and I will check the current data.",
+  };
+  const answers = intents.map((intent) => publicAnswerForIntent(message, facts, zh, intent)).filter(Boolean);
+  if (!answers.length) return null;
+  return {
+    intent: answers.map((answer) => answer.intent).join("+"),
+    text: answers.map((answer) => answer.text).join(zh ? "\n" : "\n"),
+  };
 }
 
 function assignedRole(message, topic = "") {
