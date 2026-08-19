@@ -3,6 +3,7 @@ import Banking from "./AccountingBanking.jsx";
 import { AmendDialog, VersionHistory, ChangeLog, InterestRates } from "./AccountingAmend.jsx";
 import MonthEnd, { MONTH_END_CSS } from "./MonthEnd.jsx";
 import AccountingDocumentReview from "./AccountingDocumentReview.jsx";
+import AccountingTransactions from "./AccountingTransactions.jsx";
 import { ai } from "../lib/ai.js";
 import api from "../lib/api.js";
 
@@ -149,37 +150,40 @@ export default function Accounting() {
   const [loading, setLoading] = useState(true);
 
   const canPost = session?.role === "accounting" || session?.role === "admin";
+  const canPrepareReports = canPost || session?.role === "property_manager";
 
   /* ---------- load ---------- */
   useEffect(() => {
     (async () => {
-      const read = async (k, d) => {
-        try { const r = await window.storage.get(k); return r?.value ? JSON.parse(r.value) : d; }
-        catch { return d; }
-      };
-      setSession(await read("baydo:session", null));
-      setVendors(await read("acct:vendors", VENDOR_SEED));
-      setInvoices(await read("acct:invoices", []));
-      setSchedules(await read("acct:schedules", []));
-      setCharges(await read("acct:charges", []));
-      setReceipts(await read("acct:receipts", []));
-      setEntries(await read("acct:entries", []));
-      setPeriods(await read("acct:periods", []));
-      setStatements(await read("acct:statements", []));
-      setReports(await read("acct:reports", []));
-      setAmendments(await read("acct:amendments", []));
-      setRates(await read("acct:rates", []));
-      setProposals(await read("acct:proposals", []));
-      setFormulas(await read("acct:formulas", SEED_FORMULAS));
-      setCalculations(await read("acct:calculations", []));
-      setPayrollRuns(await read("acct:payroll", []));
-      setDistributions(await read("acct:distributions", []));
-      setGstReturns(await read("acct:gst", []));
-      setAssets(await read("acct:assets", []));
-      setDepreciationRuns(await read("acct:depreciation", []));
-      setArrearsFiles(await read("acct:arrears", []));
       try {
-        const shared = await api.accountingReviewCenter();
+        const current = await window.storage.get("baydo:session");
+        setSession(current?.value ? JSON.parse(current.value) : null);
+      } catch { setSession(null); }
+      try {
+        const [cloud, shared] = await Promise.all([
+          api.accountingState(), api.accountingReviewCenter(),
+        ]);
+        const state = cloud.state || {};
+        setVendors(state["acct:vendors"] || VENDOR_SEED);
+        setInvoices(state["acct:invoices"] || []);
+        setSchedules(state["acct:schedules"] || []);
+        setCharges(state["acct:charges"] || []);
+        setReceipts(state["acct:receipts"] || []);
+        setEntries(state["acct:entries"] || []);
+        setPeriods(state["acct:periods"] || []);
+        setStatements(state["acct:statements"] || []);
+        setReports(state["acct:reports"] || []);
+        setAmendments(state["acct:amendments"] || []);
+        setRates(state["acct:rates"] || []);
+        setProposals(state["acct:proposals"] || []);
+        setFormulas(state["acct:formulas"] || SEED_FORMULAS);
+        setCalculations(state["acct:calculations"] || []);
+        setPayrollRuns(state["acct:payroll"] || []);
+        setDistributions(state["acct:distributions"] || []);
+        setGstReturns(state["acct:gst"] || []);
+        setAssets(state["acct:assets"] || []);
+        setDepreciationRuns(state["acct:depreciation"] || []);
+        setArrearsFiles(state["acct:arrears"] || []);
         setVendors(shared.vendors?.length ? shared.vendors : VENDOR_SEED);
         setInvoices(shared.invoices ?? []);
         setReports(shared.reports ?? []);
@@ -195,8 +199,8 @@ export default function Accounting() {
   const persist = useCallback(async (key, value) => {
     setSaveState("saving");
     try {
-      const ok = await window.storage.set(key, JSON.stringify(value));
-      setSaveState(ok ? "saved" : "error");
+      await api.updateAccountingState(key, value);
+      setSaveState("saved");
     } catch { setSaveState("error"); }
     setTimeout(() => setSaveState((s) => (s === "saved" ? "idle" : s)), 1500);
   }, []);
@@ -320,15 +324,15 @@ export default function Accounting() {
 
   const TABS = [
     ["dashboard", "Overview"],
-    ["ar", "Rent and AR"],
-    ["ap", "Bills and AP"],
-    ["review", "Invoice & report review"],
     ["search", "Transactions"],
+    ["ar", "Rent & tenants"],
+    ["ap", "Bills & vendors"],
+    ["review", "Approvals"],
     ["banking", "Banking"],
-    ["reports", "Reports"],
+    ["reports", "Monthly reports"],
+    ["monthend", "Month end"],
     ["coa", "Accounts"],
     ["arrears", "Arrears files"],
-    ["monthend", "Month end"],
     ["changelog", "Change log"],
     ["settings", "Settings"],
   ];
@@ -371,10 +375,13 @@ export default function Accounting() {
         ))}
       </nav>
 
+      <AccountingShortcuts role={session?.role} onOpen={setTab} stats={stats} />
+
       {!canPost && (
         <div className="ac-note">
-          Read only. Posting, approving and reconciling belong to the accounting role;
-          arrears are here because leasing needs to see them.
+          {session?.role === "property_manager"
+            ? "Reporting access. PM can review all operating figures, prepare report commentary and complete the PM report approval. Posting, paying, reconciling and closing remain with Accounting."
+            : "Read only. Posting, approving and reconciling belong to the accounting role; arrears are here because leasing needs to see them."}
         </div>
       )}
 
@@ -385,11 +392,11 @@ export default function Accounting() {
       {tab === "ap" && <AP {...{ vendors, invoices, save, post, canPost, coa, glName,
         session, amendments }} onOpenReview={() => setTab("review")} />}
       {tab === "review" && <AccountingDocumentReview session={session} onData={syncReviewData} />}
-      {tab === "search" && <Search {...{ entries, glName, vendors }} />}
+      {tab === "search" && <AccountingTransactions canPost={canPost} role={session?.role} />}
       {tab === "banking" && <Banking {...{ statements, entries, receipts, invoices, periods,
         balances, save, canPost, session, coa }} />}
       {tab === "reports" && <Reports {...{ reports, periods, entries, charges, receipts,
-        coa, save, canPost, session }} onOpenReview={() => setTab("review")} />}
+        coa, save, canPost, canPrepareReports, session }} onOpenReview={() => setTab("review")} />}
       {tab === "coa" && <ChartOfAccounts {...{ coa, balances, setCoa, canPost }} />}
       {tab === "arrears" && <ArrearsFiles {...{ charges, files: arrearsFiles,
         canPost, session, save, flash: (t) => setSaveState("saved") }} />}
@@ -407,6 +414,32 @@ export default function Accounting() {
         Confirm the deposit interest rate and the refund deadline with your manager
         before relying on either.
       </footer>
+    </div>
+  );
+}
+
+function AccountingShortcuts({ role, onOpen, stats }) {
+  const isBookkeeper = ["admin", "accounting"].includes(role);
+  const actions = [
+    { tab: "search", title: "Review transactions", note: "Search money in and out", count: null },
+    { tab: "ar", title: "Rent & tenants", note: "Charges, payments and arrears", count: stats.arOverdueCount || null },
+    { tab: "review", title: "Approvals", note: role === "property_manager"
+      ? "Complete PM invoice and report review" : "Review invoices and reports", count: stats.drafts || null },
+    { tab: "reports", title: "Prepare monthly report", note: "Figures, commentary and sign-off", count: null },
+    ...(isBookkeeper ? [
+      { tab: "ap", title: "Enter or pay a bill", note: "Vendor bills and payments", count: null },
+      { tab: "banking", title: "Reconcile banking", note: "Match statements and close", count: null },
+    ] : []),
+  ];
+  return (
+    <div className="ac-shortcuts" aria-label="Accounting shortcuts">
+      <span className="ac-shortcuts-l">Quick actions</span>
+      {actions.map((action) => (
+        <button key={action.tab} onClick={() => onOpen(action.tab)}>
+          <span>{action.title}{action.count ? <i>{action.count}</i> : null}</span>
+          <small>{action.note}</small>
+        </button>
+      ))}
     </div>
   );
 }
@@ -1487,8 +1520,8 @@ function Search({ entries, glName, vendors }) {
 
 /* ══════════════════ Reports ══════════════════ */
 
-function Reports({ reports, periods, entries, charges, receipts, coa, save, canPost, session,
-                   onOpenReview }) {
+function Reports({ reports, periods, entries, charges, receipts, coa, save, canPost,
+                   canPrepareReports, session, onOpenReview }) {
   const [period, setPeriod] = useState(thisPeriod());
   const [busy, setBusy] = useState(null);
   const [err, setErr] = useState("");
@@ -1606,7 +1639,7 @@ function Reports({ reports, periods, entries, charges, receipts, coa, save, canP
             <span className="ac-tag" style={{ "--c": PERIOD_STATE[state].color }}>
               {PERIOD_STATE[state].label}
             </span>
-            {canPost && <button className="ac-btn ac-btn--sm" onClick={generate}
+            {canPrepareReports && <button className="ac-btn ac-btn--sm" onClick={generate}
               disabled={busy === "generate"}>
               {busy === "generate" ? "Generating…" : "Generate for all three"}
             </button>}
@@ -1633,7 +1666,7 @@ function Reports({ reports, periods, entries, charges, receipts, coa, save, canP
             <div className="ac-cardh-r">
               <span className="ac-tag" style={{ "--c": rep.state === "final" ? "#0E8577"
                 : rep.state === "review" ? "#C98A15" : "#8892A0" }}>{rep.state}</span>
-              {canPost && !rep.narrative && (
+              {canPrepareReports && !rep.narrative && (
                 <button className="ac-btn ac-btn--sm" disabled={busy === rep.id}
                         onClick={() => writeNarrative(rep)}>
                   {busy === rep.id ? "Writing…" : "Write the commentary"}
@@ -2102,6 +2135,18 @@ export const CSS = MONTH_END_CSS + `
 .ac-tabs button.on{color:var(--ink);border-bottom-color:var(--brand,var(--ink))}
 .ac-b{font-style:normal;font-family:'IBM Plex Mono',monospace;font-size:10px;background:var(--red);
   color:#fff;border-radius:8px;padding:1px 6px}
+.ac-shortcuts{display:flex;align-items:stretch;gap:8px;padding:12px 26px;background:#F6F8FA;
+  border-bottom:1px solid var(--rule);overflow-x:auto}
+.ac-shortcuts-l{display:flex;align-items:center;padding-right:6px;font-family:'IBM Plex Mono',monospace;
+  font-size:10px;letter-spacing:.07em;text-transform:uppercase;color:var(--dim);white-space:nowrap}
+.ac-shortcuts button{min-width:170px;text-align:left;background:var(--paper);border:1px solid var(--rule);
+  border-radius:4px;padding:8px 11px;cursor:pointer;color:var(--ink);font:inherit}
+.ac-shortcuts button:hover{border-color:var(--accent);box-shadow:0 1px 3px rgba(19,28,37,.08)}
+.ac-shortcuts button>span{display:flex;align-items:center;gap:6px;font-size:12.5px;font-weight:700;
+  white-space:nowrap}
+.ac-shortcuts button i{font-style:normal;background:var(--red);color:#fff;border-radius:8px;
+  padding:0 6px;font-family:'IBM Plex Mono',monospace;font-size:9.5px}
+.ac-shortcuts button small{display:block;color:var(--dim);font-size:10.5px;margin-top:2px;white-space:nowrap}
 .ac-note{background:#F2F7FB;border-bottom:1px solid #C7D6E2;padding:10px 26px;font-size:12.5px;
   color:var(--ink2);line-height:1.6}
 
@@ -2282,12 +2327,66 @@ export const CSS = MONTH_END_CSS + `
   padding:6px 10px;line-height:1.65}
 .ac-deemed{font-size:12.5px;color:var(--accent);background:#F4F9FD;border-radius:3px;
   padding:9px 12px;line-height:1.7}
+.ac-workspace{max-width:1440px}
+.ac-ws-statuses{display:grid;grid-template-columns:repeat(5,minmax(110px,1fr));gap:1px;
+  background:var(--rule);border:1px solid var(--rule);border-radius:4px;overflow:hidden}
+.ac-ws-statuses button{font:inherit;border:0;background:#F8FAFB;color:var(--ink2);cursor:pointer;
+  padding:10px 12px;display:flex;align-items:center;justify-content:space-between;gap:10px}
+.ac-ws-statuses button.on{background:var(--ink);color:#fff}
+.ac-ws-statuses b{font-family:'IBM Plex Mono',monospace;font-size:12px}
+.ac-ws-list{display:flex;flex-direction:column;border:1px solid var(--rule);border-radius:4px;overflow:hidden}
+.ac-ws-row{display:grid;grid-template-columns:120px minmax(240px,1fr) 145px minmax(220px,auto);
+  gap:14px;align-items:center;padding:12px 14px;background:var(--paper);border-bottom:1px solid #E8EDF0}
+.ac-ws-row:last-child{border-bottom:0}
+.ac-ws-date,.ac-ws-main{display:flex;flex-direction:column;gap:2px;min-width:0}
+.ac-ws-date strong{font-family:'IBM Plex Mono',monospace;font-size:11.5px}
+.ac-ws-date span,.ac-ws-main>span,.ac-ws-main small{color:var(--dim);font-size:11px;overflow:hidden;
+  text-overflow:ellipsis;white-space:nowrap}
+.ac-ws-main>strong{font-size:13.5px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.ac-ws-main small{color:var(--accent)}
+.ac-ws-amount{font-family:'IBM Plex Mono',monospace;text-align:right;font-size:14px;font-weight:600;
+  display:flex;flex-direction:column;align-items:flex-end;gap:4px}
+.ac-ws-amount.in{color:var(--green)}.ac-ws-amount.out{color:var(--red)}
+.ac-ws-state{font-family:'IBM Plex Mono',monospace;font-size:9.5px;text-transform:uppercase;
+  letter-spacing:.04em;border:1px solid var(--rule);border-radius:9px;padding:1px 7px;color:var(--dim);
+  background:var(--paper);white-space:nowrap}
+.ac-ws-state.review{color:#8A6711;border-color:#E8C877;background:#FFF9EA}
+.ac-ws-state.matched{color:#1C6FA6;border-color:#9BC2DB;background:#F2F8FC}
+.ac-ws-state.posted{color:var(--green);border-color:#91C9C0;background:#F1F9F7}
+.ac-ws-state.excluded{color:var(--dim);background:#F3F5F6}
+.ac-ws-actions{display:flex;align-items:center;justify-content:flex-end;gap:6px;flex-wrap:wrap}
+.ac-ws-actions .ac-sel{max-width:225px;font-size:11.5px;padding:5px 7px}
+.ac-quickadd{border-left:3px solid var(--accent)}
+.ac-check{display:flex;align-items:flex-start;gap:8px;color:var(--ink2);font-size:12.5px}
+.ac-check input{margin-top:3px}
+.ac-rule-row{grid-template-columns:minmax(240px,1fr) 120px 80px auto}
+.ac-rule-row>div:first-child{display:flex;flex-direction:column}.ac-rule-row>div:first-child span{font-size:11px;color:var(--dim)}
+.ac-capture-upload{align-items:flex-end}.ac-capture-upload .ac-f{max-width:260px}
+.ac-upload-btn{flex:0 0 auto!important;background:var(--brand,var(--ink));color:#fff;border-radius:3px;
+  padding:8px 15px;font-weight:600;cursor:pointer;font-size:13px}
+.ac-upload-btn input{position:absolute;opacity:0;pointer-events:none}
+.ac-capture{display:grid;grid-template-columns:minmax(220px,1fr) minmax(230px,1fr) auto auto;
+  gap:12px;align-items:center;padding:12px 14px;border-bottom:1px solid var(--rule)}
+.ac-capture:last-child{border-bottom:0}.ac-capture>div:first-child{display:flex;flex-direction:column}
+.ac-capture>div:first-child span,.ac-capture>small{font-size:11px;color:var(--dim)}
+.ac-capture>small{grid-column:1/-1}
+.ac-capture-fields{display:flex;gap:12px;align-items:center;flex-wrap:wrap;font-size:12px}
+.ac-provider-grid{display:grid;grid-template-columns:repeat(2,minmax(230px,1fr)) minmax(260px,2fr);gap:10px}
+.ac-provider-state{border:1px solid var(--rule);border-radius:4px;padding:11px 12px;display:flex;gap:10px;align-items:center}
+.ac-provider-state i{font-style:normal;width:26px;height:26px;border-radius:50%;display:grid;place-items:center;
+  background:#FFF6E0;color:#8A6711;font-weight:700}.ac-provider-state.ok i{background:#EAF7F4;color:var(--green)}
+.ac-provider-state>div{display:flex;flex-direction:column}.ac-provider-state span{font-size:11px;color:var(--dim)}
+.ac-provider-note{font-size:11.5px;line-height:1.65;color:var(--dim);padding:7px 4px}
 .ac-foot{padding:6px 26px 0;color:var(--dim);font-size:11.5px;max-width:92ch;line-height:1.75}
 
 @media (max-width:820px){
-  .ac-head,.ac-tabs,.ac-body,.ac-note,.ac-foot{padding-left:16px;padding-right:16px}
+  .ac-head,.ac-tabs,.ac-shortcuts,.ac-body,.ac-note,.ac-foot{padding-left:16px;padding-right:16px}
   .ac-tr{grid-template-columns:1fr !important;gap:3px}
   .ac-tr--h{display:none}
   .ac-lineRow{grid-template-columns:1fr}
+  .ac-ws-statuses{grid-template-columns:repeat(2,1fr)}
+  .ac-ws-row,.ac-capture,.ac-provider-grid{grid-template-columns:1fr}
+  .ac-ws-amount{align-items:flex-start;text-align:left}.ac-ws-actions{justify-content:flex-start}
+  .ac-capture>small{grid-column:auto}
 }
 `;

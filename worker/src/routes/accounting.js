@@ -515,7 +515,7 @@ r.get("/accounting/files/:id", require_("accounting.view"), async (c) => {
 
 r.patch("/accounting/reports/:id", require_("accounting.reports"), async (c) => {
   const user = c.get("user");
-  if (!["accounting", "admin"].includes(user.role))
+  if (!["accounting", "admin", "property_manager"].includes(user.role))
     return c.json({ code: "ACCOUNTING_REPORT_GENERATION_REQUIRED" }, 403);
   const body = await c.req.json().catch(() => ({}));
   const sql = c.get("db");
@@ -536,7 +536,7 @@ r.patch("/accounting/reports/:id", require_("accounting.reports"), async (c) => 
 
 r.post("/accounting/reports/batch", require_("accounting.reports"), async (c) => {
   const user = c.get("user");
-  if (!["accounting", "admin"].includes(user.role))
+  if (!["accounting", "admin", "property_manager"].includes(user.role))
     return c.json({ code: "ACCOUNTING_REPORT_GENERATION_REQUIRED" }, 403);
   const body = await c.req.json().catch(() => ({}));
   const input = Array.isArray(body.reports) ? body.reports.slice(0, 10) : [];

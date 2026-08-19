@@ -22,12 +22,15 @@ psql "$DATABASE_URL" -f 016_accounting_document_review.sql
 psql "$DATABASE_URL" -f 017_ai_feedback.sql
 psql "$DATABASE_URL" -f 018_ai_training_center.sql
 psql "$DATABASE_URL" -f 019_workers_ai_cloud.sql # AI 对话、来源、转人工与用量
+psql "$DATABASE_URL" -f 020_pm_monthly_reports.sql # PM 製作與審核月報
 ```
 
 或直接貼進 Supabase 的 SQL Editor，一份一份來。
 
 已经有数据库的项目只需要执行尚未执行的 migration。升级到 Cloudflare
-Workers AI 时，至少要执行 `019_workers_ai_cloud.sql`；它不会清空或修改现有
+Workers AI 时，至少要执行 `019_workers_ai_cloud.sql`；要讓 PM 製作月報，再執行
+`020_pm_monthly_reports.sql`；要啟用 QuickBooks 式 Transactions、Bank Rules 與
+文件擷取，再執行 `021_accounting_workspace.sql`。這些 migration 不会清空或修改现有
 租客、房源、租约和价格资料。
 
 ---

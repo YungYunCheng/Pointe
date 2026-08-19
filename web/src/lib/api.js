@@ -181,6 +181,28 @@ export const api = {
     request("PATCH", `/accounting/reports/${id}`, patch),
   accountingFileUrl: (id, download = false) =>
     `${BASE}/api/accounting/files/${id}${download ? "?download=1" : ""}`,
+  accountingWorkspace: () => request("GET", "/accounting/workspace"),
+  accountingState: () => request("GET", "/accounting/state"),
+  updateAccountingState: (dataset, value) => request("PATCH", "/accounting/state", { dataset, value }),
+  reviewBankTransaction: (id, payload) =>
+    request("POST", `/accounting/bank-transactions/${id}/review`, payload),
+  accountingBankRules: () => request("GET", "/accounting/bank-rules"),
+  createAccountingBankRule: (payload) => request("POST", "/accounting/bank-rules", payload),
+  updateAccountingBankRule: (id, payload) => request("PATCH", `/accounting/bank-rules/${id}`, payload),
+  deleteAccountingBankRule: (id) => request("DELETE", `/accounting/bank-rules/${id}`),
+  applyAccountingBankRules: () => request("POST", "/accounting/bank-rules/apply", {}),
+  accountingQuickAdd: (payload) => request("POST", "/accounting/quick-add", payload),
+  accountingCaptures: () => request("GET", "/accounting/captures"),
+  uploadAccountingCapture(file, documentType = "receipt") {
+    const fd = new FormData();
+    fd.append("file", file);
+    fd.append("document_type", documentType);
+    return request("POST", "/accounting/captures", fd);
+  },
+  updateAccountingCapture: (id, patch) => request("PATCH", `/accounting/captures/${id}`, patch),
+  accountingCaptureUrl: (id) => `${BASE}/api/accounting/captures/${id}/file`,
+  accountingIntegrations: () => request("GET", "/accounting/integrations"),
+  syncAccountingIntegration: (kind) => request("POST", `/accounting/integrations/${kind}/sync`, {}),
 
   /* ---- admin ---- */
   users:       ()            => request("GET", "/admin/users"),
