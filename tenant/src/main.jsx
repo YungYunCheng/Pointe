@@ -32,8 +32,8 @@ import { Signup, VerifySignup, Claim, ResetPassword } from "./pages/Account.jsx"
      reveal later anyway.
    ============================================================ */
 
-const OFFICE_PHONE = "306-974-1727";
-const OFFICE_EMAIL = "chris.luczka@baydo.ca";
+const OFFICE_PHONE = "780-937-8677";
+const OFFICE_EMAIL = "rentals@themizar.ca";
 
 /* ---------- data ---------- */
 const TYPES = {
