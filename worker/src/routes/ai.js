@@ -457,10 +457,11 @@ r.post("/public/ai/chat", async (c) => {
         run_id:runId, intent: answer.intent, snapshot_at: facts.snapshot_at });
     }
 
+    let aiStatus = c.env.AI ? "AI_NO_USABLE_RESPONSE" : "AI_NOT_CONFIGURED";
     if (c.env.AI) {
       try {
         const learned = await trainingContext(c, "public_chat");
-        const system = `${PROMPTS.public_chat}\n\nReturn JSON only in this exact shape: {"answer":"short answer in the visitor language","needs_confirmation":false,"topic":"short topic"}. Set needs_confirmation to true whenever the supplied data and rules do not fully support the answer. Never put private data or unit numbers in the answer.${learned ? `\n\n${learned}` : ""}`;
+        const system = `${PROMPTS.public_chat}\n\nReturn JSON only in this exact shape: {"answer":"short answer in the visitor language","needs_confirmation":false,"topic":"short topic"}. For a safe public question, give a useful answer from the supplied facts even when the question is broad. If one detail is missing, state that the detail is not available, but still answer the supported part and keep needs_confirmation false. Set needs_confirmation true only when a person must make a decision or inspect a private record. Never put private data or unit numbers in the answer.${learned ? `\n\n${learned}` : ""}`;
         const result = await c.env.AI.run(workersAiModel(c), {
           messages: [
             { role:"system", content:system },
@@ -473,25 +474,32 @@ r.post("/public/ai/chat", async (c) => {
         const rawAnswer = workersAiText(result);
         const parsed = modelJson(rawAnswer);
         const modelAnswer = clipped(parsed?.answer, 3000).trim();
-        if (parsed && modelAnswer && parsed.needs_confirmation === false) {
+        // Sensitive and private topics were already removed above. For the
+        // remaining safe public questions, show a truthful partial answer
+        // instead of discarding it merely because the model marked the broad
+        // question as needing more detail.
+        if (parsed && modelAnswer) {
           const runId = await recordAiRun(sql, { question:message, answer:modelAnswer,
             language, provider:"workers_ai", model:workersAiModel(c), conversationKey,
             metadata:{ topic:clipped(parsed.topic, 100) || "general",
+              model_requested_confirmation:parsed.needs_confirmation === true,
               snapshot_at:facts.snapshot_at } });
           return c.json({ text:modelAnswer, automated:true, provider:"workers_ai",
-            model:workersAiModel(c), run_id:runId, snapshot_at:facts.snapshot_at });
+            model:workersAiModel(c), run_id:runId, ai_status:"answered",
+            needs_confirmation:false, snapshot_at:facts.snapshot_at });
         }
+        aiStatus = "AI_INVALID_RESPONSE";
         await recordAiRun(sql, { question:message, answer:modelAnswer, language,
           provider:"workers_ai", model:workersAiModel(c), conversationKey,
-          needsHuman:true,
-          errorCode:parsed ? "AI_NEEDS_CONFIRMATION" : "AI_INVALID_RESPONSE",
+          needsHuman:true, errorCode:aiStatus,
           metadata:{ topic:clipped(parsed?.topic, 100) || "unrecognised",
             response_received:!!rawAnswer, snapshot_at:facts.snapshot_at } });
       } catch (error) {
+        aiStatus = "AI_PROVIDER_ERROR";
         console.error("[public-workers-ai]", error?.message ?? error);
         await recordAiRun(sql, { question:message, language, provider:"workers_ai",
           model:workersAiModel(c), conversationKey, needsHuman:true,
-          errorCode:"AI_PROVIDER_ERROR" });
+          errorCode:aiStatus });
       }
     }
 
@@ -503,9 +511,10 @@ r.post("/public/ai/chat", async (c) => {
       : "This needs confirmation from our team. The appropriate staff member has been notified; please contact the office so we can reply to you.";
     const runId = await recordAiRun(sql, { question:message, answer:text, language,
       provider:"human", conversationKey, needsHuman:true, escalationId:escalation.id,
-      errorCode:c.env.AI ? "AI_NEEDS_CONFIRMATION" : "AI_NOT_CONFIGURED" });
+      errorCode:aiStatus });
     return c.json({
       text, automated: true, provider:"human", run_id:runId,
+      ai_status:aiStatus,
       needs_confirmation: true, escalation_id: escalation.id,
       assigned_role: escalation.assigned_role,
     });

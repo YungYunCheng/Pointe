@@ -8,10 +8,12 @@ assert.equal(workersAiText({ result:{ response:json } }), json);
 assert.equal(workersAiText({ choices:[{ message:{ content:json } }] }), json);
 assert.equal(workersAiText({ result:{ choices:[{ message:{ content:json } }] } }), json);
 assert.equal(workersAiText({ choices:[{ message:{ content:[{ type:"text", text:json }] } }] }), json);
+assert.equal(workersAiText({ output_text:json }), json);
+assert.equal(workersAiText({ choices:[{ text:json }] }), json);
 assert.deepEqual(modelJson(`\`\`\`json\n${json}\n\`\`\``), {
   answer:"Hello", needs_confirmation:false, topic:"summary",
 });
 assert.deepEqual(PUBLIC_CHAT_RESPONSE_FORMAT.json_schema.required,
   ["answer", "needs_confirmation", "topic"]);
 
-console.log("Workers AI response tests passed (7 cases).");
+console.log("Workers AI response tests passed (9 cases).");

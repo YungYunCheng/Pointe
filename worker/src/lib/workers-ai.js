@@ -12,8 +12,11 @@ export function workersAiText(result) {
   if (typeof result === "string") return result.trim();
   if (typeof result?.response === "string") return result.response.trim();
   if (typeof result?.result?.response === "string") return result.result.response.trim();
+  if (typeof result?.output_text === "string") return result.output_text.trim();
+  if (typeof result?.result?.output_text === "string") return result.result.output_text.trim();
   const directChoice = contentText(result?.choices?.[0]?.message?.content);
   if (directChoice) return directChoice;
+  if (typeof result?.choices?.[0]?.text === "string") return result.choices[0].text.trim();
   return contentText(result?.result?.choices?.[0]?.message?.content);
 }
 
@@ -39,4 +42,3 @@ export const PUBLIC_CHAT_RESPONSE_FORMAT = {
     required: ["answer", "needs_confirmation", "topic"],
   },
 };
-

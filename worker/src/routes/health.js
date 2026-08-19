@@ -128,6 +128,8 @@ r.get("/ai-health", async (c) => {
         COALESCE(SUM(error_count), 0)::int AS errors,
         COALESCE(SUM(request_count) FILTER (WHERE provider = 'workers_ai'), 0)::int
           AS model_requests,
+        COALESCE(SUM(error_count) FILTER (WHERE provider = 'workers_ai'), 0)::int
+          AS model_errors,
         COALESCE(SUM(request_count) FILTER (WHERE provider = 'database'), 0)::int
           AS database_answers,
         COALESCE(SUM(request_count) FILTER (WHERE provider = 'human'), 0)::int
@@ -151,7 +153,7 @@ r.get("/ai-health", async (c) => {
       provider_configured: configured,
       model,
       audit_storage: false,
-      today: { requests:0, errors:0, model_requests:0,
+      today: { requests:0, errors:0, model_requests:0, model_errors:0,
         database_answers:0, human_handoffs:0 },
       note: "Run worker/schema/019_workers_ai_cloud.sql in Supabase so AI decisions and usage can be recorded.",
       detail: error?.message,
