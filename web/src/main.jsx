@@ -20,7 +20,7 @@ const AuthConsole     = lazy(() => import("./tools/AuthConsole.jsx"));
 const UnitsConsole    = lazy(() => import("./tools/UnitsConsole.jsx"));
 const LeadsCrm        = lazy(() => import("./tools/LeadsCrm.jsx"));
 const Schedule        = lazy(() => import("./tools/Schedule.jsx"));
-const AiInbox         = lazy(() => import("./tools/AiInbox.jsx"));
+const Messages        = lazy(() => import("./tools/Messages.jsx"));
 const LeaseIntake     = lazy(() => import("./tools/LeaseIntake.jsx"));
 const Operations      = lazy(() => import("./tools/Operations.jsx"));
 const BuildingManager = lazy(() => import("./tools/BuildingManager.jsx"));
@@ -30,21 +30,19 @@ const Agreements      = lazy(() => import("./tools/Agreements.jsx"));
 const Portfolio       = lazy(() => import("./tools/Portfolio.jsx"));
 const AdminConsole    = lazy(() => import("./tools/AdminConsole.jsx"));
 const AiTrainingCenter = lazy(() => import("./tools/AiTrainingCenter.jsx"));
-const Confirmations   = lazy(() => import("./tools/Confirmations.jsx"));
 const FloorPlans      = lazy(() => import("./tools/FloorPlans.jsx"));
 const MaintenanceWorkflow = lazy(() => import("./tools/MaintenanceWorkflow.jsx"));
 
 const ALL = "admin property_manager building_manager accounting".split(" ");
 const LEASING = ["admin", "property_manager", "building_manager"];
 const TOOLS = [
-  { path: "/confirmations", label: "Confirmations", el: Confirmations, roles: ALL },
+  { path: "/messages",      label: "Messages",      el: Messages,      roles: ALL },
   { path: "/units",       label: "Units",       el: UnitsConsole,    roles: ALL },
   { path: "/floor-plans", label: "Floor plans", el: FloorPlans,      roles: ALL },
   { path: "/maintenance", label: "Maintenance", el: MaintenanceWorkflow, roles: ["admin", "building_manager"] },
   { path: "/schedule",    label: "Schedule",    el: Schedule,        roles: LEASING },
   { path: "/leads",       label: "Leads",       el: LeadsCrm,        roles: ["admin", "building_manager"] },
   { path: "/site",        label: "On site",     el: BuildingManager, roles: ["admin", "building_manager"] },
-  { path: "/inbox",       label: "AI inbox",    el: AiInbox,         roles: ["admin", "property_manager"] },
   { path: "/intake",      label: "Lease intake",el: LeaseIntake,     roles: ["admin", "property_manager"] },
   { path: "/operations",  label: "Operations",  el: Operations,      roles: ["admin", "property_manager", "building_manager"] },
   { path: "/agreements",  label: "Agreements",  el: Agreements,      roles: ["admin", "property_manager"] },
@@ -158,6 +156,8 @@ function Shell() {
             <Route path="/" element={<Navigate to="/units" replace />} />
             {visible.map((t) => <Route key={t.path} path={t.path}
               element={<PageBoundary key={loc.pathname}><t.el session={session} /></PageBoundary>} />)}
+            <Route path="/confirmations" element={<Navigate to="/messages?tab=confirmations" replace />} />
+            <Route path="/inbox" element={<Navigate to="/messages?tab=testing" replace />} />
             {/* A tool this role cannot see redirects rather than 404s, so a
                 shared link degrades quietly instead of looking broken. */}
             <Route path="*" element={<Navigate to="/units" replace />} />

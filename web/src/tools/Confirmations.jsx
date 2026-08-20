@@ -78,8 +78,10 @@ export const KINDS = {
   },
 };
 
-export default function Confirmations() {
-  const [session, setSession] = useState(undefined);
+export default function Confirmations({ session: suppliedSession, section = "all", embedded = false }) {
+  const includeChats = section !== "proposals";
+  const includeProposals = section !== "chat";
+  const [session, setSession] = useState(suppliedSession);
   const [proposals, setProposals] = useState([]);
   const [chatConfirmations, setChatConfirmations] = useState([]);
   const [view, setView] = useState("yours");
@@ -93,15 +95,17 @@ export default function Confirmations() {
         try { const r = await window.storage.get(k); return r?.value ? JSON.parse(r.value) : d; }
         catch { return d; }
       };
-      setSession(await read("baydo:session", null));
-      setProposals(await read("baydo:proposals", []));
-      try {
-        const response = await fetch("/api/escalations", { credentials:"include" });
-        if (response.ok) setChatConfirmations((await response.json()).escalations ?? []);
-      } catch { /* Local proposals remain usable if the API is offline. */ }
+      if (!suppliedSession) setSession(await read("baydo:session", null));
+      if (includeProposals) setProposals(await read("baydo:proposals", []));
+      if (includeChats) {
+        try {
+          const response = await fetch("/api/escalations", { credentials:"include" });
+          if (response.ok) setChatConfirmations((await response.json()).escalations ?? []);
+        } catch { /* Local proposals remain usable if the API is offline. */ }
+      }
       setLoading(false);
     })();
-  }, []);
+  }, [includeChats, includeProposals, suppliedSession]);
 
   const flash = (t) => { setMsg(t); setTimeout(() => setMsg(""), 3500); };
   const save = useCallback(async (v) => {
@@ -207,24 +211,29 @@ export default function Confirmations() {
   if (loading || session === undefined)
     return <div className="cf"><style>{CSS}</style><div className="cf-load">Loading…</div></div>;
 
-  const TABS = [["yours", "Waiting on you", counts.yours + chatPending.length],
-                ["pending", "All pending", counts.pending + chatPending.length],
-                ["done", "Done", counts.done + chatDone.length],
-                ["rejected", "Rejected", counts.rejected]];
+  const visibleYours = (includeProposals ? counts.yours : 0) + (includeChats ? chatPending.length : 0);
+  const visiblePending = (includeProposals ? counts.pending : 0) + (includeChats ? chatPending.length : 0);
+  const visibleDone = (includeProposals ? counts.done : 0) + (includeChats ? chatDone.length : 0);
+  const TABS = [["yours", "Waiting on you", visibleYours],
+                ["pending", "All pending", visiblePending],
+                ["done", "Done", visibleDone],
+                ...(includeProposals ? [["rejected", "Rejected", counts.rejected]] : [])];
 
   return (
-    <div className="cf">
+    <div className={`cf ${embedded ? "cf--embedded" : ""}`}>
       <style>{CSS}</style>
 
-      <header className="cf-head">
+      {!embedded && <header className="cf-head">
         <div>
-          <div className="cf-eyebrow">Baydo Pointe · Confirmations</div>
-          <h1>{counts.yours + chatPending.length > 0
-            ? `${counts.yours + chatPending.length} waiting on you`
+          <div className="cf-eyebrow">Baydo Pointe · {section === "chat" ? "Chat messages" : "Confirmations"}</div>
+          <h1>{visibleYours > 0
+            ? `${visibleYours} waiting on you`
             : "Nothing waiting on you"}</h1>
         </div>
         {msg && <span className="cf-flash">{msg}</span>}
-      </header>
+      </header>}
+
+      {embedded && msg && <div className="cf-inline-flash">{msg}</div>}
 
       <nav className="cf-tabs">
         {TABS.map(([k, l, n]) => (
@@ -236,14 +245,14 @@ export default function Confirmations() {
 
       <div className="cf-body">
         <p className="cf-note">
-          Nothing an automation cannot verify applies itself. Everything here is waiting on
-          the responsible person, sorted by what it would affect rather than when it arrived —
-          anything that reaches a tenant or moves money comes first.
+          {section === "chat"
+            ? "Live customer chat messages that automation could not safely answer. Confirm an item only after a staff member has handled it."
+            : "Nothing an automation cannot verify applies itself. These accounting, maintenance and leasing items wait for the responsible person before taking effect."}
         </p>
 
-        {counts.tenant + chatPending.length > 0 && view !== "done" && (
+        {(includeProposals ? counts.tenant : 0) + (includeChats ? chatPending.length : 0) > 0 && view !== "done" && (
           <div className="cf-alert">
-            <strong>{counts.tenant + chatPending.length} customer items need review.</strong>
+            <strong>{(includeProposals ? counts.tenant : 0) + (includeChats ? chatPending.length : 0)} customer items need review.</strong>
             <span>
               {" "}Those are worth reading in full rather than scanning. A message that
               lands wrong is harder to take back than a bookkeeping entry.
@@ -251,7 +260,7 @@ export default function Confirmations() {
           </div>
         )}
 
-        {chatShown.length > 0 && (
+        {includeChats && chatShown.length > 0 && (
           <div className="cf-list">
             {chatShown.map((item) => {
               const pending = ["open", "claimed"].includes(item.state);
@@ -262,7 +271,7 @@ export default function Confirmations() {
                     <span className="cf-tag" style={{ "--c": late ? "#B93855" : "#C98A15" }}>
                       {late ? "overdue" : pending ? "needs confirmation" : "handled"}
                     </span>
-                    <strong>Customer chat · {item.topic || "unrecognised"}</strong>
+                    <strong>Chat message · {item.topic || "unrecognised"}</strong>
                     <span>{ROLE_THEME[item.assigned_role]?.label ?? item.assigned_role}</span>
                     <span className="cf-mono">{stamp(item.created_at)}</span>
                   </div>
@@ -282,13 +291,13 @@ export default function Confirmations() {
           </div>
         )}
 
-        {shown.length === 0 && chatShown.length === 0 ? (
+        {(!includeProposals || shown.length === 0) && (!includeChats || chatShown.length === 0) ? (
           <div className="cf-empty">
             {view === "yours"
               ? "Nothing waiting on you. Anything needing another role is under All pending."
               : "Nothing here."}
           </div>
-        ) : (
+        ) : includeProposals ? (
           <div className="cf-list">
             {shown.map((p) => (
               <Card key={p.id} p={p} session={session} expanded={open === p.id}
@@ -296,7 +305,7 @@ export default function Confirmations() {
                     onConfirm={confirm} onReject={reject} onApply={apply} />
             ))}
           </div>
-        )}
+        ) : null}
       </div>
     </div>
   );
@@ -733,6 +742,7 @@ const CSS = `
   --red:#B23A54;--green:#0E8577;--amber:#FFF6E0;--amberline:#E8C877;
   background:var(--ground);color:var(--ink,#131C25);min-height:100vh;font-size:14px;
   line-height:1.55;font-family:'IBM Plex Sans',system-ui,sans-serif;padding-bottom:44px}
+.cf--embedded{min-height:0}
 .cf *{box-sizing:border-box}
 .cf-mono{font-family:'IBM Plex Mono',monospace;font-variant-numeric:tabular-nums}
 .cf-dim{color:var(--dim);font-size:12.5px}
@@ -747,6 +757,8 @@ const CSS = `
   letter-spacing:-.02em;margin:4px 0 0;color:var(--brand)}
 .cf-flash{font-size:12.5px;color:var(--green);background:#F5FAF8;border:1px solid var(--green);
   border-radius:3px;padding:6px 11px}
+.cf-inline-flash{margin:14px 26px 0;font-size:12.5px;color:var(--green);background:#F5FAF8;
+  border:1px solid var(--green);border-radius:3px;padding:8px 11px}
 .cf-tabs{display:flex;padding:0 26px;background:var(--paper);border-bottom:1px solid var(--rule);
   overflow-x:auto}
 .cf-tabs button{font:inherit;font-weight:600;font-size:13.5px;cursor:pointer;background:none;

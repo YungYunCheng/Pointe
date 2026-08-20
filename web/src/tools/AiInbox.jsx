@@ -124,7 +124,7 @@ const SEED = [
 
 const money = (n) => (n === "" || n == null || isNaN(n) ? null : "$" + Math.round(Number(n)).toLocaleString("en-CA"));
 
-export default function AIInbox({ session }) {
+export default function AIInbox({ session, embedded = false }) {
   const [facts, setFacts] = useState(null);
   const [loading, setLoading] = useState(true);
   const [msgs, setMsgs] = useState(() => SEED.map((m) => ({ ...m, ts: Date.now(), state: "new" })));
@@ -313,10 +313,10 @@ useEffect(() => {
   if (loading) return <div className="ai-root"><style>{CSS}</style><div className="ai-load">Loading property data…</div></div>;
 
   return (
-    <div className="ai-root">
+    <div className={`ai-root ${embedded ? "ai-root--embedded" : ""}`}>
       <style>{CSS}</style>
 
-      <header className="ai-head">
+      {!embedded && <header className="ai-head">
         <div>
           <div className="ai-eyebrow">Baydo Pointe · Prototype</div>
           <h1>AI replies <span>review console</span></h1>
@@ -329,7 +329,7 @@ useEffect(() => {
             {busy ? "Working…" : `Process all (${counts.new})`}
           </button>
         </div>
-      </header>
+      </header>}
 
       <nav className="ai-tabs">
         {[["inbox", "Inbox"], ["escalations", "Needs a person"],
@@ -861,6 +861,7 @@ const CSS = `
   --amber:#FFF6E0;--amberline:#E8C877;--red:#B23A54;--accent:var(--brand,#2A6183);
   background:var(--ground);color:var(--ink);min-height:100vh;font-size:14px;line-height:1.55;
   font-family:'IBM Plex Sans','PingFang TC','Microsoft JhengHei',system-ui,sans-serif;padding-bottom:48px}
+.ai-root--embedded{min-height:0}
 .ai-root *{box-sizing:border-box}
 .ai-mono{font-family:'IBM Plex Mono',monospace;font-variant-numeric:tabular-nums}
 .ai-dim{color:var(--dim);font-size:12.5px}
