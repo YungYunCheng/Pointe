@@ -397,6 +397,28 @@ function Home() {
   );
 }
 
+function ParkingHonesty() {
+  const { t } = useT();
+  const d = useProperty();
+
+  return (
+    <section className="bt-sec bt-sec--tint">
+      <h2>{t("parking.title")}</h2>
+      <p className="bt-body">{t("parking.body")}</p>
+      {d && (
+        <div className="bt-chips">
+          <span className={d.stalls.free > 0 ? "ok" : "warn"}>
+            {d.stalls.free > 0
+              ? t("parking.free", { n: d.stalls.free })
+              : t("parking.none")}
+          </span>
+          {d.waiting > 0 && <span>{t("parking.waitlist", { n: d.waiting })}</span>}
+        </div>
+      )}
+    </section>
+  );
+}
+
 /* ---------- suites ---------- */
 function Suites() {
   const { t, locale, money, date } = useT();
