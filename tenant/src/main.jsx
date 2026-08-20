@@ -32,9 +32,58 @@ import { Signup, VerifySignup, Claim, ResetPassword } from "./pages/Account.jsx"
      reveal later anyway.
    ============================================================ */
 
-const OFFICE_PHONE = "306-974-1727";
-const OFFICE_EMAIL = "chris.luczka@baydo.ca";
+const OFFICE_PHONE = "780-937-8677";
+const OFFICE_EMAIL = "rentals@themizar.ca";
 const STAFF_URL = "https://pointe-worker.dcheng0726.workers.dev";
+
+const DEFAULT_SITE = {
+  en: {
+    headline: "A short walk from Clareview LRT.",
+    subheadline: "Three buildings, 330 homes and everyday amenities in one connected Edmonton community.",
+    cta_title: "Come see Baydo Pointe",
+    cta_body: "Tour an available suite and see how close everyday life can be.",
+    footer_tagline: "Connected rental living beside Clareview LRT.",
+    footer_address: "370 · 374 · 378 Clareview Station Drive NW\nEdmonton, Alberta",
+  },
+  zh: {
+    headline: "走路就到 Clareview 輕軌站。",
+    subheadline: "三棟樓、330 戶住宅與日常配套，組成交通便利的 Edmonton 社區。",
+    cta_title: "預約參觀 Baydo Pointe",
+    cta_body: "參觀目前可租房源，親自看看交通便利的社區生活。",
+    footer_tagline: "位於 Clareview 輕軌站旁的便利租住社區。",
+    footer_address: "370 · 374 · 378 Clareview Station Drive NW\nEdmonton, Alberta",
+  },
+  contact: { phone: OFFICE_PHONE, email: OFFICE_EMAIL },
+};
+
+let siteContentCache = null;
+let siteContentRequest = null;
+function loadSiteContent() {
+  if (siteContentCache) return Promise.resolve(siteContentCache);
+  if (!siteContentRequest) {
+    siteContentRequest = fetch("/api/public/site-content")
+      .then((response) => response.ok ? response.json() : null)
+      .then((data) => {
+        if (data?.content) siteContentCache = data;
+        return siteContentCache;
+      })
+      .catch(() => null)
+      .finally(() => { siteContentRequest = null; });
+  }
+  return siteContentRequest;
+}
+
+function useSiteContent() {
+  const [site, setSite] = useState(siteContentCache ?? { content: DEFAULT_SITE, images: [] });
+  useEffect(() => {
+    let active = true;
+    loadSiteContent().then((data) => {
+      if (active && data?.content) setSite(data);
+    });
+    return () => { active = false; };
+  }, []);
+  return site;
+}
 
 /* ---------- data ---------- */
 const TYPES = {
@@ -171,7 +220,12 @@ function Header() {
 }
 
 function Footer() {
-  const { t } = useT();
+  const { t, locale } = useT();
+  const site = useSiteContent();
+  const copy = { ...DEFAULT_SITE[locale], ...(site.content?.[locale] ?? {}) };
+  const phone = site.content?.contact?.phone || OFFICE_PHONE;
+  const email = site.content?.contact?.email || OFFICE_EMAIL;
+  const staffUrl = site.staff_url || STAFF_URL;
 
   return (
     <footer className="bt-foot">
@@ -216,10 +270,8 @@ function Footer() {
             <span className="bt-foot-dot" />
             <strong>Baydo Pointe</strong>
           </div>
-          <p className="bt-foot-tag">{t("footer.tagline")}</p>
-          <p className="bt-foot-addr">
-            370 · 374 · 378 Clareview Station Drive NW<br />Edmonton, Alberta
-          </p>
+          <p className="bt-foot-tag">{copy.footer_tagline}</p>
+          <p className="bt-foot-addr">{copy.footer_address}</p>
         </div>
 
         <nav className="bt-foot-col">
@@ -233,13 +285,13 @@ function Footer() {
           <Link to="/apply">{t("nav.apply")}</Link>
           <Link to="/book">{t("nav.book")}</Link>
           <Link to="/portal">{t("nav.portal")}</Link>
-          <a className="bt-foot-staff" href={STAFF_URL}>{t("footer.staffLogin")} →</a>
+          <a className="bt-foot-staff" href={staffUrl}>{t("footer.staffLogin")} →</a>
         </nav>
 
         <div className="bt-foot-col">
           <h4>{t("footer.contact")}</h4>
-          <a href={`tel:${OFFICE_PHONE}`}>{OFFICE_PHONE}</a>
-          <a href={`mailto:${OFFICE_EMAIL}`}>{OFFICE_EMAIL}</a>
+          <a href={`tel:${phone}`}>{phone}</a>
+          <a href={`mailto:${email}`}>{email}</a>
           <span className="bt-foot-hours">{t("footer.hours")}</span>
 
           <h4 className="bt-foot-h2">{t("footer.residents")}</h4>
@@ -266,6 +318,8 @@ function Footer() {
 function Home() {
   const { t, money, locale } = useT();
   const d = useProperty();
+  const site = useSiteContent();
+  const copy = { ...DEFAULT_SITE[locale], ...(site.content?.[locale] ?? {}) };
 
   const totalFree = d ? (d.publicTypes
     ? d.publicTypes.reduce((s, x) => s + Number(x.available ?? 0), 0)
@@ -310,11 +364,11 @@ function Home() {
 
         <div className="bt-hero-in">
           <div className="bt-eyebrow">{t("home.address")}</div>
-          <h1>{t("home.headline")}</h1>
+          <h1>{copy.headline}</h1>
           <p className="bt-lede">
             {d && totalFree > 0
               ? t("home.leadAvailable", { n: totalFree, rent: money(from) })
-              : t("home.sub")}
+              : copy.subheadline}
           </p>
           <div className="bt-hero-cta">
             <Link to="/suites" className="bt-btn">{t("home.cta")}</Link>
@@ -348,7 +402,7 @@ function Home() {
                 <span className="bt-avail-r">
                   {Number(x.rent) > 0 ? money(x.rent) : t("suites.askRate")}
                 </span>
-                <span className="bt-avail-c">{x.available}</span>
+                <span className="bt-avail-c">{t("suites.available", { n: x.available })}</span>
                 <span className="bt-avail-go" aria-hidden="true">→</span>
               </Link>
             ))}
@@ -386,8 +440,8 @@ function Home() {
 
       <section className="bt-cta-band">
         <div>
-          <h2>{t("home.bandTitle")}</h2>
-          <p>{t("home.bandBody")}</p>
+          <h2>{copy.cta_title || t("home.bandTitle")}</h2>
+          <p>{copy.cta_body || t("home.bandBody")}</p>
         </div>
         <Link to="/book" className="bt-btn">
           {t("home.ctaSecond")}
@@ -585,7 +639,7 @@ function RequireTenantSession({ children }) {
 /* ---------- app ---------- */
 function Site() {
   return (
-    <div className="bt">
+    <div className="bt bt-app">
       <Header />
       <main>
         <Routes>
@@ -846,7 +900,7 @@ a{color:inherit}
   letter-spacing:.13em;text-transform:uppercase;color:#fff;font-weight:700}
 .bt-foot-tag{margin:0 0 18px;font-size:13.5px;color:#8FA3B5;line-height:1.75;
   max-width:34ch}
-.bt-foot-addr{margin:0;font-size:12.5px;color:#6F8398;line-height:1.9}
+.bt-foot-addr{margin:0;font-size:12.5px;color:#8FA3B5;line-height:1.9;white-space:pre-line}
 
 .bt-foot-col{display:flex;flex-direction:column;align-items:flex-start;gap:11px}
 .bt-foot-col h4{font-family:'Fraunces','Noto Serif TC',Georgia,serif;font-size:14px;font-weight:700;
@@ -1100,8 +1154,6 @@ a{color:inherit}
   font-size:13.5px;text-align:right}
 .bt-app .bt-avail-a{color:var(--dim)}
 .bt-app .bt-avail-c{color:var(--accent);font-size:12.5px}
-.bt-app .bt-avail-c::after{content:" 戶"}
-.bt-app[lang="en"] .bt-plan-c::after{content:" free"}
 .bt-app .bt-avail-go{color:var(--rule);text-align:right;font-size:13px}
 .bt-app .bt-avail-row:hover .bt-plan-go{color:var(--accent)}
 
@@ -1146,6 +1198,29 @@ a{color:inherit}
   .bt-app .bt-avail-row{grid-template-columns:1fr auto auto;gap:10px;
     padding:13px 2px}
   .bt-app .bt-avail-a,.bt-app .bt-avail-go{display:none}
+}
+
+/* Footer layout and contrast. Keep the building art decorative instead of
+   allowing it to compete with the contact information. */
+.bt-app .bt-foot-art{width:46%;opacity:.28;
+  -webkit-mask-image:linear-gradient(90deg,transparent 0%,#000 58%);
+  mask-image:linear-gradient(90deg,transparent 0%,#000 58%)}
+.bt-app .bt-foot-in{grid-template-columns:minmax(280px,1.4fr) minmax(160px,.75fr) minmax(220px,1fr);
+  gap:64px;padding-top:58px;padding-bottom:48px}
+.bt-app .bt-foot-mark strong,.bt-app .bt-foot-col h4{
+  font-family:'IBM Plex Sans','Noto Sans TC',sans-serif}
+.bt-app .bt-foot-mark strong{letter-spacing:.08em;font-size:18px}
+.bt-app .bt-foot-col h4{font-size:13px;letter-spacing:.08em;text-transform:uppercase}
+.bt-app .bt-foot-tag{color:#A9B8C5;max-width:38ch}
+.bt-app .bt-foot-col a{line-height:1.55}
+.bt-app .bt-foot-hours{color:#8FA3B5}
+
+@media (max-width:820px){
+  .bt-app .bt-foot-in{grid-template-columns:1fr 1fr;gap:34px}
+}
+@media (max-width:560px){
+  .bt-app .bt-foot-in{grid-template-columns:1fr;gap:28px}
+  .bt-app .bt-foot-art{width:85%;opacity:.18}
 }
 
 /* Everything on one measure.
