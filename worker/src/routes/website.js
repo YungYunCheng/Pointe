@@ -3,6 +3,7 @@ import { require_, audit, uid } from "../lib/auth.js";
 
 const r = new Hono();
 const MAX_IMAGE_BYTES = 10 * 1024 * 1024;
+const MAX_IMAGES_PER_SLOT = 20;
 const IMAGE_TYPES = new Map([
   ["image/jpeg", "jpg"], ["image/png", "png"], ["image/webp", "webp"],
   ["image/avif", "avif"],
@@ -10,7 +11,7 @@ const IMAGE_TYPES = new Map([
 const SLOTS = new Set(["hero", "amenities", "neighbourhood", "gallery"]);
 const COPY_FIELDS = ["headline", "subheadline", "intro_title", "intro_body",
   "amenities_title", "amenities_body", "neighbourhood_title", "neighbourhood_body",
-  "gallery_title", "cta_title", "cta_body"];
+  "gallery_title", "cta_title", "cta_body", "footer_tagline", "footer_address"];
 
 const DEFAULT_CONTENT = {
   en: {
@@ -25,6 +26,8 @@ const DEFAULT_CONTENT = {
     gallery_title: "See Baydo Pointe",
     cta_title: "Find the home that fits",
     cta_body: "Check current availability and live pricing, then book a viewing when you are ready.",
+    footer_tagline: "Connected rental living beside Clareview LRT.",
+    footer_address: "370 · 374 · 378 Clareview Station Drive NW\nEdmonton, Alberta",
   },
   zh: {
     headline: "走路就到 Clareview 輕軌站。",
@@ -38,6 +41,8 @@ const DEFAULT_CONTENT = {
     gallery_title: "看看 Baydo Pointe",
     cta_title: "找到適合你的房型",
     cta_body: "查看即時空房與租金，準備好後即可預約看房。",
+    footer_tagline: "位於 Clareview 輕軌站旁的便利租住社區。",
+    footer_address: "370 · 374 · 378 Clareview Station Drive NW\nEdmonton, Alberta",
   },
   contact: { phone: "780-937-8677", email: "rentals@themizar.ca" },
 };
@@ -141,23 +146,28 @@ r.post("/admin/site-images", require_("users.manage"), async (c) => {
   });
   try {
     const result = await sql.begin(async (tx) => {
-      const replaced = slot === "gallery" ? [] : await tx`
-        SELECT storage_key FROM public_site_images WHERE slot = ${slot} FOR UPDATE`;
-      if (slot !== "gallery") await tx`DELETE FROM public_site_images WHERE slot = ${slot}`;
+      const [{ count }] = await tx`SELECT count(*)::int AS count
+        FROM public_site_images WHERE slot = ${slot} AND is_active`;
+      if (count >= MAX_IMAGES_PER_SLOT) {
+        const error = new Error("IMAGE_SLOT_LIMIT");
+        error.code = "IMAGE_SLOT_LIMIT";
+        throw error;
+      }
       const [row] = await tx`INSERT INTO public_site_images (id, slot, storage_key,
         filename, mime_type, size_bytes, alt_en, alt_zh, sort_order, uploaded_by)
         VALUES (${id}, ${slot}, ${key}, ${filename}, ${file.type}, ${file.size},
           ${clean(body.alt_en, 240)}, ${clean(body.alt_zh, 240)},
           ${Number(body.sort_order) || 0}, ${user.id}) RETURNING *`;
-      return { row, replaced };
+      return { row };
     });
     const image = result.row;
-    for (const old of result.replaced) await c.env.FILES.delete(old.storage_key).catch(() => {});
     await audit(c, { action: "public_site.image.upload", entityType: "public_site_image",
       entityId: id, after: { slot, filename } });
     return c.json({ image: publicImage(image) }, 201);
   } catch (error) {
     await c.env.FILES.delete(key).catch(() => {});
+    if (error?.code === "IMAGE_SLOT_LIMIT")
+      return c.json({ code: "IMAGE_SLOT_LIMIT", max_images: MAX_IMAGES_PER_SLOT }, 409);
     throw error;
   }
 });

@@ -46,6 +46,8 @@ const DEFAULT_SITE = {
     neighbourhood_body:"Walk to Clareview LRT and connect to downtown, shopping, recreation and the rest of Edmonton without adding another stop to your day.",
     gallery_title:"See Baydo Pointe", cta_title:"Find the home that fits",
     cta_body:"Check current availability and live pricing, then book a viewing when you are ready.",
+    footer_tagline:"Connected rental living beside Clareview LRT.",
+    footer_address:"370 · 374 · 378 Clareview Station Drive NW\nEdmonton, Alberta",
   },
   zh: {
     headline:"走路就到 Clareview 輕軌站。",
@@ -58,6 +60,8 @@ const DEFAULT_SITE = {
     neighbourhood_body:"步行可達 Clareview LRT，輕鬆前往市中心、購物、休閒設施與 Edmonton 其他地區。",
     gallery_title:"看看 Baydo Pointe", cta_title:"找到適合你的房型",
     cta_body:"查看即時空房與租金，準備好後即可預約看房。",
+    footer_tagline:"位於 Clareview 輕軌站旁的便利租住社區。",
+    footer_address:"370 · 374 · 378 Clareview Station Drive NW\nEdmonton, Alberta",
   },
   contact:{ phone:OFFICE_PHONE, email:OFFICE_EMAIL },
 };
@@ -85,7 +89,7 @@ function useSiteContent() {
   return site;
 }
 
-const siteImage = (site, slot) => site?.images?.find((image) => image.slot === slot);
+const siteImages = (site, slot) => (site?.images ?? []).filter((image) => image.slot === slot);
 
 /* ---------- data ---------- */
 const TYPES = {
@@ -230,26 +234,36 @@ function Header() {
 }
 
 function Footer() {
-  const { t } = useT();
+  const { t, locale } = useT();
   const site = useSiteContent();
+  const copy = { ...DEFAULT_SITE[locale], ...(site.content?.[locale] ?? {}) };
   const phone = site.content?.contact?.phone || OFFICE_PHONE;
   const email = site.content?.contact?.email || OFFICE_EMAIL;
   return (
     <footer className="bt-foot">
       <div className="bt-foot-in">
-        <div>
-          <strong>Baydo Pointe</strong>
-          <p>370 · 374 · 378 Clareview Station Drive NW<br />Edmonton, AB</p>
+        <div className="bt-foot-brand">
+          <Link to="/" className="bt-foot-logo"><span>BP</span>Baydo Pointe</Link>
+          <p>{copy.footer_tagline}</p>
+          <p className="bt-foot-address">{copy.footer_address}</p>
         </div>
-        <div>
-          <strong>{t("common.office")}</strong>
-          <p><a href={`tel:${phone}`}>{phone}</a><br />
-             <a href={`mailto:${email}`}>{email}</a></p>
+        <nav className="bt-foot-nav" aria-label={locale === "zh" ? "頁尾導覽" : "Footer navigation"}>
+          <strong>{locale === "zh" ? "網站導覽" : "Navigation"}</strong>
+          <Link to="/suites">{t("nav.suites")}</Link>
+          <Link to="/building">{t("nav.building")}</Link>
+          <Link to="/apply">{t("nav.apply")}</Link>
+          <Link to="/portal">{t("nav.portal")}</Link>
+        </nav>
+        <div className="bt-foot-contact">
+          <strong>{locale === "zh" ? "聯絡我們" : "Contact us"}</strong>
+          <a href={`tel:${phone}`}>{phone}</a>
+          <a href={`mailto:${email}`}>{email}</a>
+          <Link className="bt-foot-book" to="/book">{t("nav.book")} →</Link>
         </div>
         <div className="bt-foot-fair">
           <p>{t("footer.fairHousing")}</p>
           <p className="bt-dim">
-            {t("footer.legal")}{" "}
+            © {new Date().getFullYear()} {t("footer.legal")}{" "}
             <Link to="/privacy">{t("common.privacy")}</Link>
           </p>
         </div>
@@ -264,10 +278,10 @@ function Home() {
   const d = useProperty();
   const site = useSiteContent();
   const copy = { ...DEFAULT_SITE[locale], ...(site.content?.[locale] ?? {}) };
-  const hero = siteImage(site, "hero");
-  const amenities = siteImage(site, "amenities");
-  const neighbourhood = siteImage(site, "neighbourhood");
-  const gallery = (site.images ?? []).filter((image) => image.slot === "gallery");
+  const hero = siteImages(site, "hero");
+  const amenities = siteImages(site, "amenities");
+  const neighbourhood = siteImages(site, "neighbourhood");
+  const gallery = siteImages(site, "gallery");
   const totalFree = d ? (d.publicTypes
     ? d.publicTypes.reduce((s, x) => s + Number(x.available ?? 0), 0)
     : Object.values(d.byType).reduce((s, x) => s + x.free, 0)) : null;
@@ -278,7 +292,7 @@ function Home() {
 
   return (
     <>
-      <section className={`bt-hero ${hero ? "has-photo" : ""}`}>
+      <section className={`bt-hero ${hero.length ? "has-photo" : ""}`}>
         <div className="bt-hero-grid">
           <div className="bt-hero-in">
             <div className="bt-eyebrow">{t("home.address")}</div>
@@ -294,8 +308,8 @@ function Home() {
               <Link to="/book" className="bt-btn bt-btn--ghost">{t("home.ctaSecond")}</Link>
             </div>
           </div>
-          <div className="bt-hero-media">{hero
-            ? <img src={hero.url} alt={locale === "zh" ? hero.alt_zh || hero.alt_en : hero.alt_en} />
+          <div className="bt-hero-media">{hero.length
+            ? <PhotoSlider images={hero} locale={locale} label={locale === "zh" ? "首頁照片" : "Property photos"} />
             : <div className="bt-photo-placeholder"><strong>370 · 374 · 378</strong><span>Clareview Station Drive NW</span></div>}</div>
         </div>
       </section>
@@ -307,8 +321,8 @@ function Home() {
       </section>
 
       <section className="bt-feature-panel">
-        <div className="bt-feature-media">{amenities
-          ? <img src={amenities.url} alt={locale === "zh" ? amenities.alt_zh || amenities.alt_en : amenities.alt_en} />
+        <div className="bt-feature-media">{amenities.length
+          ? <PhotoSlider images={amenities} locale={locale} label={locale === "zh" ? "設施照片" : "Amenity photos"} />
           : <div className="bt-photo-placeholder"><strong>{locale === "zh" ? "每栋都有" : "In every building"}</strong><span>Gym · Lounge · Pet wash · Bike storage</span></div>}</div>
         <div className="bt-feature-copy">
           <div className="bt-section-number">02</div><h2>{copy.amenities_title}</h2><p>{copy.amenities_body}</p>
@@ -327,8 +341,8 @@ function Home() {
       </section>
 
       <section className="bt-feature-panel bt-feature-panel--reverse">
-        <div className="bt-feature-media">{neighbourhood
-          ? <img src={neighbourhood.url} alt={locale === "zh" ? neighbourhood.alt_zh || neighbourhood.alt_en : neighbourhood.alt_en} />
+        <div className="bt-feature-media">{neighbourhood.length
+          ? <PhotoSlider images={neighbourhood} locale={locale} label={locale === "zh" ? "社區照片" : "Neighbourhood photos"} />
           : <div className="bt-photo-placeholder bt-photo-placeholder--map"><strong>Clareview LRT</strong><span>{locale === "zh" ? "步行可达" : "Steps from home"}</span></div>}</div>
         <div className="bt-feature-copy"><div className="bt-section-number">04</div><h2>{copy.neighbourhood_title}</h2><p>{copy.neighbourhood_body}</p>
           <div className="bt-amen"><div className="bt-amen-i"><span>↗</span>{t("amen.transit")}</div><div className="bt-amen-i"><span>↗</span>{t("amen.busPad")}</div></div>
@@ -344,6 +358,29 @@ function Home() {
         <div className="bt-hero-cta"><Link to="/suites" className="bt-btn">{t("home.cta")}</Link><Link to="/book" className="bt-btn bt-btn--ghost">{t("home.ctaSecond")}</Link></div></section>
     </>
   );
+}
+
+function PhotoSlider({ images, locale, label }) {
+  const [index, setIndex] = useState(0);
+  useEffect(() => { setIndex(0); }, [images]);
+  useEffect(() => {
+    if (images.length < 2) return undefined;
+    const timer = window.setInterval(() => setIndex((value) => (value + 1) % images.length), 6500);
+    return () => window.clearInterval(timer);
+  }, [images.length]);
+  const current = images[index] ?? images[0];
+  if (!current) return null;
+  const alt = locale === "zh" ? current.alt_zh || current.alt_en : current.alt_en || current.alt_zh;
+  const move = (amount) => setIndex((value) => (value + amount + images.length) % images.length);
+  return <div className="bt-slider" aria-label={label}>
+    <img key={current.id} src={current.url} alt={alt || ""} />
+    {images.length > 1 && <>
+      <button className="bt-slider-arrow prev" type="button" aria-label={locale === "zh" ? "上一張" : "Previous photo"} onClick={() => move(-1)}>‹</button>
+      <button className="bt-slider-arrow next" type="button" aria-label={locale === "zh" ? "下一張" : "Next photo"} onClick={() => move(1)}>›</button>
+      <div className="bt-slider-dots">{images.map((image, itemIndex) => <button key={image.id} type="button" className={itemIndex === index ? "on" : ""}
+        aria-label={`${locale === "zh" ? "查看照片" : "View photo"} ${itemIndex + 1}`} aria-current={itemIndex === index ? "true" : undefined} onClick={() => setIndex(itemIndex)} />)}</div>
+    </>}
+  </div>;
 }
 
 /** Parking is short by 108 stalls. Saying so here costs a few enquiries and
@@ -621,6 +658,7 @@ a{color:inherit}
 .bt-hero-in{padding:clamp(62px,9vw,126px) clamp(28px,6vw,88px);display:flex;flex-direction:column;justify-content:center}
 .bt-hero-media{min-height:520px;overflow:hidden;background:#DCE5EB;position:relative}
 .bt-hero-media img{width:100%;height:100%;object-fit:cover;display:block}
+.bt-slider{height:100%;min-height:inherit;position:relative;overflow:hidden;background:#DCE5EB}.bt-slider>img{position:absolute;inset:0;width:100%;height:100%;object-fit:cover;animation:bt-photo-in .35s ease}.bt-slider-arrow{position:absolute;z-index:2;top:50%;transform:translateY(-50%);width:42px;height:42px;border:1px solid rgba(255,255,255,.6);border-radius:50%;background:rgba(12,27,43,.55);color:#fff;font-size:30px;line-height:1;cursor:pointer;display:grid;place-items:center}.bt-slider-arrow:hover{background:rgba(12,27,43,.85)}.bt-slider-arrow.prev{left:15px}.bt-slider-arrow.next{right:15px}.bt-slider-dots{position:absolute;z-index:2;left:50%;bottom:16px;transform:translateX(-50%);display:flex;gap:7px;padding:7px 10px;border-radius:20px;background:rgba(12,27,43,.45)}.bt-slider-dots button{width:8px;height:8px;border:0;border-radius:50%;padding:0;background:rgba(255,255,255,.55);cursor:pointer}.bt-slider-dots button.on{background:#fff;transform:scale(1.25)}@keyframes bt-photo-in{from{opacity:.35;transform:scale(1.01)}to{opacity:1;transform:scale(1)}}
 .bt-photo-placeholder{height:100%;min-height:340px;display:flex;flex-direction:column;align-items:center;justify-content:center;text-align:center;padding:34px;color:#fff;background:linear-gradient(150deg,#173252 0%,#2A6183 58%,#8AA9BA 100%);position:relative;overflow:hidden}
 .bt-photo-placeholder:before{content:"";position:absolute;width:380px;height:380px;border:1px solid rgba(255,255,255,.2);border-radius:50%;right:-120px;top:-150px}
 .bt-photo-placeholder:after{content:"";position:absolute;width:250px;height:250px;border:1px solid rgba(255,255,255,.16);border-radius:50%;left:-80px;bottom:-120px}
@@ -666,7 +704,7 @@ a{color:inherit}
 .bt-feature-panel{max-width:1280px;margin:0 auto clamp(60px,8vw,110px);display:grid;grid-template-columns:minmax(0,1.1fr) minmax(360px,.9fr);background:#F0F4F6}
 .bt-feature-panel--reverse{grid-template-columns:minmax(360px,.9fr) minmax(0,1.1fr)}
 .bt-feature-panel--reverse .bt-feature-media{order:2}.bt-feature-panel--reverse .bt-feature-copy{order:1}
-.bt-feature-media{min-height:520px;overflow:hidden}.bt-feature-media img{width:100%;height:100%;display:block;object-fit:cover}.bt-feature-media .bt-photo-placeholder{min-height:520px}
+.bt-feature-media{min-height:520px;overflow:hidden}.bt-feature-media>img{width:100%;height:100%;display:block;object-fit:cover}.bt-feature-media .bt-photo-placeholder,.bt-feature-media .bt-slider{min-height:520px}
 .bt-feature-copy{padding:clamp(38px,6vw,78px);display:flex;flex-direction:column;justify-content:center}.bt-feature-copy>p{margin:18px 0 22px}.bt-feature-copy .bt-amen{grid-template-columns:repeat(2,minmax(0,1fr));margin-bottom:24px}
 .bt-text-link{align-self:flex-start;font-weight:700;text-decoration:none;color:var(--ink);padding-bottom:3px;border-bottom:1px solid var(--ink)}.bt-text-link:hover{color:var(--accent);border-color:var(--accent)}
 .bt-buildings-band{background:var(--ink);color:#fff;padding:clamp(50px,8vw,92px) max(24px,calc((100vw - 1180px)/2));display:grid;grid-template-columns:minmax(280px,.9fr) minmax(420px,1.1fr);gap:clamp(30px,7vw,90px);align-items:end;margin-bottom:clamp(60px,8vw,110px)}
@@ -715,15 +753,10 @@ a{color:inherit}
 .bt-note-strong{font-weight:600}
 
 /* footer */
-.bt-foot{border-top:1px solid var(--rule);background:var(--tint);margin-top:40px}
-.bt-foot-in{max-width:960px;margin:0 auto;padding:36px 24px;display:grid;
-  grid-template-columns:repeat(auto-fit,minmax(200px,1fr));gap:24px}
-.bt-foot strong{display:block;font-size:14px;margin-bottom:6px}
-.bt-foot p{margin:0;font-size:13px;color:var(--ink2);line-height:1.7}
-.bt-foot a{color:var(--accent);text-decoration:none}
-.bt-foot-fair{grid-column:1/-1;border-top:1px solid var(--rule);padding-top:18px}
-.bt-foot-fair p{font-size:12.5px;max-width:80ch}
-.bt-foot-fair .bt-dim{margin-top:8px;font-size:11.5px;color:var(--dim)}
+.bt-foot{position:relative;overflow:hidden;background:#0D1724;color:#fff;margin-top:40px}.bt-foot:after{content:"";position:absolute;width:520px;height:520px;right:-180px;bottom:-370px;border:1px solid rgba(130,174,198,.22);border-radius:50%;box-shadow:0 0 0 70px rgba(101,148,174,.045),0 0 0 140px rgba(101,148,174,.035);pointer-events:none}
+.bt-foot-in{position:relative;z-index:1;max-width:1240px;margin:0 auto;padding:70px 28px 28px;display:grid;grid-template-columns:minmax(280px,1.3fr) minmax(160px,.7fr) minmax(230px,.9fr);gap:clamp(36px,7vw,100px)}
+.bt-foot strong{display:block;font-family:'Archivo',sans-serif;font-size:17px;margin-bottom:19px}.bt-foot p{margin:0;font-size:14px;color:#B8C4CF;line-height:1.75}.bt-foot a{color:#E6EDF3;text-decoration:none}.bt-foot a:hover{color:#fff;text-decoration:underline;text-underline-offset:4px}
+.bt-foot-logo{display:flex;align-items:center;gap:12px;font-family:'Archivo',sans-serif;font-size:22px;font-weight:700;margin-bottom:24px;text-decoration:none!important}.bt-foot-logo span{display:grid;place-items:center;width:40px;height:40px;border:1px solid #D9E4EC;border-radius:50%;font:600 12px 'IBM Plex Mono',monospace}.bt-foot-brand>p:first-of-type{font-size:16px;max-width:34ch;color:#D7E0E7}.bt-foot-address{margin-top:18px!important;white-space:pre-line}.bt-foot-nav,.bt-foot-contact{display:flex;flex-direction:column;align-items:flex-start;gap:11px}.bt-foot-nav strong,.bt-foot-contact strong{margin-bottom:8px}.bt-foot-book{margin-top:12px;border-bottom:1px solid #93B4C7;padding-bottom:4px}.bt-foot-fair{grid-column:1/-1;border-top:1px solid rgba(255,255,255,.16);padding-top:22px;margin-top:20px;display:flex;justify-content:space-between;gap:28px;align-items:flex-end}.bt-foot-fair p{font-size:11.5px;max-width:74ch;color:#8696A5}.bt-foot-fair .bt-dim{flex:0 0 auto;color:#7D8D9C;text-align:right}.bt-foot-fair .bt-dim a{margin-left:9px;color:#AEBBC6}
 
 /* forms, shared by booking, apply and the portal */
 .bt-form{max-width:560px;margin:0 auto}
@@ -776,6 +809,6 @@ a{color:inherit}
   .bt-buildings-band{grid-template-columns:1fr;padding:54px 20px;margin-bottom:58px}.bt-buildings-band .bt-blds{grid-template-columns:1fr}.bt-buildings-band .bt-bld{border-right:0;border-bottom:1px solid rgba(255,255,255,.22);padding:16px 0}.bt-buildings-band .bt-bld:last-child{border-bottom:0}
   .bt-gallery-sec{padding:0 16px 60px}.bt-gallery{display:grid;grid-template-columns:1fr;grid-auto-rows:68vw}.bt-gallery figure:nth-child(n){grid-column:auto}.bt-gallery-head{display:block}
   .bt-final-cta{padding:56px 20px;align-items:flex-start;flex-direction:column;gap:24px}
-  .bt-foot-in{padding:28px 16px}
+  .bt-foot-in{padding:50px 20px 24px;grid-template-columns:1fr;gap:38px}.bt-foot-fair{display:block;margin-top:0}.bt-foot-fair .bt-dim{text-align:left;margin-top:12px}.bt-slider-arrow{width:36px;height:36px;font-size:25px}
 }
 `; }
