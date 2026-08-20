@@ -239,6 +239,7 @@ function Footer() {
   const copy = { ...DEFAULT_SITE[locale], ...(site.content?.[locale] ?? {}) };
   const phone = site.content?.contact?.phone || OFFICE_PHONE;
   const email = site.content?.contact?.email || OFFICE_EMAIL;
+  const staffUrl = site.staff_url || "https://pointe-worker.dcheng0726.workers.dev";
   return (
     <footer className="bt-foot">
       <div className="bt-foot-in">
@@ -253,6 +254,7 @@ function Footer() {
           <Link to="/building">{t("nav.building")}</Link>
           <Link to="/apply">{t("nav.apply")}</Link>
           <Link to="/portal">{t("nav.portal")}</Link>
+          <a className="bt-foot-staff" href={staffUrl}>{locale === "zh" ? "員工登入" : "Staff login"} →</a>
         </nav>
         <div className="bt-foot-contact">
           <strong>{locale === "zh" ? "聯絡我們" : "Contact us"}</strong>
@@ -292,6 +294,16 @@ function Home() {
 
   return (
     <>
+      <section className="bt-property-intro">
+        <div className="bt-property-intro-in">
+          <div className="bt-eyebrow">Baydo Pointe</div>
+          <h1>{t("home.address")}</h1>
+          <p>{t("home.sub")}</p>
+          <p className="bt-property-hint">{locale === "zh"
+            ? "右下角的問答助手會依照即時房源資料回答；需要人工確認的問題會自動轉給同事。"
+            : "The assistant at the bottom right answers from live property data and sends anything requiring confirmation to our team."}</p>
+        </div>
+      </section>
       <section className={`bt-hero ${hero.length ? "has-photo" : ""}`}>
         <div className="bt-hero-grid">
           <div className="bt-hero-in">
@@ -653,6 +665,7 @@ a{color:inherit}
 .bt-burger span{width:20px;height:2px;background:var(--ink);display:block}
 
 /* hero */
+.bt-property-intro{min-height:min(720px,82vh);display:flex;align-items:center;background:linear-gradient(160deg,#F4F7F9 0%,#E4EAEF 100%);border-bottom:1px solid var(--rule);padding:70px 24px}.bt-property-intro-in{width:min(930px,100%);margin:0 auto}.bt-property-intro h1{max-width:850px;font-family:'Archivo',sans-serif;font-size:clamp(38px,6vw,76px);font-weight:800;letter-spacing:-.045em;line-height:1.04;margin:16px 0 24px}.bt-property-intro-in>p{max-width:720px;color:var(--ink2);font-size:clamp(17px,2vw,21px);line-height:1.65;margin:0}.bt-property-hint{border-left:3px solid #C8D5DE;padding-left:18px;margin-top:22px!important;font-size:15px!important;max-width:680px!important}
 .bt-hero{background:linear-gradient(165deg,#F6F9FB 0%,#E7EDF2 100%);border-bottom:1px solid var(--rule)}
 .bt-hero-grid{max-width:1440px;margin:0 auto;display:grid;grid-template-columns:minmax(0,1.05fr) minmax(360px,.95fr);min-height:min(720px,78vh)}
 .bt-hero-in{padding:clamp(62px,9vw,126px) clamp(28px,6vw,88px);display:flex;flex-direction:column;justify-content:center}
@@ -757,6 +770,7 @@ a{color:inherit}
 .bt-foot-in{position:relative;z-index:1;max-width:1240px;margin:0 auto;padding:70px 28px 28px;display:grid;grid-template-columns:minmax(280px,1.3fr) minmax(160px,.7fr) minmax(230px,.9fr);gap:clamp(36px,7vw,100px)}
 .bt-foot strong{display:block;font-family:'Archivo',sans-serif;font-size:17px;margin-bottom:19px}.bt-foot p{margin:0;font-size:14px;color:#B8C4CF;line-height:1.75}.bt-foot a{color:#E6EDF3;text-decoration:none}.bt-foot a:hover{color:#fff;text-decoration:underline;text-underline-offset:4px}
 .bt-foot-logo{display:flex;align-items:center;gap:12px;font-family:'Archivo',sans-serif;font-size:22px;font-weight:700;margin-bottom:24px;text-decoration:none!important}.bt-foot-logo span{display:grid;place-items:center;width:40px;height:40px;border:1px solid #D9E4EC;border-radius:50%;font:600 12px 'IBM Plex Mono',monospace}.bt-foot-brand>p:first-of-type{font-size:16px;max-width:34ch;color:#D7E0E7}.bt-foot-address{margin-top:18px!important;white-space:pre-line}.bt-foot-nav,.bt-foot-contact{display:flex;flex-direction:column;align-items:flex-start;gap:11px}.bt-foot-nav strong,.bt-foot-contact strong{margin-bottom:8px}.bt-foot-book{margin-top:12px;border-bottom:1px solid #93B4C7;padding-bottom:4px}.bt-foot-fair{grid-column:1/-1;border-top:1px solid rgba(255,255,255,.16);padding-top:22px;margin-top:20px;display:flex;justify-content:space-between;gap:28px;align-items:flex-end}.bt-foot-fair p{font-size:11.5px;max-width:74ch;color:#8696A5}.bt-foot-fair .bt-dim{flex:0 0 auto;color:#7D8D9C;text-align:right}.bt-foot-fair .bt-dim a{margin-left:9px;color:#AEBBC6}
+.bt-foot-staff{margin-top:13px;display:inline-flex;border:1px solid rgba(255,255,255,.36);border-radius:22px;padding:8px 15px;text-decoration:none!important;font-weight:600}.bt-foot-staff:hover{border-color:#fff;background:rgba(255,255,255,.08)}
 
 /* forms, shared by booking, apply and the portal */
 .bt-form{max-width:560px;margin:0 auto}
@@ -803,6 +817,7 @@ a{color:inherit}
   .bt-signout{margin:4px 12px;align-self:stretch;text-align:center;padding:10px 12px}
   .bt-cta{margin:4px 12px 8px;text-align:center}
   .bt-sec{padding-left:16px;padding-right:16px}
+  .bt-property-intro{min-height:600px;padding:54px 20px}.bt-property-intro h1{font-size:clamp(36px,12vw,58px)}
   .bt-hero-grid{grid-template-columns:1fr;min-height:0}.bt-hero-in{padding:48px 20px 42px}.bt-hero-media{min-height:56vw;order:-1}.bt-hero-media .bt-photo-placeholder{min-height:56vw}
   .bt-home-intro{grid-template-columns:1fr;padding:54px 20px;gap:14px}.bt-home-intro>.bt-section-number{margin-bottom:-10px}.bt-home-intro>p{margin-top:8px}
   .bt-feature-panel,.bt-feature-panel--reverse{grid-template-columns:1fr;margin-bottom:58px}.bt-feature-panel--reverse .bt-feature-media{order:1}.bt-feature-panel--reverse .bt-feature-copy{order:2}.bt-feature-media,.bt-feature-media .bt-photo-placeholder{min-height:65vw}.bt-feature-copy{padding:38px 20px}.bt-feature-copy .bt-amen{grid-template-columns:1fr}

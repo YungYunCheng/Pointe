@@ -77,7 +77,7 @@ async function readSite(sql) {
 r.get("/public/site-content", async (c) => {
   const site = await readSite(c.get("db"));
   c.header("Cache-Control", "public, max-age=60, stale-while-revalidate=300");
-  return c.json(site);
+  return c.json({ ...site, staff_url: c.env.PUBLIC_URL ?? null });
 });
 
 r.get("/public/site-images/:id", async (c) => {

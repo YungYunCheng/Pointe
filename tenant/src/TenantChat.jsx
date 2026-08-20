@@ -192,22 +192,6 @@ export default function TenantChat() {
     <div className="tc">
       <style>{CSS}</style>
 
-      {/* Sample page behind the widget, so the placement is visible */}
-      <div className="tc-page">
-        <div className="tc-page-in">
-          <div className="tc-eyebrow">Baydo Pointe</div>
-          <h1>370 · 374 · 378 Clareview Station Drive NW</h1>
-          <p>
-            330 suites across three six-storey buildings, steps from Clareview LRT.
-            One and two bedroom layouts, a gym, lounge and pet wash in every building.
-          </p>
-          <p className="tc-hint">
-            The chat launcher sits bottom right. It answers from the live property
-            data and hands anything it should not answer to a person.
-          </p>
-        </div>
-      </div>
-
       {/* Launcher */}
       {!open && (
         <button className="tc-launch" onClick={() => setOpen(true)} aria-label={t.launcher}>
@@ -312,19 +296,8 @@ const CSS = `
 .tc{--ink:#131C25;--ink2:#3E4C5A;--dim:#78899A;--paper:#fff;--ground:#E9EDF0;--rule:#D3DBE1;
   --accent:#1C6FA6;--green:#0E8577;--amber:#FFF6E0;--amberline:#E8C877;
   font-family:'IBM Plex Sans','PingFang TC','Microsoft JhengHei',system-ui,sans-serif;
-  font-size:14px;line-height:1.55;color:var(--ink);min-height:100vh;position:relative}
+  font-size:14px;line-height:1.55;color:var(--ink);position:relative}
 .tc *{box-sizing:border-box}
-
-/* Sample page */
-.tc-page{min-height:100vh;background:linear-gradient(160deg,#F4F7F9 0%,#E4EAEF 100%);
-  display:flex;align-items:center;padding:40px 24px}
-.tc-page-in{max-width:620px;margin:0 auto}
-.tc-eyebrow{font-family:'IBM Plex Mono',monospace;font-size:10.5px;letter-spacing:.14em;
-  text-transform:uppercase;color:var(--dim)}
-.tc-page h1{font-family:'Archivo',sans-serif;font-weight:800;font-size:clamp(24px,4vw,36px);
-  letter-spacing:-.025em;margin:8px 0 14px;line-height:1.15}
-.tc-page p{margin:0 0 12px;color:var(--ink2);max-width:56ch}
-.tc-hint{font-size:12.5px;color:var(--dim);border-left:2px solid var(--rule);padding-left:12px}
 
 /* Launcher */
 .tc-launch{position:fixed;right:20px;bottom:20px;z-index:40;display:flex;align-items:center;gap:9px;
