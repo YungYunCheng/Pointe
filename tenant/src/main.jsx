@@ -61,7 +61,7 @@ let siteContentRequest = null;
 function loadSiteContent() {
   if (siteContentCache) return Promise.resolve(siteContentCache);
   if (!siteContentRequest) {
-    siteContentRequest = fetch("/api/public/site-content")
+    siteContentRequest = fetch(`/api/public/site-content?v=${Date.now()}`, { cache: "no-store" })
       .then((response) => response.ok ? response.json() : null)
       .then((data) => {
         if (data?.content) siteContentCache = data;
