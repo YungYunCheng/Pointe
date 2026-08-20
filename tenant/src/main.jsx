@@ -172,7 +172,6 @@ function Header() {
 
 function Footer() {
   const { t } = useT();
-  const { session } = useTenantAuth();
 
   return (
     <footer className="bt-foot">
@@ -231,9 +230,9 @@ function Footer() {
           {/* Only what they can actually reach. A footer link that bounces
               somebody to a sign-up page is a link that taught them not to
               trust the others. */}
-          {session && <Link to="/apply">{t("nav.apply")}</Link>}
-          {session && <Link to="/book">{t("nav.book")}</Link>}
-          <Link to="/portal">{session ? t("nav.portal") : t("nav.signin")}</Link>
+          <Link to="/apply">{t("nav.apply")}</Link>
+          <Link to="/book">{t("nav.book")}</Link>
+          <Link to="/portal">{t("nav.portal")}</Link>
           <a className="bt-foot-staff" href={STAFF_URL}>{t("footer.staffLogin")} →</a>
         </nav>
 
@@ -245,7 +244,7 @@ function Footer() {
 
           <h4 className="bt-foot-h2">{t("footer.residents")}</h4>
           <Link to="/portal">{t("footer.portalLink")}</Link>
-          {session && <Link to="/portal">{t("footer.repairLink")}</Link>}
+          <Link to="/portal">{t("footer.repairLink")}</Link>
         </div>
       </div>
 
@@ -266,7 +265,6 @@ function Footer() {
 /* ---------- home ---------- */
 function Home() {
   const { t, money, locale } = useT();
-  const { session } = useTenantAuth();
   const d = useProperty();
 
   const totalFree = d ? (d.publicTypes
@@ -320,7 +318,7 @@ function Home() {
           </p>
           <div className="bt-hero-cta">
             <Link to="/suites" className="bt-btn">{t("home.cta")}</Link>
-            <Link to={session ? "/book" : "/signup?next=%2Fbook"} className="bt-btn bt-btn--ghost">
+            <Link to="/book" className="bt-btn bt-btn--ghost">
               {t("home.ctaSecond")}
             </Link>
           </div>
@@ -391,7 +389,7 @@ function Home() {
           <h2>{t("home.bandTitle")}</h2>
           <p>{t("home.bandBody")}</p>
         </div>
-        <Link to={session ? "/book" : "/signup?next=%2Fbook"} className="bt-btn">
+        <Link to="/book" className="bt-btn">
           {t("home.ctaSecond")}
         </Link>
       </section>
