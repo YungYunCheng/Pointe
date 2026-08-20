@@ -32,6 +32,7 @@ const AdminConsole    = lazy(() => import("./tools/AdminConsole.jsx"));
 const AiTrainingCenter = lazy(() => import("./tools/AiTrainingCenter.jsx"));
 const FloorPlans      = lazy(() => import("./tools/FloorPlans.jsx"));
 const MaintenanceWorkflow = lazy(() => import("./tools/MaintenanceWorkflow.jsx"));
+const WebsiteContent = lazy(() => import("./tools/WebsiteContent.jsx"));
 
 const ALL = "admin property_manager building_manager accounting".split(" ");
 const LEASING = ["admin", "property_manager", "building_manager"];
@@ -50,6 +51,7 @@ const TOOLS = [
   { path: "/accounting",  label: "Accounting",  el: Accounting,      roles: ["admin", "accounting", "property_manager"] },
   { path: "/audit",       label: "Audit",       el: AuditLog,        roles: ["admin"] },
   { path: "/ai-training", label: "AI Training", el: AiTrainingCenter, roles: ["admin"] },
+  { path: "/website-content", label: "Website", el: WebsiteContent, roles: ["admin"] },
   { path: "/admin",       label: "Admin",       el: AdminConsole,    roles: ["admin"] },
 ];
 

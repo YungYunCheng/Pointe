@@ -34,6 +34,58 @@ import { Signup, VerifySignup, Claim, ResetPassword } from "./pages/Account.jsx"
 
 const OFFICE_PHONE = "780-937-8677";
 const OFFICE_EMAIL = "rentals@themizar.ca";
+const DEFAULT_SITE = {
+  en: {
+    headline:"A short walk from Clareview LRT.",
+    subheadline:"Three buildings, 330 homes and everyday amenities in one connected Edmonton community.",
+    intro_title:"A place that keeps daily life close",
+    intro_body:"Choose from one- and two-bedroom homes across 370, 374 and 378 Clareview Station Drive NW. Each building has spaces to work out, unwind and care for your pets.",
+    amenities_title:"More than a place to sleep",
+    amenities_body:"A gym, lounge, games room, pet wash and bicycle storage are available in every building, with shared outdoor space across the site.",
+    neighbourhood_title:"Clareview at your door",
+    neighbourhood_body:"Walk to Clareview LRT and connect to downtown, shopping, recreation and the rest of Edmonton without adding another stop to your day.",
+    gallery_title:"See Baydo Pointe", cta_title:"Find the home that fits",
+    cta_body:"Check current availability and live pricing, then book a viewing when you are ready.",
+  },
+  zh: {
+    headline:"走路就到 Clareview 輕軌站。",
+    subheadline:"三棟樓、330 戶住宅與日常配套，組成交通便利的 Edmonton 社區。",
+    intro_title:"讓日常生活更方便",
+    intro_body:"370、374、378 Clareview Station Drive NW 提供一房與兩房戶型。每棟樓都有健身、休閒與寵物照護空間。",
+    amenities_title:"不只是一處住所",
+    amenities_body:"每棟樓均設健身房、Lounge、遊戲室、寵物清洗間與自行車儲存空間，社區另有共享戶外區域。",
+    neighbourhood_title:"Clareview 就在門口",
+    neighbourhood_body:"步行可達 Clareview LRT，輕鬆前往市中心、購物、休閒設施與 Edmonton 其他地區。",
+    gallery_title:"看看 Baydo Pointe", cta_title:"找到適合你的房型",
+    cta_body:"查看即時空房與租金，準備好後即可預約看房。",
+  },
+  contact:{ phone:OFFICE_PHONE, email:OFFICE_EMAIL },
+};
+
+let siteContentCache = null;
+let siteContentRequest = null;
+function loadSiteContent() {
+  if (siteContentCache) return Promise.resolve(siteContentCache);
+  if (!siteContentRequest) siteContentRequest = fetch("/api/public/site-content")
+    .then((r) => r.ok ? r.json() : null)
+    .then((data) => {
+      if (data?.content) siteContentCache = data;
+      return siteContentCache;
+    }).catch(() => null).finally(() => { siteContentRequest = null; });
+  return siteContentRequest;
+}
+
+function useSiteContent() {
+  const [site, setSite] = useState(siteContentCache ?? { content:DEFAULT_SITE, images:[] });
+  useEffect(() => {
+    let live = true;
+    loadSiteContent().then((data) => { if (live && data?.content) setSite(data); });
+    return () => { live = false; };
+  }, []);
+  return site;
+}
+
+const siteImage = (site, slot) => site?.images?.find((image) => image.slot === slot);
 
 /* ---------- data ---------- */
 const TYPES = {
@@ -179,6 +231,9 @@ function Header() {
 
 function Footer() {
   const { t } = useT();
+  const site = useSiteContent();
+  const phone = site.content?.contact?.phone || OFFICE_PHONE;
+  const email = site.content?.contact?.email || OFFICE_EMAIL;
   return (
     <footer className="bt-foot">
       <div className="bt-foot-in">
@@ -188,8 +243,8 @@ function Footer() {
         </div>
         <div>
           <strong>{t("common.office")}</strong>
-          <p><a href={`tel:${OFFICE_PHONE}`}>{OFFICE_PHONE}</a><br />
-             <a href={`mailto:${OFFICE_EMAIL}`}>{OFFICE_EMAIL}</a></p>
+          <p><a href={`tel:${phone}`}>{phone}</a><br />
+             <a href={`mailto:${email}`}>{email}</a></p>
         </div>
         <div className="bt-foot-fair">
           <p>{t("footer.fairHousing")}</p>
@@ -205,8 +260,14 @@ function Footer() {
 
 /* ---------- home ---------- */
 function Home() {
-  const { t, money } = useT();
+  const { t, money, locale } = useT();
   const d = useProperty();
+  const site = useSiteContent();
+  const copy = { ...DEFAULT_SITE[locale], ...(site.content?.[locale] ?? {}) };
+  const hero = siteImage(site, "hero");
+  const amenities = siteImage(site, "amenities");
+  const neighbourhood = siteImage(site, "neighbourhood");
+  const gallery = (site.images ?? []).filter((image) => image.slot === "gallery");
   const totalFree = d ? (d.publicTypes
     ? d.publicTypes.reduce((s, x) => s + Number(x.available ?? 0), 0)
     : Object.values(d.byType).reduce((s, x) => s + x.free, 0)) : null;
@@ -217,33 +278,70 @@ function Home() {
 
   return (
     <>
-      <section className="bt-hero">
-        <div className="bt-hero-in">
-          <div className="bt-eyebrow">{t("home.address")}</div>
-          <h1>{t("home.headline")}</h1>
-          <p className="bt-lede">{t("home.sub")}</p>
-          <div className="bt-hero-facts">
-            <span>{d ? t("home.availableNow", { n: totalFree }) : t("home.checking")}</span>
-            {from ? <span>{t("home.fromRent", { rent: money(from) })}</span>
-                  : d ? <span>{t("home.noPricing")}</span> : null}
+      <section className={`bt-hero ${hero ? "has-photo" : ""}`}>
+        <div className="bt-hero-grid">
+          <div className="bt-hero-in">
+            <div className="bt-eyebrow">{t("home.address")}</div>
+            <h1>{copy.headline}</h1>
+            <p className="bt-lede">{copy.subheadline}</p>
+            <div className="bt-hero-facts">
+              <span>{d ? t("home.availableNow", { n: totalFree }) : t("home.checking")}</span>
+              {from ? <span>{t("home.fromRent", { rent: money(from) })}</span>
+                    : d ? <span>{t("home.noPricing")}</span> : null}
+            </div>
+            <div className="bt-hero-cta">
+              <Link to="/suites" className="bt-btn">{t("home.cta")}</Link>
+              <Link to="/book" className="bt-btn bt-btn--ghost">{t("home.ctaSecond")}</Link>
+            </div>
           </div>
-          <div className="bt-hero-cta">
-            <Link to="/suites" className="bt-btn">{t("home.cta")}</Link>
-            <Link to="/book" className="bt-btn bt-btn--ghost">{t("home.ctaSecond")}</Link>
-          </div>
+          <div className="bt-hero-media">{hero
+            ? <img src={hero.url} alt={locale === "zh" ? hero.alt_zh || hero.alt_en : hero.alt_en} />
+            : <div className="bt-photo-placeholder"><strong>370 · 374 · 378</strong><span>Clareview Station Drive NW</span></div>}</div>
         </div>
       </section>
 
-      <section className="bt-sec">
-        <h2>{t("amen.title")}</h2>
-        <div className="bt-amen">
-          {["gym", "lounge", "petwash", "bike", "patio", "transit", "parking", "busPad"].map((k) => (
-            <div className="bt-amen-i" key={k}><span aria-hidden="true">·</span>{t(`amen.${k}`)}</div>
-          ))}
+      <section className="bt-home-intro">
+        <div className="bt-section-number">01</div>
+        <div><div className="bt-eyebrow">Baydo Pointe · Clareview</div><h2>{copy.intro_title}</h2></div>
+        <p>{copy.intro_body}</p>
+      </section>
+
+      <section className="bt-feature-panel">
+        <div className="bt-feature-media">{amenities
+          ? <img src={amenities.url} alt={locale === "zh" ? amenities.alt_zh || amenities.alt_en : amenities.alt_en} />
+          : <div className="bt-photo-placeholder"><strong>{locale === "zh" ? "每栋都有" : "In every building"}</strong><span>Gym · Lounge · Pet wash · Bike storage</span></div>}</div>
+        <div className="bt-feature-copy">
+          <div className="bt-section-number">02</div><h2>{copy.amenities_title}</h2><p>{copy.amenities_body}</p>
+          <div className="bt-amen">
+            {["gym", "lounge", "petwash", "bike", "patio", "parking"].map((k) => (
+              <div className="bt-amen-i" key={k}><span aria-hidden="true">↗</span>{t(`amen.${k}`)}</div>
+            ))}
+          </div>
+          <Link to="/building" className="bt-text-link">{t("nav.building")} →</Link>
         </div>
       </section>
+
+      <section className="bt-buildings-band">
+        <div><div className="bt-section-number">03</div><h2>{locale === "zh" ? "三棟樓，一個社區" : "Three buildings. One community."}</h2></div>
+        <div className="bt-blds">{[["370",118],["374",94],["378",118]].map(([code,n]) => <div className="bt-bld" key={code}><strong>{code}</strong><span>{n} {locale === "zh" ? "戶 · 6 層" : "homes · 6 floors"}</span></div>)}</div>
+      </section>
+
+      <section className="bt-feature-panel bt-feature-panel--reverse">
+        <div className="bt-feature-media">{neighbourhood
+          ? <img src={neighbourhood.url} alt={locale === "zh" ? neighbourhood.alt_zh || neighbourhood.alt_en : neighbourhood.alt_en} />
+          : <div className="bt-photo-placeholder bt-photo-placeholder--map"><strong>Clareview LRT</strong><span>{locale === "zh" ? "步行可达" : "Steps from home"}</span></div>}</div>
+        <div className="bt-feature-copy"><div className="bt-section-number">04</div><h2>{copy.neighbourhood_title}</h2><p>{copy.neighbourhood_body}</p>
+          <div className="bt-amen"><div className="bt-amen-i"><span>↗</span>{t("amen.transit")}</div><div className="bt-amen-i"><span>↗</span>{t("amen.busPad")}</div></div>
+          <Link to="/book" className="bt-text-link">{t("home.ctaSecond")} →</Link></div>
+      </section>
+
+      {gallery.length > 0 && <section className="bt-gallery-sec"><div className="bt-gallery-head"><div className="bt-section-number">05</div><h2>{copy.gallery_title}</h2></div>
+        <div className="bt-gallery">{gallery.map((image) => <figure key={image.id}><img loading="lazy" src={image.url} alt={locale === "zh" ? image.alt_zh || image.alt_en : image.alt_en} /></figure>)}</div></section>}
 
       <ParkingHonesty />
+
+      <section className="bt-final-cta"><div><div className="bt-eyebrow">Baydo Pointe · Edmonton</div><h2>{copy.cta_title}</h2><p>{copy.cta_body}</p></div>
+        <div className="bt-hero-cta"><Link to="/suites" className="bt-btn">{t("home.cta")}</Link><Link to="/book" className="bt-btn bt-btn--ghost">{t("home.ctaSecond")}</Link></div></section>
     </>
   );
 }
@@ -518,9 +616,16 @@ a{color:inherit}
 .bt-burger span{width:20px;height:2px;background:var(--ink);display:block}
 
 /* hero */
-.bt-hero{background:linear-gradient(165deg,#F6F9FB 0%,#E7EDF2 100%);
-  border-bottom:1px solid var(--rule);padding:clamp(48px,9vw,96px) 24px}
-.bt-hero-in{max-width:820px;margin:0 auto}
+.bt-hero{background:linear-gradient(165deg,#F6F9FB 0%,#E7EDF2 100%);border-bottom:1px solid var(--rule)}
+.bt-hero-grid{max-width:1440px;margin:0 auto;display:grid;grid-template-columns:minmax(0,1.05fr) minmax(360px,.95fr);min-height:min(720px,78vh)}
+.bt-hero-in{padding:clamp(62px,9vw,126px) clamp(28px,6vw,88px);display:flex;flex-direction:column;justify-content:center}
+.bt-hero-media{min-height:520px;overflow:hidden;background:#DCE5EB;position:relative}
+.bt-hero-media img{width:100%;height:100%;object-fit:cover;display:block}
+.bt-photo-placeholder{height:100%;min-height:340px;display:flex;flex-direction:column;align-items:center;justify-content:center;text-align:center;padding:34px;color:#fff;background:linear-gradient(150deg,#173252 0%,#2A6183 58%,#8AA9BA 100%);position:relative;overflow:hidden}
+.bt-photo-placeholder:before{content:"";position:absolute;width:380px;height:380px;border:1px solid rgba(255,255,255,.2);border-radius:50%;right:-120px;top:-150px}
+.bt-photo-placeholder:after{content:"";position:absolute;width:250px;height:250px;border:1px solid rgba(255,255,255,.16);border-radius:50%;left:-80px;bottom:-120px}
+.bt-photo-placeholder strong{font-family:'Archivo',sans-serif;font-size:clamp(24px,4vw,42px);letter-spacing:-.02em;z-index:1}.bt-photo-placeholder span{font-family:'IBM Plex Mono',monospace;font-size:11px;letter-spacing:.12em;text-transform:uppercase;z-index:1}
+.bt-photo-placeholder--map{background:linear-gradient(150deg,#25485F,#638FA0)}
 .bt-eyebrow{font-family:'IBM Plex Mono',monospace;font-size:11px;letter-spacing:.12em;
   text-transform:uppercase;color:var(--dim)}
 .bt-hero h1{font-family:'Archivo',sans-serif;font-weight:800;
@@ -552,6 +657,23 @@ a{color:inherit}
 .bt-amen{display:grid;grid-template-columns:repeat(auto-fit,minmax(190px,1fr));gap:8px 20px;margin-top:8px}
 .bt-amen-i{font-size:14px;color:var(--ink2);display:flex;gap:8px;padding:5px 0}
 .bt-amen-i span{color:var(--accent);font-weight:700}
+
+/* editorial home page */
+.bt-section-number{font-family:'IBM Plex Mono',monospace;color:var(--accent);font-size:11px;letter-spacing:.12em;margin-bottom:8px}
+.bt-home-intro{max-width:1180px;margin:0 auto;padding:clamp(58px,8vw,108px) 24px;display:grid;grid-template-columns:70px minmax(260px,.9fr) minmax(320px,1.1fr);gap:clamp(22px,5vw,72px);align-items:start}
+.bt-home-intro h2,.bt-feature-copy h2,.bt-buildings-band h2,.bt-gallery-sec h2,.bt-final-cta h2{font-family:'Archivo',sans-serif;font-weight:800;letter-spacing:-.035em;line-height:1.08;margin:8px 0 0;font-size:clamp(28px,4.5vw,52px)}
+.bt-home-intro>p,.bt-feature-copy>p,.bt-final-cta p{font-size:clamp(16px,2vw,20px);line-height:1.75;color:var(--ink2);margin:0}
+.bt-feature-panel{max-width:1280px;margin:0 auto clamp(60px,8vw,110px);display:grid;grid-template-columns:minmax(0,1.1fr) minmax(360px,.9fr);background:#F0F4F6}
+.bt-feature-panel--reverse{grid-template-columns:minmax(360px,.9fr) minmax(0,1.1fr)}
+.bt-feature-panel--reverse .bt-feature-media{order:2}.bt-feature-panel--reverse .bt-feature-copy{order:1}
+.bt-feature-media{min-height:520px;overflow:hidden}.bt-feature-media img{width:100%;height:100%;display:block;object-fit:cover}.bt-feature-media .bt-photo-placeholder{min-height:520px}
+.bt-feature-copy{padding:clamp(38px,6vw,78px);display:flex;flex-direction:column;justify-content:center}.bt-feature-copy>p{margin:18px 0 22px}.bt-feature-copy .bt-amen{grid-template-columns:repeat(2,minmax(0,1fr));margin-bottom:24px}
+.bt-text-link{align-self:flex-start;font-weight:700;text-decoration:none;color:var(--ink);padding-bottom:3px;border-bottom:1px solid var(--ink)}.bt-text-link:hover{color:var(--accent);border-color:var(--accent)}
+.bt-buildings-band{background:var(--ink);color:#fff;padding:clamp(50px,8vw,92px) max(24px,calc((100vw - 1180px)/2));display:grid;grid-template-columns:minmax(280px,.9fr) minmax(420px,1.1fr);gap:clamp(30px,7vw,90px);align-items:end;margin-bottom:clamp(60px,8vw,110px)}
+.bt-buildings-band .bt-section-number{color:#9EC1D1}.bt-buildings-band .bt-blds{display:grid;grid-template-columns:repeat(3,1fr);gap:0;margin:0;border-top:1px solid rgba(255,255,255,.25)}
+.bt-buildings-band .bt-bld{border:0;border-right:1px solid rgba(255,255,255,.25);border-radius:0;padding:22px 18px 5px}.bt-buildings-band .bt-bld:last-child{border-right:0}.bt-buildings-band .bt-bld strong{font-size:clamp(28px,4vw,46px)}.bt-buildings-band .bt-bld span{color:#C4D0D8}
+.bt-gallery-sec{max-width:1280px;margin:0 auto;padding:0 24px clamp(65px,9vw,120px)}.bt-gallery-head{display:flex;gap:22px;align-items:baseline;margin-bottom:28px}.bt-gallery{display:grid;grid-template-columns:repeat(12,1fr);grid-auto-rows:minmax(140px,20vw);gap:12px}.bt-gallery figure{margin:0;overflow:hidden;background:#E7EDF1}.bt-gallery figure:nth-child(6n+1),.bt-gallery figure:nth-child(6n+4){grid-column:span 7}.bt-gallery figure:nth-child(6n+2),.bt-gallery figure:nth-child(6n+3){grid-column:span 5}.bt-gallery figure:nth-child(6n+5),.bt-gallery figure:nth-child(6n+6){grid-column:span 6}.bt-gallery img{width:100%;height:100%;display:block;object-fit:cover;transition:transform .5s ease}.bt-gallery figure:hover img{transform:scale(1.025)}
+.bt-final-cta{max-width:1180px;margin:0 auto;padding:clamp(65px,9vw,120px) 24px;display:flex;justify-content:space-between;align-items:flex-end;gap:42px}.bt-final-cta>div:first-child{max-width:700px}.bt-final-cta p{margin-top:18px;max-width:58ch}
 
 .bt-chips{display:flex;gap:8px;flex-wrap:wrap}
 .bt-chips span{font-size:13px;font-weight:600;background:#fff;border:1px solid var(--rule);
@@ -647,7 +769,13 @@ a{color:inherit}
   .bt-lang{margin:8px 12px;align-self:flex-start}
   .bt-signout{margin:4px 12px;align-self:stretch;text-align:center;padding:10px 12px}
   .bt-cta{margin:4px 12px 8px;text-align:center}
-  .bt-sec,.bt-hero{padding-left:16px;padding-right:16px}
+  .bt-sec{padding-left:16px;padding-right:16px}
+  .bt-hero-grid{grid-template-columns:1fr;min-height:0}.bt-hero-in{padding:48px 20px 42px}.bt-hero-media{min-height:56vw;order:-1}.bt-hero-media .bt-photo-placeholder{min-height:56vw}
+  .bt-home-intro{grid-template-columns:1fr;padding:54px 20px;gap:14px}.bt-home-intro>.bt-section-number{margin-bottom:-10px}.bt-home-intro>p{margin-top:8px}
+  .bt-feature-panel,.bt-feature-panel--reverse{grid-template-columns:1fr;margin-bottom:58px}.bt-feature-panel--reverse .bt-feature-media{order:1}.bt-feature-panel--reverse .bt-feature-copy{order:2}.bt-feature-media,.bt-feature-media .bt-photo-placeholder{min-height:65vw}.bt-feature-copy{padding:38px 20px}.bt-feature-copy .bt-amen{grid-template-columns:1fr}
+  .bt-buildings-band{grid-template-columns:1fr;padding:54px 20px;margin-bottom:58px}.bt-buildings-band .bt-blds{grid-template-columns:1fr}.bt-buildings-band .bt-bld{border-right:0;border-bottom:1px solid rgba(255,255,255,.22);padding:16px 0}.bt-buildings-band .bt-bld:last-child{border-bottom:0}
+  .bt-gallery-sec{padding:0 16px 60px}.bt-gallery{display:grid;grid-template-columns:1fr;grid-auto-rows:68vw}.bt-gallery figure:nth-child(n){grid-column:auto}.bt-gallery-head{display:block}
+  .bt-final-cta{padding:56px 20px;align-items:flex-start;flex-direction:column;gap:24px}
   .bt-foot-in{padding:28px 16px}
 }
 `; }

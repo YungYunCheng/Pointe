@@ -23,6 +23,8 @@ psql "$DATABASE_URL" -f 017_ai_feedback.sql
 psql "$DATABASE_URL" -f 018_ai_training_center.sql
 psql "$DATABASE_URL" -f 019_workers_ai_cloud.sql # AI 对话、来源、转人工与用量
 psql "$DATABASE_URL" -f 020_pm_monthly_reports.sql # PM 製作與審核月報
+psql "$DATABASE_URL" -f 021_accounting_workspace.sql # QuickBooks 式會計工作區
+psql "$DATABASE_URL" -f 022_public_website_content.sql # 公開網站文案與 R2 圖片資料
 ```
 
 或直接貼進 Supabase 的 SQL Editor，一份一份來。

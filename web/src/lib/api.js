@@ -212,6 +212,16 @@ export const api = {
   backups:     ()            => request("GET", "/admin/backups"),
   createBackup:()            => request("POST", "/admin/backups"),
   restore:     (id)          => request("POST", `/admin/backups/${id}/restore`),
+  websiteContent: ()         => request("GET", "/admin/site-content"),
+  saveWebsiteContent: (content) => request("PUT", "/admin/site-content", { content }),
+  uploadWebsiteImage(file, slot, altEn = "", altZh = "", sortOrder = 0) {
+    const fd = new FormData();
+    fd.append("file", file); fd.append("slot", slot);
+    fd.append("alt_en", altEn); fd.append("alt_zh", altZh);
+    fd.append("sort_order", String(sortOrder));
+    return request("POST", "/admin/site-images", fd);
+  },
+  deleteWebsiteImage: (id)   => request("DELETE", `/admin/site-images/${id}`),
   aiTraining:  (q = "")      => request("GET", `/admin/ai-training${q}`),
   reviewAiExample: (id, status, reason = "") =>
     request("PATCH", `/admin/ai-training/examples/${id}`, { status, reason }),
