@@ -58,6 +58,63 @@ export async function runHourlyJobs(sql, env) {
   }
 }
 
+/** 14:00 UTC is early morning in Alberta year-round (07:00 MST / 08:00 MDT).
+ * Move reminders live here rather than in the midnight accounting run. */
+export async function runMorningMoveJobs(sql, env) {
+  const today = albertaToday();
+  try {
+    const moves = await morningMoveReminders(sql, today);
+    const outbox = await drainOutbox(sql, env, 50);
+    console.log("[cron:morning-moves]", today, JSON.stringify(moves));
+    return { moves, outbox };
+  } catch (e) {
+    console.error("[cron:morning-moves]", e.message);
+    return { error: e.message };
+  }
+}
+
+/** Every confirmed elevator booking for today reaches the Building Manager
+ * once in the morning. The booking row is the idempotency key: a retry of the
+ * daily job cannot send the same reminder twice. */
+async function morningMoveReminders(sql, today) {
+  const bookings = await sql`
+    SELECT mb.*, ta.full_name AS tenant_name
+    FROM move_elevator_bookings mb
+    JOIN tenant_accounts ta ON ta.id = mb.account_id
+    WHERE mb.move_date = ${today} AND mb.status = 'confirmed'
+      AND mb.morning_reminder_at IS NULL
+    ORDER BY mb.building_code, mb.time_from`;
+  if (!bookings.length) return { reminded: 0, date: today };
+
+  const managers = await sql`
+    SELECT id, email, full_name FROM users
+    WHERE role_code = 'building_manager' AND is_active ORDER BY full_name`;
+  let reminded = 0;
+  await sql.begin(async (tx) => {
+    for (const booking of bookings) {
+      const detail = `${booking.direction === "move_in" ? "Move-in" : "Move-out"} · ${booking.unit_number} · ${String(booking.time_from).slice(0,5)}–${String(booking.time_to).slice(0,5)}`;
+      await tx`INSERT INTO notifications (id, audience, kind, code, params, link)
+        VALUES (${uid("nt_")}, 'building_manager', 'move_booking',
+          'MOVE_ELEVATOR_TODAY', ${JSON.stringify({ building: booking.building_code,
+            unit: booking.unit_number, direction: booking.direction,
+            from: String(booking.time_from).slice(0,5), to: String(booking.time_to).slice(0,5) })},
+          '/schedule')`;
+      for (const manager of managers) {
+        await tx`INSERT INTO outbox (id, channel, to_email, to_name, kind, subject,
+            body, ref_type, ref_id)
+          VALUES (${uid("ob_")}, 'email', ${manager.email}, ${manager.full_name},
+            'move_elevator_morning', ${`Elevator move today · Building ${booking.building_code}`},
+            ${`Today's confirmed elevator booking: ${detail}. Open the staff Schedule for the full request.`},
+            'move_elevator_booking', ${booking.id})`;
+      }
+      await tx`UPDATE move_elevator_bookings SET morning_reminder_at = now(),
+        updated_at = now() WHERE id = ${booking.id} AND morning_reminder_at IS NULL`;
+      reminded++;
+    }
+  });
+  return { reminded, date: today, managers: managers.length };
+}
+
 /* ---------- The jobs themselves ---------- */
 
 async function dailyRentRun(sql, today) {

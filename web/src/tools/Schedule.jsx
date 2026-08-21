@@ -43,6 +43,8 @@ const TYPE_META = {
   maintenance: { label: "Vendor visit",  icon: "✱", color: "#C98A15", dur: 60 },
   followup:    { label: "Follow-up",     icon: "→", color: "#C98A15", dur: 15 },
   review:      { label: "Draft to review",icon: "✎", color: "#8B5CF6", dur: 10 },
+  move_in:     { label: "Move-in elevator", icon: "⇥", color: "#0E8577", dur: 120 },
+  move_out:    { label: "Move-out elevator",icon: "⇤", color: "#7C5CBF", dur: 120 },
 };
 
 const nowISO = () => new Date().toISOString();
@@ -63,6 +65,8 @@ const EVENT_OWNER = {
   maintenance: { label: "Building Manager", roles: ["admin", "building_manager"] },
   followup: { label: "Leasing", roles: ["admin", "property_manager", "building_manager"] },
   review: { label: "Property Manager", roles: ["admin", "property_manager"] },
+  move_in: { label: "Building Manager", roles: ["admin", "property_manager", "building_manager"] },
+  move_out: { label: "Building Manager", roles: ["admin", "property_manager", "building_manager"] },
 };
 
 function fromApiEvent(e) {
@@ -81,6 +85,27 @@ function fromApiEvent(e) {
     confirm_state: e.confirmation_state || "none",
     confirm_channel: e.confirmation_channel || undefined,
     confirm_sent_at: e.confirmation_sent_at || undefined };
+}
+
+function fromMoveBooking(booking) {
+  const from = String(booking.time_from || "").slice(0, 5);
+  const to = String(booking.time_to || "").slice(0, 5);
+  return {
+    ...booking,
+    id: booking.id,
+    is_move_booking: true,
+    type: booking.direction,
+    date: String(booking.move_date).slice(0, 10),
+    time: from,
+    end_time: to,
+    unit: booking.unit_number,
+    name: booking.tenant_name,
+    contact: booking.tenant_email,
+    assignee: "Building Manager",
+    state: ["declined", "cancelled"].includes(booking.status)
+      ? "cancelled" : booking.status === "completed" ? "done" : "booked",
+    move_status: booking.status,
+  };
 }
 
 const normaliseStoredEvent = (event) =>
@@ -173,8 +198,14 @@ export default function ScheduleConsole({ session }) {
   useEffect(() => {
     (async () => {
       try {
-        const remote = await api.get("/events");
-        setEvents((remote.events ?? []).map(fromApiEvent));
+        const [eventResult, moveResult] = await Promise.allSettled([
+          api.get("/events"), api.moveBookings(),
+        ]);
+        if (eventResult.status !== "fulfilled") throw eventResult.reason;
+        const remote = eventResult.value;
+        const moves = moveResult.status === "fulfilled"
+          ? (moveResult.value.bookings ?? []).map(fromMoveBooking) : [];
+        setEvents([...(remote.events ?? []).map(fromApiEvent), ...moves]);
         setStaff(remote.staff ?? []); setApiMode(true); setLoading(false); return;
       } catch {}
       try {
@@ -295,7 +326,9 @@ export default function ScheduleConsole({ session }) {
   );
 
   const reloadEvents = async () => {
-    const remote = await api.get("/events"); setEvents((remote.events ?? []).map(fromApiEvent));
+    const [remote, moves] = await Promise.all([api.get("/events"), api.moveBookings()]);
+    setEvents([...(remote.events ?? []).map(fromApiEvent),
+      ...(moves.bookings ?? []).map(fromMoveBooking)]);
   };
   const setSign = async (id, sign) => {
     if (apiMode) { await api.patch(`/events/${id}`, { signing_state: sign }); await reloadEvents(); }
@@ -304,11 +337,17 @@ export default function ScheduleConsole({ session }) {
   };
 
   const toggleDone = async (id) => {
+    const move = events.find((e) => e.id === id && e.is_move_booking);
+    if (move) { if (move.move_status === "confirmed") await api.completeMoveBooking(id);
+      await reloadEvents(); return; }
     if (apiMode) { await api.patch(`/events/${id}`, { state: done[id] ? "booked" : "done" });
       setDone({ ...done, [id]: !done[id] }); await reloadEvents(); }
     else save({ done: { ...done, [id]: !done[id] } });
   };
   const cancel = async (id) => {
+    const move = events.find((e) => e.id === id && e.is_move_booking);
+    if (move) { await api.declineMoveBooking(id, "Please choose another time.");
+      await reloadEvents(); return; }
     if (apiMode) { await api.patch(`/events/${id}`, { state: "cancelled" }); await reloadEvents(); }
     else save({ events: events.map((e) => (e.id === id ? { ...e, state: "cancelled" } : e)) });
   };
@@ -332,8 +371,17 @@ export default function ScheduleConsole({ session }) {
   };
 
   const canManageEvent = useCallback((ev) =>
-    ev.type !== "showing" || ["admin", "building_manager"].includes(session?.role),
+    ev.is_move_booking ? session?.role === "building_manager"
+      : ev.type !== "showing" || ["admin", "building_manager"].includes(session?.role),
   [session?.role]);
+
+  const decideMove = async (ev, decision) => {
+    const note = decision === "decline"
+      ? (window.prompt("Reason / another time suggestion (optional)") || "") : "";
+    if (decision === "confirm") await api.confirmMoveBooking(ev.id, note);
+    else await api.declineMoveBooking(ev.id, note);
+    await reloadEvents();
+  };
 
   const todayIsBiz = isBiz(today, holidays);
 
@@ -377,6 +425,7 @@ export default function ScheduleConsole({ session }) {
         <div className="sc-form">
           <select className="sc-sel" value={form.type} onChange={(e) => setForm({ ...form, type: e.target.value, assignee_id: "" })}>
             {Object.entries(TYPE_META)
+              .filter(([k]) => !["move_in", "move_out"].includes(k))
               .filter(([k]) => k !== "showing" || ["admin", "building_manager"].includes(session?.role))
               .map(([k, v]) => <option key={k} value={k}>{v.label}</option>)}
           </select>
@@ -433,19 +482,32 @@ export default function ScheduleConsole({ session }) {
                         )}
                       </div>
                       <div className="sc-dim">{e.name} · {e.contact}</div>
+                      {e.is_move_booking && <div className="sc-move-line">
+                        <span className={`sc-move-status sc-move-status--${e.move_status}`}>{e.move_status}</span>
+                        <span>{e.time}–{e.end_time}</span>
+                        {e.notes && <span className="sc-dim">{e.notes}</span>}
+                      </div>}
                       {e.type === "signing" && e.sign === "pending_review" && (
                         <div className="sc-block">
                           The lease has not been approved, so no signing link will go out. Handle it under Signing approval on the right.
                         </div>
                       )}
-                      {canManage
+                      {e.is_move_booking ? (
+                        canManage && e.move_status === "requested" ? <div className="sc-confirm">
+                          <button className="sc-btn sc-btn--xs" onClick={() => decideMove(e, "confirm")}>Confirm elevator</button>
+                          <button className="sc-btn sc-btn--xs sc-btn--ghost" onClick={() => decideMove(e, "decline")}>Decline</button>
+                        </div> : <div className="sc-block">
+                          {canManage ? "Building Manager decision recorded."
+                            : "View only · Building Manager confirms this elevator booking."}
+                        </div>
+                      ) : canManage
                         ? <ConfirmBar ev={e} onSend={sendConfirmation} onMark={markConfirmation} />
                         : <div className="sc-block">View only · Building Manager handles this showing.</div>}
                     </div>
-                    {canManage && <div className="sc-acts">
+                    {canManage && (!e.is_move_booking || e.move_status === "confirmed") && <div className="sc-acts">
                       <button className="sc-chk" onClick={() => toggleDone(e.id)}
                               aria-label={isDone ? "Mark not done" : "Mark done"}>{isDone ? "✓" : ""}</button>
-                      <button className="sc-x" onClick={() => cancel(e.id)} aria-label="Cancel booking">×</button>
+                      {!e.is_move_booking && <button className="sc-x" onClick={() => cancel(e.id)} aria-label="Cancel booking">×</button>}
                     </div>}
                   </div>
                 );
@@ -686,6 +748,10 @@ const CSS = `
 
 .sc-owner{font-size:10.5px;color:var(--dim);border:1px solid var(--rule);border-radius:8px;
   padding:0 6px}
+.sc-move-line{display:flex;align-items:center;gap:8px;flex-wrap:wrap;margin-top:7px;font-size:12px}
+.sc-move-status{font-size:10.5px;font-weight:700;text-transform:uppercase;letter-spacing:.04em;
+  padding:1px 8px;border-radius:9px;background:#FFF6E0;color:#7A5D14}
+.sc-move-status--confirmed,.sc-move-status--completed{background:#E8F7F2;color:#0E8577}
 
 /* Confirmations */
 .sc-confirm{display:flex;align-items:center;gap:8px;flex-wrap:wrap;margin-top:6px;

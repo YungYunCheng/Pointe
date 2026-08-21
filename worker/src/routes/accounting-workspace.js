@@ -21,6 +21,13 @@ const safeFilename = (value, fallback = "document") =>
 const hex = (bytes) => [...new Uint8Array(bytes)]
   .map((byte) => byte.toString(16).padStart(2, "0")).join("");
 
+async function accountForBuilding(sql, buildingCode, kind, fallback) {
+  if (!buildingCode) return fallback;
+  const [account] = await sql`SELECT gl_code FROM building_accounts
+    WHERE building_code = ${buildingCode} AND account_kind = ${kind} AND is_active`;
+  return account?.gl_code || fallback;
+}
+
 async function putReview(sql, sourceType, sourceId, patch, user = null) {
   const [row] = await sql`
     INSERT INTO accounting_transaction_reviews (source_type, source_id, status,
@@ -399,14 +406,15 @@ r.post("/accounting/quick-add", require_("accounting.post"), async (c) => {
     const amount = cents(body.amount);
     if (!body.date || !body.gl_code || !body.bank_gl || !amount)
       return c.json({ code: "TRANSACTION_FIELDS_REQUIRED" }, 400);
+    const bankGl = await accountForBuilding(sql, body.building_code, "rent", body.bank_gl);
     result = await postJournal(sql, user, {
       date: body.date, building_code: body.building_code, source: `quick_${kind}`,
       memo: body.memo || `Quick add ${kind}`,
       lines: kind === "expense" ? [
         { gl_code: body.gl_code, debit: amount, credit: 0, vendor_id: body.vendor_id },
-        { gl_code: body.bank_gl, debit: 0, credit: amount },
+        { gl_code: bankGl, debit: 0, credit: amount },
       ] : [
-        { gl_code: body.bank_gl, debit: amount, credit: 0 },
+        { gl_code: bankGl, debit: amount, credit: 0 },
         { gl_code: body.gl_code, debit: 0, credit: amount },
       ],
     });
@@ -414,19 +422,21 @@ r.post("/accounting/quick-add", require_("accounting.post"), async (c) => {
     const amount = cents(body.amount);
     if (!body.date || !body.unit_number || !body.bank_gl || !amount)
       return c.json({ code: "RECEIPT_FIELDS_REQUIRED" }, 400);
+    const buildingCode = body.building_code || String(body.unit_number).split("-")[0];
+    const bankGl = await accountForBuilding(sql, buildingCode, "rent", body.bank_gl);
     const id = uid("rc_");
     const entry = await postJournal(sql, user, { date: body.date, source: "ar_receipt",
-      source_id: id, building_code: body.building_code, memo: body.memo || `Receipt ${body.unit_number}`,
+      source_id: id, building_code: buildingCode, memo: body.memo || `Receipt ${body.unit_number}`,
       lines: [
-        { gl_code: body.bank_gl, debit: amount, credit: 0, unit_number: body.unit_number },
+        { gl_code: bankGl, debit: amount, credit: 0, unit_number: body.unit_number },
         { gl_code: "1100", debit: 0, credit: amount, unit_number: body.unit_number },
       ] });
     [result] = await sql`
       INSERT INTO ar_receipts (id, unit_number, building_code, received_date, amount,
         method, reference, deposit_to, entry_id, note, created_by)
-      VALUES (${id}, ${body.unit_number}, ${body.building_code || null}, ${body.date},
+      VALUES (${id}, ${body.unit_number}, ${buildingCode || null}, ${body.date},
         ${amount}, ${body.method || "etransfer"}, ${body.reference || null},
-        ${body.bank_gl}, ${entry.id}, ${body.memo || null}, ${user.id}) RETURNING *`;
+        ${bankGl}, ${entry.id}, ${body.memo || null}, ${user.id}) RETURNING *`;
   } else if (kind === "journal") {
     result = await postJournal(sql, user, body);
   } else return c.json({ code: "INVALID_QUICK_ADD_KIND" }, 400);

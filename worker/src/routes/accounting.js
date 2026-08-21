@@ -260,8 +260,20 @@ r.get("/accounting/review-center", require_("accounting.view"), async (c) => {
         WHERE rv.entity_type = 'monthly_report' AND rv.entity_id = m.id), '[]'::json) AS reviews
     FROM monthly_reports m ORDER BY m.period DESC, m.building_code`;
   for (const report of reports) report.figures = asJson(report.figures, {});
+  const buildingAccounts = await sql`
+    SELECT ba.building_code, ba.account_kind, ba.gl_code, ba.label,
+      g.name_en AS account_name, g.is_trust, g.is_bank,
+      COALESCE(SUM(CASE WHEN je.state = 'posted' THEN jl.debit - jl.credit ELSE 0 END), 0) AS balance
+    FROM building_accounts ba
+    JOIN gl_accounts g ON g.code = ba.gl_code
+    LEFT JOIN journal_lines jl ON jl.gl_code = ba.gl_code
+    LEFT JOIN journal_entries je ON je.id = jl.entry_id
+    WHERE ba.is_active
+    GROUP BY ba.building_code, ba.account_kind, ba.gl_code, ba.label,
+      g.name_en, g.is_trust, g.is_bank
+    ORDER BY ba.building_code, ba.account_kind DESC`;
   return c.json({
-    invoices, reports,
+    invoices, reports, building_accounts: buildingAccounts,
     vendors: await sql`SELECT * FROM vendors WHERE is_active ORDER BY name`,
     accounts: await sql`SELECT g.*, g.name_en AS name
       FROM gl_accounts g WHERE g.is_active ORDER BY g.code`,

@@ -140,6 +140,15 @@ export const api = {
   notifications: ()   => request("GET", "/notifications"),
   markRead:      (id) => request("POST", `/notifications/${id}/read`),
 
+  /* ---- tenant move elevator bookings (staff view) ---- */
+  moveBookings: () => request("GET", "/move-bookings"),
+  confirmMoveBooking: (id, note = "") =>
+    request("POST", `/move-bookings/${id}/confirm`, { note }),
+  declineMoveBooking: (id, note = "") =>
+    request("POST", `/move-bookings/${id}/decline`, { note }),
+  completeMoveBooking: (id) =>
+    request("POST", `/move-bookings/${id}/complete`, {}),
+
   /* ---- agreements ----
      The library holds files, not templates. Uploading takes multipart, and the
      file that comes back out is the file that went in. */

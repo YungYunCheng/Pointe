@@ -1,6 +1,6 @@
 import { Hono } from "hono";
 import { connect, closeAll } from "./lib/db.js";
-import { runDailyJobs, runHourlyJobs } from "./lib/jobs.js";
+import { runDailyJobs, runHourlyJobs, runMorningMoveJobs } from "./lib/jobs.js";
 import { require_, tenantUnit, mustBeTheirs, audit } from "./lib/auth.js";
 import health from "./routes/health.js";
 import auth from "./routes/auth.js";
@@ -18,6 +18,7 @@ import accountingWorkspace from "./routes/accounting-workspace.js";
 import messages from "./routes/messages.js";
 import notifications from "./routes/notifications.js";
 import website from "./routes/website.js";
+import moveBookings from "./routes/move-bookings.js";
 
 /* ============================================================
    Baydo Pointe — one API on Cloudflare Workers
@@ -323,6 +324,7 @@ app.route("/api", messages);
 app.route("/api", notifications);
 app.route("/api", ai);
 app.route("/api", website);
+app.route("/api", moveBookings);
 
 /* Re-exported so a route can import either from here or from lib/auth.js.
    The definitions live in lib so nothing imports the app. */
@@ -342,7 +344,9 @@ export default {
     const sql = connect(env);
     const at = new Date(event.scheduledTime);
     const daily = at.getUTCHours() === 7 && at.getUTCMinutes() === 0;
-    const job = daily ? runDailyJobs(sql, env) : runHourlyJobs(sql, env);
+    const morningMoves = at.getUTCHours() === 14 && at.getUTCMinutes() === 0;
+    const job = daily ? runDailyJobs(sql, env)
+      : morningMoves ? runMorningMoveJobs(sql, env) : runHourlyJobs(sql, env);
     ctx.waitUntil(job.finally(() => sql.end({ timeout: 5 }).catch(() => {})));
   },
 };

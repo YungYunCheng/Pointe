@@ -126,7 +126,7 @@ export default function Portal() {
 
       <nav className="bt-ptabs">
         {(isTenant ? [["home", "portal.tabHome"], ["repairs", "portal.tabRepairs"],
-          ["notices", "portal.tabNotices"], ["rent", "portal.tabRent"],
+          ["notices", "portal.tabNotices"], ["moving", "portal.tabMoving"], ["rent", "portal.tabRent"],
           ["docs", "portal.tabDocs"]] : [["home", "portal.tabHome"]]).map(([k, label]) => (
           <button key={k} className={tab === k ? "on" : ""} onClick={() => setTab(k)}>{t(label)}</button>
         ))}
@@ -135,6 +135,7 @@ export default function Portal() {
       {tab === "home" && (isTenant ? <Overview session={session} /> : <ProspectHome session={session} />)}
       {isTenant && tab === "repairs" && <Repairs session={session} />}
       {isTenant && tab === "notices" && <Notices session={session} />}
+      {isTenant && tab === "moving" && <MoveElevator session={session} />}
       {isTenant && tab === "rent"    && <Rent session={session} />}
       {isTenant && tab === "docs"    && (<>
         <Docs />
@@ -433,6 +434,104 @@ function Notices({ session }) {
   );
 }
 
+/* ---------- move-in / move-out elevator booking ---------- */
+function MoveElevator({ session }) {
+  const { t, date } = useT();
+  const [list, setList] = useState([]);
+  const [open, setOpen] = useState(false);
+  const [busy, setBusy] = useState(false);
+  const [err, setErr] = useState("");
+  const [f, setF] = useState({ direction: "move_in", move_date: "",
+    time_from: "09:00", time_to: "11:00", notes: "" });
+
+  const load = async () => {
+    try {
+      const res = await fetch("/api/tenant/move-bookings", { credentials: "include" });
+      if (!res.ok) throw new Error("move-bookings");
+      setList((await res.json()).bookings || []);
+    } catch { setList([]); }
+  };
+  useEffect(() => { load(); }, [session.unit]);
+
+  const submit = async () => {
+    setBusy(true); setErr("");
+    try {
+      const res = await fetch("/api/tenant/move-bookings", {
+        method: "POST", credentials: "include",
+        headers: { "Content-Type": "application/json" }, body: JSON.stringify(f),
+      });
+      const body = await res.json().catch(() => ({}));
+      if (!res.ok) throw new Error(body.code || "move-booking");
+      setOpen(false); setF({ direction: "move_in", move_date: "",
+        time_from: "09:00", time_to: "11:00", notes: "" });
+      await load();
+    } catch (e) {
+      setErr(e.message === "MOVE_SLOT_UNAVAILABLE" ? t("moving.slotTaken") : t("common.error"));
+    }
+    setBusy(false);
+  };
+
+  const cancel = async (id) => {
+    setBusy(true); setErr("");
+    try {
+      const res = await fetch(`/api/tenant/move-bookings/${id}/cancel`, {
+        method: "PATCH", credentials: "include",
+      });
+      if (!res.ok) throw new Error("cancel");
+      await load();
+    } catch { setErr(t("common.error")); }
+    setBusy(false);
+  };
+
+  const status = (value) => t(`moving.status.${value}`);
+  return <div style={{ marginTop: 20 }}>
+    <div className="bt-rowhead">
+      <div><h3>{t("moving.title")}</h3><p className="bt-dim">{t("moving.sub")}</p></div>
+      {!open && <button className="bt-btn bt-btn--sm" onClick={() => setOpen(true)}>{t("moving.new")}</button>}
+    </div>
+    {open && <div className="bt-panel">
+      <div className="bt-move-grid">
+        <div className="bt-f"><label>{t("moving.direction")}</label>
+          <select className="bt-in" value={f.direction} onChange={(e) => setF({ ...f, direction: e.target.value })}>
+            <option value="move_in">{t("moving.moveIn")}</option>
+            <option value="move_out">{t("moving.moveOut")}</option>
+          </select></div>
+        <div className="bt-f"><label>{t("moving.date")}</label>
+          <input className="bt-in" type="date" value={f.move_date} min={new Date().toISOString().slice(0,10)}
+            onChange={(e) => setF({ ...f, move_date: e.target.value })} /></div>
+        <div className="bt-f"><label>{t("moving.from")}</label>
+          <input className="bt-in" type="time" value={f.time_from}
+            onChange={(e) => setF({ ...f, time_from: e.target.value })} /></div>
+        <div className="bt-f"><label>{t("moving.to")}</label>
+          <input className="bt-in" type="time" value={f.time_to}
+            onChange={(e) => setF({ ...f, time_to: e.target.value })} /></div>
+      </div>
+      <div className="bt-f"><label>{t("moving.notes")}</label>
+        <textarea className="bt-in" rows="3" value={f.notes}
+          onChange={(e) => setF({ ...f, notes: e.target.value })} /></div>
+      {err && <div className="bt-err">{err}</div>}
+      <div style={{ display:"flex", gap:8, marginTop:12 }}>
+        <button className="bt-btn" disabled={busy || !f.move_date || f.time_to <= f.time_from} onClick={submit}>
+          {busy ? t("common.loading") : t("moving.submit")}</button>
+        <button className="bt-btn bt-btn--ghost" disabled={busy} onClick={() => setOpen(false)}>{t("common.cancel")}</button>
+      </div>
+    </div>}
+    {!open && err && <div className="bt-err">{err}</div>}
+    <div className="bt-list">
+      {list.length === 0 ? <div className="bt-panel bt-dim">{t("moving.none")}</div> : list.map((b) =>
+        <div className="bt-item" key={b.id}>
+          <div className="bt-item-h"><strong>{b.direction === "move_in" ? t("moving.moveIn") : t("moving.moveOut")}</strong>
+            <span className={`bt-move-status bt-move-status--${b.status}`}>{status(b.status)}</span></div>
+          <p>{date(b.move_date)} · {String(b.time_from).slice(0,5)}–{String(b.time_to).slice(0,5)}</p>
+          {b.notes && <p className="bt-dim">{b.notes}</p>}
+          {b.decision_note && <p className="bt-hint">{b.decision_note}</p>}
+          {b.status === "requested" && <button className="bt-btn bt-btn--ghost bt-btn--sm"
+            disabled={busy} onClick={() => cancel(b.id)}>{t("moving.cancel")}</button>}
+        </div>)}
+    </div>
+  </div>;
+}
+
 /* ---------- rent ---------- */
 function Rent({ session }) {
   const { t, money } = useT();
@@ -543,6 +642,11 @@ const PORTAL_CSS = `
 .bt-pref strong{display:block;font-size:13.5px}
 .bt-pref em{display:block;font-style:normal;font-size:12px;color:var(--dim);margin-top:1px}
 .bt-tag{font-size:11px;font-weight:700;color:#fff;background:var(--c);border-radius:10px;padding:2px 9px}
+.bt-move-grid{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:12px}
+.bt-move-status{font-size:11px;font-weight:700;border-radius:12px;padding:3px 9px;background:#EDF1F5;color:#5B6876}
+.bt-move-status--confirmed,.bt-move-status--completed{background:#E7F5F2;color:#0E8577}
+.bt-move-status--declined,.bt-move-status--cancelled{background:#FBECEF;color:#B23A54}
+@media(max-width:620px){.bt-move-grid{grid-template-columns:1fr}}
 /* Same text-link treatment as the staff sign-in screen: this is an action,
    but it should not visually compete with the primary Sign in button. */
 .bt-auth-actions{display:flex;flex-direction:column;align-items:flex-start;gap:3px;margin-top:2px}

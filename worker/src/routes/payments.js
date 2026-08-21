@@ -23,6 +23,14 @@ const money = (n) => new Intl.NumberFormat("en-CA",
   { style: "currency", currency: "CAD" }).format(Number(n ?? 0));
 const ref = () => "PAY-" + crypto.randomUUID().slice(0, 8).toUpperCase();
 
+async function settlementAccount(sql, unitNumber, purpose, fallback) {
+  const building = String(unitNumber || "").split("-")[0];
+  const kind = purpose === "deposit" ? "deposit" : "rent";
+  const [account] = await sql`SELECT gl_code FROM building_accounts
+    WHERE building_code = ${building} AND account_kind = ${kind} AND is_active`;
+  return account?.gl_code || (purpose === "deposit" ? "1020" : fallback);
+}
+
 /* The order charges are settled in.
    
    Rent before anything else, oldest first. A tenant who pays their rent and
@@ -136,6 +144,7 @@ r.post("/tenant/pay", async (c) => {
       // Absorbed by the property, or added to what they pay. Whichever it is,
       // the tenant sees it before they confirm.
       const charged = method.fee_borne_by === "surcharge" ? cents(paid + fee) : paid;
+      const settleTo = await settlementAccount(tx, unit, purpose, method.settles_to_gl);
 
       const [lease] = await tx`SELECT id, contact_id FROM leases
         WHERE unit_number = ${unit} AND status = 'active'`;
@@ -147,7 +156,7 @@ r.post("/tenant/pay", async (c) => {
         VALUES (${uid("pay_")}, ${ref()}, ${lease?.id ?? null}, ${unit}, ${t.id},
                 ${lease?.contact_id ?? null}, ${method_code}, ${purpose},
                 ${paid}, ${fee}, ${charged}, 'pending', ${method.channel === "online" ? "stripe" : null},
-                ${purpose === "deposit" ? "1020" : method.settles_to_gl},
+                ${settleTo},
                 ${today()}, ${c.req.header("cf-connecting-ip") ?? null})
         RETURNING *`;
 
@@ -218,6 +227,7 @@ r.post("/payments/manual", ledgerEditor, async (c) => {
 
       const paid = cents(amount);
       const on = received_on || today();
+      const settleTo = await settlementAccount(tx, unit_number, purpose, method.settles_to_gl);
 
       const [p] = await tx`
         INSERT INTO payments (id, reference, lease_id, unit_number, contact_id,
@@ -229,7 +239,7 @@ r.post("/payments/manual", ledgerEditor, async (c) => {
                 ${paid}, 0, ${paid}, 'authorised',
                 ${method_code === "cheque" ? String(cheque_number).trim() : null},
                 ${bank_name ?? null}, ${method_code === "cheque" ? null : theirRef ?? null},
-                ${on}, ${purpose === "deposit" ? "1020" : method.settles_to_gl},
+                ${on}, ${settleTo},
                 ${c.get("user").id}, ${c.get("user").name}, ${note ?? null})
         RETURNING *`;
 

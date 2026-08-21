@@ -57,6 +57,16 @@ const MEANING = {
   RENEWAL_QUESTION: { severity: "attention", title: "A tenant wants to discuss a renewal" },
   URGENT_REPAIR_REPORTED: { severity: "urgent", title: "An urgent repair was reported" },
   REPAIR_REPORTED: { severity: "info", title: "A repair was reported" },
+  MOVE_ELEVATOR_REQUESTED: {
+    severity: "attention",
+    title: "A tenant requested the moving elevator",
+    what: "The Building Manager must check the building and time, then confirm or decline the request in Schedule.",
+  },
+  MOVE_ELEVATOR_TODAY: {
+    severity: "attention",
+    title: "A confirmed move is scheduled today",
+    what: "Check the elevator protection and access before the confirmed time.",
+  },
   CHAT_CONFIRMATION_REQUIRED: {
     severity: "attention",
     title: "A customer chat needs confirmation",

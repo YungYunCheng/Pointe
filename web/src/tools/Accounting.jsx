@@ -136,6 +136,7 @@ export default function Accounting() {
   const [periods, setPeriods] = useState([]);
   const [statements, setStatements] = useState([]);
   const [reports, setReports] = useState([]);
+  const [buildingAccounts, setBuildingAccounts] = useState([]);
   const [amendments, setAmendments] = useState([]);
   const [rates, setRates] = useState([]);
   const [proposals, setProposals] = useState([]);
@@ -187,6 +188,7 @@ export default function Accounting() {
         setVendors(shared.vendors?.length ? shared.vendors : VENDOR_SEED);
         setInvoices(shared.invoices ?? []);
         setReports(shared.reports ?? []);
+        setBuildingAccounts(shared.building_accounts ?? []);
         if (shared.accounts?.length) setCoa(shared.accounts);
       } catch {
         // The local prototype remains readable while the migration or API is
@@ -232,6 +234,7 @@ export default function Accounting() {
     if (shared.vendors) setVendors(shared.vendors);
     if (shared.invoices) setInvoices(shared.invoices);
     if (shared.reports) setReports(shared.reports);
+    if (shared.building_accounts) setBuildingAccounts(shared.building_accounts);
     if (shared.accounts?.length) setCoa(shared.accounts);
   }, []);
 
@@ -291,7 +294,10 @@ export default function Accounting() {
     const overdue = open.filter((c) => c.due_date < today());
     const ap = invoices.filter((i) => ["approved", "partial"].includes(i.state));
     const apOver = ap.filter((i) => i.due_date < today());
-    const trustLedger = balances["1020"]?.balance ?? 0;
+    const balanceGroup = (root) => cents(Object.entries(balances)
+      .filter(([code]) => code === root || code.startsWith(`${root}-`))
+      .reduce((sum, [, value]) => sum + Number(value.balance || 0), 0));
+    const trustLedger = balanceGroup("1020");
     const depositLiability = cents((balances["2100"]?.balance ?? 0) + (balances["2110"]?.balance ?? 0));
     return {
       arOpen: cents(open.reduce((t, c) => t + (c.amount - c.paid_amount), 0)),
@@ -302,7 +308,7 @@ export default function Accounting() {
       apCount: ap.length,
       apOverdue: cents(apOver.reduce((t, i) => t + (i.total - i.paid_amount), 0)),
       drafts: invoices.filter((i) => i.state === "draft").length,
-      operating: balances["1010"]?.balance ?? 0,
+      operating: balanceGroup("1010"),
       trustLedger, depositLiability,
       trustAgrees: cents(trustLedger) === depositLiability,
     };
@@ -386,7 +392,7 @@ export default function Accounting() {
       )}
 
       {tab === "dashboard" && <Dashboard {...{ stats, balances, coa, charges, invoices,
-        periods, periodStateOf, glName }} />}
+        periods, periodStateOf, glName, buildingAccounts }} />}
       {tab === "ar" && <AR {...{ schedules, charges, receipts, save, post, canPost,
         session, glName, coa, periodStateOf, amendments }} />}
       {tab === "ap" && <AP {...{ vendors, invoices, save, post, canPost, coa, glName,
@@ -396,7 +402,7 @@ export default function Accounting() {
       {tab === "banking" && <Banking {...{ statements, entries, receipts, invoices, periods,
         balances, save, canPost, session, coa }} />}
       {tab === "reports" && <Reports {...{ reports, periods, entries, charges, receipts,
-        coa, save, canPost, canPrepareReports, session }} onOpenReview={() => setTab("review")} />}
+        coa, save, canPost, canPrepareReports, session, buildingAccounts }} onOpenReview={() => setTab("review")} />}
       {tab === "coa" && <ChartOfAccounts {...{ coa, balances, setCoa, canPost }} />}
       {tab === "arrears" && <ArrearsFiles {...{ charges, files: arrearsFiles,
         canPost, session, save, flash: (t) => setSaveState("saved") }} />}
@@ -410,7 +416,7 @@ export default function Accounting() {
       <footer className="ac-foot">
         Accrual basis: revenue is recognised when billed, expenses when incurred.
         A security deposit is never revenue — it is the tenant’s money held in trust,
-        and the balance on 2100 must agree with the trust bank account 1020 at all times.
+        and the balance on 2100 must agree with the three building deposit trust accounts at all times.
         Confirm the deposit interest rate and the refund deadline with your manager
         before relying on either.
       </footer>
@@ -446,7 +452,8 @@ function AccountingShortcuts({ role, onOpen, stats }) {
 
 /* ══════════════════ Dashboard ══════════════════ */
 
-function Dashboard({ stats, balances, coa, charges, invoices, periods, periodStateOf, glName }) {
+function Dashboard({ stats, balances, coa, charges, invoices, periods, periodStateOf, glName,
+                     buildingAccounts }) {
   const p = thisPeriod();
   const state = periodStateOf(p);
 
@@ -478,6 +485,7 @@ function Dashboard({ stats, balances, coa, charges, invoices, periods, periodSta
 
   return (
     <div className="ac-body">
+      <BuildingAccountCards accounts={buildingAccounts} />
       <div className="ac-stats">
         <Stat l="Operating bank" v={money0(stats.operating)} />
         <Stat l="Owed by tenants" v={money0(stats.arOpen)} sub={`${stats.arCount} charges`} />
@@ -493,7 +501,7 @@ function Dashboard({ stats, balances, coa, charges, invoices, periods, periodSta
       <section className={`ac-card ${stats.trustAgrees ? "" : "ac-card--bad"}`}>
         <h2>Security deposits held in trust</h2>
         <div className="ac-trust">
-          <div><em>Trust bank account (1020)</em><strong>{money(stats.trustLedger)}</strong></div>
+          <div><em>Three building deposit trust accounts</em><strong>{money(stats.trustLedger)}</strong></div>
           <div><em>Owed to tenants (2100 + 2110)</em><strong>{money(stats.depositLiability)}</strong></div>
           <div className={stats.trustAgrees ? "ac-ok" : "ac-bad"}>
             {stats.trustAgrees
@@ -1521,7 +1529,7 @@ function Search({ entries, glName, vendors }) {
 /* ══════════════════ Reports ══════════════════ */
 
 function Reports({ reports, periods, entries, charges, receipts, coa, save, canPost,
-                   canPrepareReports, session, onOpenReview }) {
+                   canPrepareReports, session, onOpenReview, buildingAccounts }) {
   const [period, setPeriod] = useState(thisPeriod());
   const [busy, setBusy] = useState(null);
   const [err, setErr] = useState("");
@@ -1630,6 +1638,7 @@ function Reports({ reports, periods, entries, charges, receipts, coa, save, canP
 
   return (
     <div className="ac-body">
+      <BuildingAccountCards accounts={buildingAccounts} compact />
       <section className="ac-card">
         <div className="ac-cardh">
           <h2>Monthly reports</h2>
@@ -1646,7 +1655,7 @@ function Reports({ reports, periods, entries, charges, receipts, coa, save, canP
           </div>
         </div>
         <p className="ac-note-p">
-          One report per building, generated only once the period is reconciled.
+          Three independent reports — one for 370, one for 374 and one for 378 — generated only once the period is reconciled.
           The figures come from the ledger; the commentary is written from those
           figures and never recalculates them.
         </p>
@@ -1709,6 +1718,28 @@ function Reports({ reports, periods, entries, charges, receipts, coa, save, canP
   );
 }
 
+function BuildingAccountCards({ accounts = [], compact = false }) {
+  const buildings = ["370", "374", "378"];
+  if (!accounts.length) return null;
+  return <section className={`ac-card ac-building-accounts ${compact ? "is-compact" : ""}`}>
+    <div className="ac-cardh"><h2>Separate building accounts</h2>
+      <span className="ac-dim">Rent operating + deposit trust for each building</span></div>
+    <div className="ac-building-grid">
+      {buildings.map((building) => <div className="ac-building-account" key={building}>
+        <strong>Building {building}</strong>
+        {["rent", "deposit"].map((kind) => {
+          const account = accounts.find((row) => row.building_code === building && row.account_kind === kind);
+          return <div key={kind}>
+            <span><em>{kind === "rent" ? "Rent" : "Deposit"}</em>
+              <small>{account?.gl_code || "—"}</small></span>
+            <b>{money(Number(account?.balance || 0))}</b>
+          </div>;
+        })}
+      </div>)}
+    </div>
+  </section>;
+}
+
 function Fig({ l, v, tone }) {
   return (
     <div className="ac-fig">
@@ -1748,8 +1779,8 @@ function ChartOfAccounts({ coa, balances, setCoa, canPost }) {
                 <span className="ac-mono ac-strong">{a.code}</span>
                 <span>
                   {a.name}
-                  {a.is_trust === 1 && <span className="ac-pill ac-pill--trust">trust</span>}
-                  {a.is_bank === 1 && <span className="ac-pill">bank</span>}
+                  {!!a.is_trust && <span className="ac-pill ac-pill--trust">trust</span>}
+                  {!!a.is_bank && <span className="ac-pill">bank</span>}
                 </span>
                 <span className="ac-mono ac-dim">{a.normal_side}</span>
                 <span className="ac-mono">{money(balances[a.code]?.balance ?? 0)}</span>
@@ -2389,4 +2420,14 @@ export const CSS = MONTH_END_CSS + `
   .ac-ws-amount{align-items:flex-start;text-align:left}.ac-ws-actions{justify-content:flex-start}
   .ac-capture>small{grid-column:auto}
 }
+.ac-building-grid{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:10px;margin-top:12px}
+.ac-building-account{border:1px solid var(--rule);border-radius:4px;padding:12px;background:#FAFBFC}
+.ac-building-account>strong{display:block;font-family:'Archivo',sans-serif;margin-bottom:8px}
+.ac-building-account>div{display:flex;justify-content:space-between;gap:10px;padding:6px 0;
+  border-top:1px solid var(--rule);align-items:center}
+.ac-building-account span{display:flex;gap:7px;align-items:center}
+.ac-building-account em{font-style:normal;font-size:12px;font-weight:600}
+.ac-building-account small{font-family:'IBM Plex Mono',monospace;color:var(--dim)}
+.ac-building-account b{font-family:'IBM Plex Mono',monospace;font-size:12px}
+@media(max-width:760px){.ac-building-grid{grid-template-columns:1fr}}
 `;
