@@ -148,7 +148,9 @@ function SiteSlideshow({ images, locale, className = "", label = "Photos" }) {
   );
 }
 
-function GalleryShowcase({ images, locale, title }) {
+function GalleryShowcase({
+  images, locale, title, introText = "", eyebrowText = "", embedded = false,
+}) {
   const [startIndex, setStartIndex] = useState(0);
   const [moving, setMoving] = useState(false);
   const [paused, setPaused] = useState(false);
@@ -203,17 +205,17 @@ function GalleryShowcase({ images, locale, title }) {
   const active = selectedIndex === null ? null : imageAt(selectedIndex);
   const altFor = (image, fallback) =>
     image?.[`alt_${locale}`] || image?.filename || fallback;
-  const intro = locale === "zh"
+  const intro = introText || (locale === "zh"
     ? "用更緊湊的方式看看 Baydo Pointe 的住宅與生活空間。"
-    : "A compact look at the suites and everyday spaces at Baydo Pointe.";
+    : "A compact look at the suites and everyday spaces at Baydo Pointe.");
+  const eyebrow = eyebrowText || (locale === "zh" ? "探索社區" : "Explore the property");
 
   return (
-    <section className="bt-sec bt-site-gallery" aria-label={title}>
+    <section className={`${embedded ? "bt-gallery-embedded" : "bt-sec"} bt-site-gallery`}
+             aria-label={title}>
       <div className="bt-gallery-heading">
         <div>
-          <span className="bt-gallery-eyebrow">
-            {locale === "zh" ? "探索社區" : "Explore the property"}
-          </span>
+          <span className="bt-gallery-eyebrow">{eyebrow}</span>
           <h2>{title}</h2>
         </div>
         <p>{intro}</p>
@@ -928,7 +930,10 @@ function PetsNote() {
 
 /* ---------- buildings ---------- */
 function Building() {
-  const { t } = useT();
+  const { t, locale } = useT();
+  const site = useSiteContent();
+  const copy = { ...DEFAULT_SITE[locale], ...(site.content?.[locale] ?? {}) };
+  const amenityImages = siteImages(site, "amenities");
   return (
     <section className="bt-sec">
       <h2>{t("nav.building")}</h2>
@@ -941,6 +946,16 @@ function Building() {
           </div>
         ))}
       </div>
+      <GalleryShowcase
+        images={amenityImages}
+        locale={locale}
+        title={copy.amenities_title || t("amen.title")}
+        introText={copy.amenities_body || (locale === "zh"
+          ? "健身房、Lounge、寵物清洗間與其他共享設施。"
+          : "Gym, lounge, pet wash and other shared spaces across the community.")}
+        eyebrowText={locale === "zh" ? "社區設施" : "Shared amenities"}
+        embedded
+      />
       <div className="bt-amen">
         {["gym", "lounge", "petwash", "bike", "patio", "transit", "parking", "busPad"].map((k) => (
           <div className="bt-amen-i" key={k}><span aria-hidden="true">·</span>{t(`amen.${k}`)}</div>
