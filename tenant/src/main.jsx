@@ -58,11 +58,25 @@ const DEFAULT_SITE = {
 
 let siteContentCache = null;
 let siteContentRequest = null;
+
+async function fetchSiteContent() {
+  for (let attempt = 0; attempt < 2; attempt += 1) {
+    try {
+      // Keep this URL stable so Cloudflare can serve its short public cache.
+      // A timestamp here forced every visitor to wait for a fresh database
+      // request before any uploaded photo could appear.
+      const response = await fetch("/api/public/site-content");
+      if (response.ok) return await response.json();
+    } catch {}
+    if (attempt === 0) await new Promise((resolve) => window.setTimeout(resolve, 650));
+  }
+  return null;
+}
+
 function loadSiteContent() {
   if (siteContentCache) return Promise.resolve(siteContentCache);
   if (!siteContentRequest) {
-    siteContentRequest = fetch(`/api/public/site-content?v=${Date.now()}`, { cache: "no-store" })
-      .then((response) => response.ok ? response.json() : null)
+    siteContentRequest = fetchSiteContent()
       .then((data) => {
         if (data?.content) siteContentCache = data;
         return siteContentCache;
