@@ -129,6 +129,15 @@ app.use("/api/*", async (c, next) => {
   // an exception listed here — an exception list is a thing that grows.
 
   if (path.startsWith(PUBLIC_PREFIX)) {
+    // Public images are immutable/cacheable R2 assets, not database browse
+    // requests. Counting every hero, gallery and floor-plan image against the
+    // same 60-request allowance makes ordinary refreshes exhaust the page's
+    // budget and causes the UI to fall back to its default artwork.
+    const publicImage = c.req.method === "GET" &&
+      (path.startsWith("/api/public/site-images/") ||
+       path.startsWith("/api/public/floorplan-images/"));
+    if (publicImage) return next();
+
     // Rate limited by address, in the bucket that matches what the call
     // costs. The alternative to a limit is an account wall in front of "how
     // much is the rent", or an open bill.
