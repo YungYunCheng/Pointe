@@ -35,7 +35,6 @@ import { Signup, VerifySignup, Claim, ResetPassword } from "./pages/Account.jsx"
 const OFFICE_PHONE = "780-937-8677";
 const OFFICE_EMAIL = "rentals@themizar.ca";
 const STAFF_URL = "https://pointe-worker.dcheng0726.workers.dev";
-const FLOORPLAN_API_URL = "https://pointe-backend.dcheng0726.workers.dev/api/public/floorplan-images";
 
 const DEFAULT_SITE = {
   en: {
@@ -142,10 +141,9 @@ function AvailabilityPreview({ type, fallbackImage, locale }) {
 
   // Do not make the interaction depend on the availability response having
   // the newest optional fields. Older responses call the code
-  // `unit_type_code`, and preview deployments do not always proxy /api image
-  // requests, so the public backend URL is deliberately absolute here.
+  // `unit_type_code`, which is still enough for the public image route.
   const floorplanSource = typeCode
-    ? `${FLOORPLAN_API_URL}/${encodeURIComponent(typeCode)}`
+    ? `/api/public/floorplan-images/${encodeURIComponent(typeCode)}`
     : type?.floorplan_image_url;
   const showFloorplan = !!floorplanSource && !floorplanFailed;
   const source = showFloorplan ? floorplanSource : fallbackImage?.url;
