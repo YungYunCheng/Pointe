@@ -195,24 +195,62 @@ const LAYOUT = {
   zh: { "1-0": "一房", "1-1": "一房 + 書房", "2-0": "兩房兩衛", "2-1": "兩房 + 書房" },
 };
 
+const AVAILABILITY_CACHE_KEY = "baydo:public-availability";
+
+function propertyFromAvailability(live) {
+  const publicTypes = (live.types ?? []).map((type) => ({
+    ...type,
+    code: type.code || type.unit_type_code,
+  }));
+  const byType = Object.fromEntries(publicTypes.map((type) => [type.code, {
+    free: Number(type.available ?? 0), dates: type.earliest ? [type.earliest] : [],
+  }]));
+  const base = Object.fromEntries(publicTypes.map((type) =>
+    [type.code, Number(type.rent) || null]));
+  return {
+    pricing: { base, petLimit: live.fees?.pet_limit },
+    byType,
+    publicTypes,
+    stalls: live.parking ?? { total: 0, free: 0 },
+    waiting: Number(live.parking?.waiting ?? 0),
+  };
+}
+
+function readAvailabilityCache() {
+  try {
+    const cached = JSON.parse(window.localStorage.getItem(AVAILABILITY_CACHE_KEY));
+    return cached?.types?.length ? cached : null;
+  } catch { return null; }
+}
+
+async function fetchAvailability() {
+  for (let attempt = 0; attempt < 3; attempt += 1) {
+    try {
+      const response = await fetch("/api/public/availability");
+      if (response.ok) return await response.json();
+    } catch {}
+    if (attempt < 2) await new Promise((resolve) =>
+      window.setTimeout(resolve, 600 * (attempt + 1)));
+  }
+  return null;
+}
+
 function useProperty() {
-  const [data, setData] = useState(null);
+  const [data, setData] = useState(() => {
+    const cached = readAvailabilityCache();
+    return cached ? propertyFromAvailability(cached) : null;
+  });
   useEffect(() => {
+    let active = true;
     (async () => {
-      try {
-        const response = await fetch("/api/public/availability");
-        if (response.ok) {
-          const live = await response.json();
-          const byType = Object.fromEntries((live.types ?? []).map((x) => [x.code, {
-            free: Number(x.available ?? 0), dates: x.earliest ? [x.earliest] : [],
-          }]));
-          const base = Object.fromEntries((live.types ?? []).map((x) => [x.code, Number(x.rent) || null]));
-          setData({ pricing: { base, petLimit: live.fees?.pet_limit }, byType,
-            publicTypes: live.types ?? [], stalls: live.parking ?? { total: 0, free: 0 },
-            waiting: Number(live.parking?.waiting ?? 0) });
-          return;
-        }
-      } catch {}
+      const live = await fetchAvailability();
+      if (live?.types?.length) {
+        try { window.localStorage.setItem(AVAILABILITY_CACHE_KEY, JSON.stringify(live)); }
+        catch {}
+        if (active) setData(propertyFromAvailability(live));
+        return;
+      }
+      if (readAvailabilityCache()) return;
 
       const read = async (k) => {
         try { const r = await window.storage.get(k); return r?.value ? JSON.parse(r.value) : null; }
@@ -236,8 +274,9 @@ function useProperty() {
       }, { total: 0, free: 0 });
       const waiting = (parking.records || []).filter((r) => r.status === "waiting").length;
 
-      setData({ pricing, byType, stalls, waiting });
+      if (active) setData({ pricing, byType, stalls, waiting });
     })();
+    return () => { active = false; };
   }, []);
   return data;
 }
@@ -506,7 +545,7 @@ function Home() {
           information — a border, a shadow and a padded box each, to hold four
           numbers. A table puts the numbers in columns where they can be
           compared, which is the actual thing somebody is doing here. */}
-      {available.length > 0 && (
+      {(!d || available.length > 0) && (
         <section className="bt-sec bt-availability-section">
           <div className="bt-availability-showcase" onMouseLeave={() => setPreviewCode(null)}>
             <div className="bt-availability-list">
@@ -516,7 +555,11 @@ function Home() {
               </div>
 
               <div className="bt-avail">
-                {available.slice(0, 5).map((x) => {
+                {!d ? (
+                  <div className="bt-avail-loading" role="status">
+                    {locale === "zh" ? "正在載入戶型與平面圖…" : "Loading suites and floor plans…"}
+                  </div>
+                ) : available.slice(0, 5).map((x) => {
                   const typeCode = x.code || x.unit_type_code;
                   return (
                   <Link to="/suites" className={`bt-avail-row ${previewCode === typeCode ? "previewing" : ""}`}
@@ -1486,6 +1529,9 @@ a{color:inherit}
 .bt-app .bt-preview-label strong{font-size:13px;font-weight:500;line-height:1.5}
 .bt-app .bt-avail-row.previewing{background:var(--tint)}
 .bt-app .bt-avail-row.previewing .bt-avail-go{color:var(--accent)}
+.bt-app .bt-avail-loading{min-height:355px;display:flex;align-items:center;
+  justify-content:center;border-bottom:1px solid var(--rule);color:var(--dim);
+  font:12px 'IBM Plex Mono',monospace;letter-spacing:.03em}
 
 @media (max-width:760px){
   .bt-app .bt-hero-media{inset:0;width:100%;opacity:.42;
