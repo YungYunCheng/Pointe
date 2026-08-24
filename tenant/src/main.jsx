@@ -35,6 +35,7 @@ import { Signup, VerifySignup, Claim, ResetPassword } from "./pages/Account.jsx"
 const OFFICE_PHONE = "780-937-8677";
 const OFFICE_EMAIL = "rentals@themizar.ca";
 const STAFF_URL = "https://pointe-worker.dcheng0726.workers.dev";
+const FLOORPLAN_API_URL = "https://pointe-backend.dcheng0726.workers.dev/api/public/floorplan-images";
 
 const DEFAULT_SITE = {
   en: {
@@ -136,13 +137,16 @@ function SiteSlideshow({ images, locale, className = "", label = "Photos" }) {
 
 function AvailabilityPreview({ type, fallbackImage, locale }) {
   const [floorplanFailed, setFloorplanFailed] = useState(false);
-  useEffect(() => { setFloorplanFailed(false); }, [type?.code]);
+  const typeCode = type?.code || type?.unit_type_code || null;
+  useEffect(() => { setFloorplanFailed(false); }, [typeCode]);
 
   // Do not make the interaction depend on the availability response having
-  // the newest optional URL field. A cached response can still contain the
-  // suite code, which is all the public image route needs.
-  const floorplanSource = type?.floorplan_image_url
-    || (type?.code ? `/api/public/floorplan-images/${encodeURIComponent(type.code)}` : null);
+  // the newest optional fields. Older responses call the code
+  // `unit_type_code`, and preview deployments do not always proxy /api image
+  // requests, so the public backend URL is deliberately absolute here.
+  const floorplanSource = typeCode
+    ? `${FLOORPLAN_API_URL}/${encodeURIComponent(typeCode)}`
+    : type?.floorplan_image_url;
   const showFloorplan = !!floorplanSource && !floorplanFailed;
   const source = showFloorplan ? floorplanSource : fallbackImage?.url;
   const fallbackAlt = fallbackImage?.[`alt_${locale}`] || fallbackImage?.filename || "Baydo Pointe";
@@ -153,14 +157,14 @@ function AvailabilityPreview({ type, fallbackImage, locale }) {
   return (
     <aside className={`bt-availability-preview ${showFloorplan ? "floorplan" : "photo"}`}>
       {source ? (
-        <img key={`${type?.code || "property"}-${source}`} src={source}
-             alt={showFloorplan ? `${typeLabel || type.code} floor plan` : fallbackAlt}
+        <img key={`${typeCode || "property"}-${source}`} src={source}
+             alt={showFloorplan ? `${typeLabel || typeCode} floor plan` : fallbackAlt}
              onError={() => { if (showFloorplan) setFloorplanFailed(true); }} />
       ) : (
         <div className="bt-preview-empty">Baydo Pointe</div>
       )}
       <div className="bt-preview-label">
-        {showFloorplan ? <><span>Floor plan</span><strong>{typeLabel || type.code}</strong></>
+        {showFloorplan ? <><span>Floor plan</span><strong>{typeLabel || typeCode}</strong></>
           : <><span>Baydo Pointe</span><strong>{locale === "zh" ? "將滑鼠移到戶型上查看平面圖" : "Hover over a suite type to see its floor plan"}</strong></>}
       </div>
     </aside>
@@ -418,7 +422,8 @@ function Home() {
     .sort((a, b) => Number(a.rent) - Number(b.rent));
 
   const from = available.length ? Number(available[0].rent) : null;
-  const previewType = available.find((type) => type.code === previewCode) ?? null;
+  const previewType = available.find((type) =>
+    (type.code || type.unit_type_code) === previewCode) ?? null;
   const defaultPreviewImage = galleryImages[0] ?? heroImages[0]
     ?? neighbourhoodImages[0] ?? amenityImages[0] ?? null;
 
@@ -499,13 +504,15 @@ function Home() {
               </div>
 
               <div className="bt-avail">
-                {available.slice(0, 5).map((x) => (
-                  <Link to="/suites" className={`bt-avail-row ${previewCode === x.code ? "previewing" : ""}`}
-                        key={x.code} onPointerEnter={() => setPreviewCode(x.code)}
-                        onFocus={() => setPreviewCode(x.code)}
+                {available.slice(0, 5).map((x) => {
+                  const typeCode = x.code || x.unit_type_code;
+                  return (
+                  <Link to="/suites" className={`bt-avail-row ${previewCode === typeCode ? "previewing" : ""}`}
+                        key={typeCode} onPointerEnter={() => setPreviewCode(typeCode)}
+                        onFocus={() => setPreviewCode(typeCode)}
                         onClick={(event) => {
-                          if (window.matchMedia("(hover: none)").matches && touchPreviewCode !== x.code) {
-                            event.preventDefault(); setPreviewCode(x.code); setTouchPreviewCode(x.code);
+                          if (window.matchMedia("(hover: none)").matches && touchPreviewCode !== typeCode) {
+                            event.preventDefault(); setPreviewCode(typeCode); setTouchPreviewCode(typeCode);
                           }
                         }}>
                     <span className="bt-avail-n">
@@ -518,7 +525,8 @@ function Home() {
                     <span className="bt-avail-c">{t("suites.available", { n: x.available })}</span>
                     <span className="bt-avail-go" aria-hidden="true">→</span>
                   </Link>
-                ))}
+                  );
+                })}
               </div>
             </div>
             <AvailabilityPreview type={previewType} fallbackImage={defaultPreviewImage} locale={locale} />
