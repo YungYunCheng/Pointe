@@ -138,8 +138,13 @@ function AvailabilityPreview({ type, fallbackImage, locale }) {
   const [floorplanFailed, setFloorplanFailed] = useState(false);
   useEffect(() => { setFloorplanFailed(false); }, [type?.code]);
 
-  const showFloorplan = !!type?.floorplan_image_url && !floorplanFailed;
-  const source = showFloorplan ? type.floorplan_image_url : fallbackImage?.url;
+  // Do not make the interaction depend on the availability response having
+  // the newest optional URL field. A cached response can still contain the
+  // suite code, which is all the public image route needs.
+  const floorplanSource = type?.floorplan_image_url
+    || (type?.code ? `/api/public/floorplan-images/${encodeURIComponent(type.code)}` : null);
+  const showFloorplan = !!floorplanSource && !floorplanFailed;
+  const source = showFloorplan ? floorplanSource : fallbackImage?.url;
   const fallbackAlt = fallbackImage?.[`alt_${locale}`] || fallbackImage?.filename || "Baydo Pointe";
   const typeLabel = type
     ? (locale === "zh" ? type.bedroom_label_zh : type.bedroom_label_en)
@@ -496,7 +501,7 @@ function Home() {
               <div className="bt-avail">
                 {available.slice(0, 5).map((x) => (
                   <Link to="/suites" className={`bt-avail-row ${previewCode === x.code ? "previewing" : ""}`}
-                        key={x.code} onMouseEnter={() => setPreviewCode(x.code)}
+                        key={x.code} onPointerEnter={() => setPreviewCode(x.code)}
                         onFocus={() => setPreviewCode(x.code)}
                         onClick={(event) => {
                           if (window.matchMedia("(hover: none)").matches && touchPreviewCode !== x.code) {
