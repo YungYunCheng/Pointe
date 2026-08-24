@@ -149,131 +149,146 @@ function SiteSlideshow({ images, locale, className = "", label = "Photos" }) {
 }
 
 function GalleryShowcase({ images, locale, title }) {
-  const [activeIndex, setActiveIndex] = useState(0);
-  const [lightboxOpen, setLightboxOpen] = useState(false);
+  const [startIndex, setStartIndex] = useState(0);
+  const [moving, setMoving] = useState(false);
+  const [paused, setPaused] = useState(false);
+  const [selectedIndex, setSelectedIndex] = useState(null);
+
+  const imageAt = useCallback((index) =>
+    images[(index + images.length) % images.length], [images]);
+  const displayed = useMemo(() => Array.from(
+    { length: Math.min(images.length, 5) },
+    (_, position) => ({
+      image: imageAt(startIndex + position),
+      index: (startIndex + position) % images.length,
+    })
+  ), [imageAt, images.length, startIndex]);
+
+  const advance = useCallback(() => {
+    if (moving || selectedIndex !== null || images.length <= 4) return;
+    setMoving(true);
+    window.setTimeout(() => {
+      setStartIndex((current) => (current + 1) % images.length);
+      setMoving(false);
+    }, 680);
+  }, [images.length, moving, selectedIndex]);
+
+  const previous = () => {
+    if (moving || selectedIndex !== null || images.length <= 4) return;
+    setStartIndex((current) => (current - 1 + images.length) % images.length);
+  };
 
   useEffect(() => {
-    setActiveIndex((current) => Math.min(current, Math.max(images.length - 1, 0)));
-  }, [images.length]);
-
-  const move = useCallback((amount) => {
-    setActiveIndex((current) => (current + amount + images.length) % images.length);
-  }, [images.length]);
+    if (paused || selectedIndex !== null || images.length <= 4) return undefined;
+    const timer = window.setInterval(advance, 3600);
+    return () => window.clearInterval(timer);
+  }, [advance, images.length, paused, selectedIndex]);
 
   useEffect(() => {
-    if (!lightboxOpen) return undefined;
+    if (selectedIndex === null) return undefined;
     const onKeyDown = (event) => {
-      if (event.key === "Escape") setLightboxOpen(false);
-      if (event.key === "ArrowLeft") move(-1);
-      if (event.key === "ArrowRight") move(1);
+      if (event.key === "Escape") setSelectedIndex(null);
+      if (event.key === "ArrowLeft") {
+        setSelectedIndex((current) => (current - 1 + images.length) % images.length);
+      }
+      if (event.key === "ArrowRight") {
+        setSelectedIndex((current) => (current + 1) % images.length);
+      }
     };
     document.addEventListener("keydown", onKeyDown);
     return () => document.removeEventListener("keydown", onKeyDown);
-  }, [lightboxOpen, move]);
+  }, [images.length, selectedIndex]);
 
   if (!images.length) return null;
-  const imageAt = (index) => images[(index + images.length) % images.length];
-  const active = imageAt(activeIndex);
+  const active = selectedIndex === null ? null : imageAt(selectedIndex);
   const altFor = (image, fallback) =>
     image?.[`alt_${locale}`] || image?.filename || fallback;
-  const photoLabel = locale === "zh" ? "張照片" : images.length === 1 ? "photo" : "photos";
-  const viewLabel = locale === "zh" ? "放大查看" : "View full size";
-  const eyebrow = locale === "zh" ? "探索社區" : "Explore the property";
   const intro = locale === "zh"
-    ? "從建築外觀到住宅細節，看看 Baydo Pointe 的生活空間。"
-    : "A closer look at the spaces and details that make up life at Baydo Pointe.";
-
-  const photoButton = (image, imageIndex, className) => (
-    <button className={className} type="button" onClick={() => setActiveIndex(imageIndex)}
-            aria-label={`${locale === "zh" ? "查看照片" : "View photo"} ${imageIndex + 1}`}>
-      <img src={image.url} alt={altFor(image, `${title} ${imageIndex + 1}`)} />
-      <span>{String(imageIndex + 1).padStart(2, "0")}</span>
-    </button>
-  );
+    ? "用更緊湊的方式看看 Baydo Pointe 的住宅與生活空間。"
+    : "A compact look at the suites and everyday spaces at Baydo Pointe.";
 
   return (
     <section className="bt-sec bt-site-gallery" aria-label={title}>
       <div className="bt-gallery-heading">
         <div>
-          <span className="bt-gallery-eyebrow">{eyebrow}</span>
+          <span className="bt-gallery-eyebrow">
+            {locale === "zh" ? "探索社區" : "Explore the property"}
+          </span>
           <h2>{title}</h2>
         </div>
         <p>{intro}</p>
-        <span className="bt-gallery-count">
-          {String(images.length).padStart(2, "0")} {photoLabel}
-        </span>
+        <div className="bt-gallery-count">
+          <span>{String(startIndex + 1).padStart(2, "0")}</span>
+          <i />
+          <span>{String(images.length).padStart(2, "0")}</span>
+        </div>
       </div>
 
-      <div className={`bt-gallery-stage ${images.length === 1 ? "single" : ""}`}>
-        <button className="bt-gallery-main" type="button" onClick={() => setLightboxOpen(true)}
-                aria-label={viewLabel}>
-          <img key={active.id} src={active.url} alt={altFor(active, title)} />
-          <span className="bt-gallery-open">{viewLabel} <b>↗</b></span>
-          <span className="bt-gallery-number">
-            {String(activeIndex + 1).padStart(2, "0")} / {String(images.length).padStart(2, "0")}
-          </span>
-        </button>
+      <div className={`bt-gallery-viewport ${moving ? "is-moving" : ""}`}
+           onMouseEnter={() => setPaused(true)}
+           onMouseLeave={() => setPaused(false)}>
+        <div className="bt-gallery-track">
+          {displayed.map(({ image, index }, position) => (
+            <button key={`${image.id}-${startIndex}-${position}`}
+                    className={`bt-gallery-card card-${position}`} type="button"
+                    tabIndex={position < 4 ? 0 : -1}
+                    aria-label={`${locale === "zh" ? "放大照片" : "Open photo"} ${index + 1}`}
+                    onClick={() => {
+                      if (position < 4 && !moving) setSelectedIndex(index);
+                    }}>
+              <img src={image.url} alt={altFor(image, `${title} ${index + 1}`)} />
+              <span className="bt-gallery-shade" />
+              <span className="bt-gallery-card-copy">
+                <small>{String(index + 1).padStart(2, "0")}</small>
+                <strong>{altFor(image, title)}</strong>
+              </span>
+              <span className="bt-gallery-card-open">↗</span>
+            </button>
+          ))}
+        </div>
 
-        {images.length > 1 ? (
-          <div className="bt-gallery-side" aria-label={locale === "zh" ? "更多照片" : "More photos"}>
-            {photoButton(imageAt(activeIndex + 1), (activeIndex + 1) % images.length,
-              "bt-gallery-tile")}
-            {images.length > 2
-              ? photoButton(imageAt(activeIndex + 2), (activeIndex + 2) % images.length,
-                "bt-gallery-tile")
-              : (
-                <button className="bt-gallery-next-panel" type="button" onClick={() => move(1)}>
-                  <span>{locale === "zh" ? "下一張" : "Next photo"}</span>
-                  <strong>→</strong>
-                </button>
-              )}
-          </div>
-        ) : (
-          <div className="bt-gallery-single-panel">
-            <span>Baydo Pointe</span>
-            <strong>{locale === "zh" ? "現代、便利的城市生活" : "Modern living, connected to the city"}</strong>
-            <button type="button" onClick={() => setLightboxOpen(true)}>{viewLabel} →</button>
-          </div>
+        {images.length > 4 && (
+          <>
+            <button className="bt-gallery-rail-arrow previous" type="button" onClick={previous}
+                    aria-label="Previous photo">‹</button>
+            <button className="bt-gallery-rail-arrow next" type="button" onClick={advance}
+                    aria-label="Next photo">›</button>
+          </>
         )}
       </div>
 
-      {images.length > 1 && (
-        <div className="bt-gallery-controls">
-          <div className="bt-gallery-thumbs" role="group"
-               aria-label={locale === "zh" ? "選擇照片" : "Choose a photo"}>
-            {images.map((image, index) => (
-              <button key={image.id} type="button" onClick={() => setActiveIndex(index)}
-                      className={index === activeIndex ? "on" : ""}
-                      aria-label={`${locale === "zh" ? "照片" : "Photo"} ${index + 1}`}
-                      aria-current={index === activeIndex ? "true" : undefined}>
-                <img src={image.url} alt="" />
-              </button>
-            ))}
-          </div>
-          <div className="bt-gallery-nav">
-            <button type="button" onClick={() => move(-1)} aria-label="Previous photo">←</button>
-            <button type="button" onClick={() => move(1)} aria-label="Next photo">→</button>
-          </div>
+      {images.length > 4 && (
+        <div className="bt-gallery-rail-footer">
+          <span className={paused ? "paused" : ""}>
+            <i /> {paused
+              ? (locale === "zh" ? "已暫停" : "Paused")
+              : (locale === "zh" ? "自動播放" : "Auto advancing")}
+          </span>
+          <button type="button" onClick={advance}>
+            {locale === "zh" ? "下一組" : "Next set"} <b>→</b>
+          </button>
         </div>
       )}
 
-      {lightboxOpen && (
+      {active && (
         <div className="bt-gallery-lightbox" role="dialog" aria-modal="true" aria-label={title}
              onMouseDown={(event) => {
-               if (event.target === event.currentTarget) setLightboxOpen(false);
+               if (event.target === event.currentTarget) setSelectedIndex(null);
              }}>
-          <button className="bt-lightbox-close" type="button" onClick={() => setLightboxOpen(false)}
+          <button className="bt-lightbox-close" type="button" onClick={() => setSelectedIndex(null)}
                   aria-label="Close">×</button>
           {images.length > 1 && (
-            <button className="bt-lightbox-prev" type="button" onClick={() => move(-1)}
+            <button className="bt-lightbox-prev" type="button"
+                    onClick={() => setSelectedIndex((selectedIndex - 1 + images.length) % images.length)}
                     aria-label="Previous photo">‹</button>
           )}
           <img src={active.url} alt={altFor(active, title)} />
           {images.length > 1 && (
-            <button className="bt-lightbox-next" type="button" onClick={() => move(1)}
+            <button className="bt-lightbox-next" type="button"
+                    onClick={() => setSelectedIndex((selectedIndex + 1) % images.length)}
                     aria-label="Next photo">›</button>
           )}
-          <span>{activeIndex + 1} / {images.length}</span>
+          <span>{selectedIndex + 1} / {images.length}</span>
         </div>
       )}
     </section>
@@ -1635,57 +1650,69 @@ a{color:inherit}
 .bt-app .bt-site-feature>.bt-site-slideshow{margin-bottom:24px;border-radius:4px}
 .bt-app .bt-site-feature-copy{margin:-6px 0 18px;color:var(--dim);font-size:13.5px;
   line-height:1.75;max-width:54ch}
-.bt-app .bt-site-gallery{padding-top:54px;padding-bottom:56px}
-.bt-app .bt-gallery-heading{display:grid;grid-template-columns:minmax(260px,1.2fr) minmax(280px,.9fr) auto;
-  gap:42px;align-items:end;margin-bottom:25px;padding-top:22px;border-top:1px solid var(--rule)}
-.bt-app .bt-gallery-heading h2{margin:5px 0 0;font-size:clamp(31px,4vw,54px);line-height:1.02}
-.bt-app .bt-gallery-eyebrow,.bt-app .bt-gallery-count{font:10px 'IBM Plex Mono',monospace;
-  text-transform:uppercase;letter-spacing:.15em;color:var(--accent)}
-.bt-app .bt-gallery-heading p{max-width:43ch;margin:0;color:var(--dim);font-size:13.5px;line-height:1.75}
-.bt-app .bt-gallery-count{align-self:start;color:var(--dim);white-space:nowrap;padding-top:4px}
-.bt-app .bt-gallery-stage{display:grid;grid-template-columns:minmax(0,2fr) minmax(220px,.72fr);
-  gap:8px;height:clamp(430px,55vw,620px);overflow:hidden;background:var(--rule)}
-.bt-app .bt-gallery-main,.bt-app .bt-gallery-tile{position:relative;padding:0;border:0;overflow:hidden;
-  background:#DDE5EB;cursor:zoom-in;color:#fff}
-.bt-app .bt-gallery-main img,.bt-app .bt-gallery-tile img{display:block;width:100%;height:100%;object-fit:cover;
+.bt-app .bt-site-gallery{padding-top:42px;padding-bottom:44px}
+.bt-app .bt-gallery-heading{display:grid;grid-template-columns:minmax(240px,1fr) minmax(240px,.72fr) auto;
+  gap:32px;align-items:end;margin-bottom:18px;padding-top:20px;border-top:1px solid var(--rule)}
+.bt-app .bt-gallery-heading h2{margin:5px 0 0;font-size:clamp(30px,3.5vw,44px);line-height:1.04}
+.bt-app .bt-gallery-eyebrow{font:9px 'IBM Plex Mono',monospace;color:var(--accent);
+  text-transform:uppercase;letter-spacing:.16em}
+.bt-app .bt-gallery-heading p{max-width:42ch;margin:0 0 3px;color:var(--dim);font-size:13px;line-height:1.65}
+.bt-app .bt-gallery-count{display:flex;align-items:center;gap:9px;padding-bottom:4px;color:var(--dim);
+  font:9px 'IBM Plex Mono',monospace;letter-spacing:.1em}
+.bt-app .bt-gallery-count i{width:38px;height:1px;background:var(--rule)}
+.bt-app .bt-gallery-viewport{--bt-gallery-gap:10px;position:relative;width:100%;overflow:hidden;
+  border-radius:14px}
+.bt-app .bt-gallery-track{display:flex;align-items:stretch;gap:var(--bt-gallery-gap);width:100%}
+.bt-app .bt-gallery-card{position:relative;flex:0 0 calc((100% - (var(--bt-gallery-gap) * 3))/4);
+  height:270px;min-width:0;padding:0;overflow:hidden;border:0;border-radius:14px;
+  background:#DDE5EB;color:#fff;cursor:zoom-in;isolation:isolate;text-align:left;transform:translateX(0)}
+.bt-app .bt-gallery-card img{display:block;width:100%;height:100%;object-fit:cover;
   transition:transform .65s cubic-bezier(.2,.75,.25,1),filter .35s ease}
-.bt-app .bt-gallery-main:hover img{transform:scale(1.018)}
-.bt-app .bt-gallery-tile{cursor:pointer;text-align:left}
-.bt-app .bt-gallery-tile:hover img{transform:scale(1.04);filter:brightness(.88)}
-.bt-app .bt-gallery-side{display:grid;grid-template-rows:1fr 1fr;gap:8px;min-width:0}
-.bt-app .bt-gallery-tile>span{position:absolute;left:14px;bottom:12px;font:10px 'IBM Plex Mono',monospace;
-  letter-spacing:.12em;text-shadow:0 1px 12px rgba(0,0,0,.55)}
-.bt-app .bt-gallery-open{position:absolute;right:22px;top:20px;display:flex;align-items:center;gap:8px;
-  padding:9px 12px;background:rgba(8,18,31,.62);backdrop-filter:blur(6px);border:1px solid rgba(255,255,255,.3);
-  border-radius:2px;font:10px 'IBM Plex Mono',monospace;text-transform:uppercase;letter-spacing:.08em}
-.bt-app .bt-gallery-open b{font:17px/1 Georgia,serif;font-weight:400}
-.bt-app .bt-gallery-number{position:absolute;left:22px;bottom:20px;font:11px 'IBM Plex Mono',monospace;
-  letter-spacing:.12em;text-shadow:0 1px 14px rgba(0,0,0,.75)}
-.bt-app .bt-gallery-next-panel,.bt-app .bt-gallery-single-panel{border:0;background:var(--ink);color:#fff}
-.bt-app .bt-gallery-next-panel{display:flex;flex-direction:column;justify-content:space-between;align-items:flex-start;
-  padding:22px;cursor:pointer;text-align:left}
-.bt-app .bt-gallery-next-panel span{font:10px 'IBM Plex Mono',monospace;text-transform:uppercase;letter-spacing:.14em}
-.bt-app .bt-gallery-next-panel strong{font:42px/1 Georgia,serif;font-weight:400;color:#D7AF63}
-.bt-app .bt-gallery-single-panel{display:flex;flex-direction:column;justify-content:flex-end;padding:34px}
-.bt-app .bt-gallery-single-panel>span{font:10px 'IBM Plex Mono',monospace;text-transform:uppercase;
-  letter-spacing:.15em;color:#D7AF63;margin-bottom:18px}
-.bt-app .bt-gallery-single-panel strong{font:28px/1.22 'Fraunces','Noto Serif TC',serif;font-weight:500}
-.bt-app .bt-gallery-single-panel button{align-self:flex-start;margin-top:32px;padding:0 0 6px;border:0;
-  border-bottom:1px solid rgba(255,255,255,.45);background:transparent;color:#fff;cursor:pointer;
-  font:11px 'IBM Plex Mono',monospace;text-transform:uppercase;letter-spacing:.08em}
-.bt-app .bt-gallery-controls{display:flex;justify-content:space-between;align-items:center;gap:24px;
-  margin-top:12px}
-.bt-app .bt-gallery-thumbs{display:flex;gap:7px;overflow-x:auto;max-width:calc(100% - 108px);
-  padding:2px 2px 5px;scrollbar-width:thin}
-.bt-app .bt-gallery-thumbs button{flex:0 0 67px;width:67px;height:46px;padding:0;border:1px solid transparent;
-  background:#E5EBF0;cursor:pointer;opacity:.58;transition:opacity .2s,border-color .2s,transform .2s}
-.bt-app .bt-gallery-thumbs button:hover{opacity:.9}
-.bt-app .bt-gallery-thumbs button.on{opacity:1;border-color:var(--accent);transform:translateY(-2px)}
-.bt-app .bt-gallery-thumbs img{display:block;width:100%;height:100%;object-fit:cover}
-.bt-app .bt-gallery-nav{display:flex;gap:7px;flex:0 0 auto}
-.bt-app .bt-gallery-nav button{width:42px;height:42px;padding:0;border:1px solid var(--rule);background:transparent;
-  color:var(--ink);font-size:19px;cursor:pointer;transition:background .2s,color .2s,border-color .2s}
-.bt-app .bt-gallery-nav button:hover{background:var(--ink);border-color:var(--ink);color:#fff}
+.bt-app .bt-gallery-card:hover img{transform:scale(1.035);filter:brightness(.86)}
+.bt-app .bt-gallery-shade{position:absolute;inset:38% 0 0;z-index:1;
+  background:linear-gradient(transparent,rgba(8,18,31,.78));opacity:0;transition:opacity .3s ease}
+.bt-app .bt-gallery-card-copy{position:absolute;z-index:2;left:16px;right:40px;bottom:15px;
+  display:flex;flex-direction:column;gap:2px;opacity:0;transform:translateY(8px);
+  transition:opacity .3s ease,transform .3s ease}
+.bt-app .bt-gallery-card-copy small{font:8px 'IBM Plex Mono',monospace;letter-spacing:.13em;
+  color:rgba(255,255,255,.72)}
+.bt-app .bt-gallery-card-copy strong{font:16px 'Fraunces','Noto Serif TC',serif;
+  font-weight:500;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.bt-app .bt-gallery-card-open{position:absolute;z-index:2;right:16px;bottom:15px;font-size:18px;
+  opacity:0;transform:translateY(8px);transition:opacity .3s ease,transform .3s ease}
+.bt-app .bt-gallery-card:hover .bt-gallery-shade,
+.bt-app .bt-gallery-card:hover .bt-gallery-card-copy,
+.bt-app .bt-gallery-card:hover .bt-gallery-card-open{opacity:1;transform:translateY(0)}
+.bt-app .bt-gallery-card.card-4{pointer-events:none}
+.bt-app .bt-gallery-viewport.is-moving .bt-gallery-card{animation:bt-gallery-shift 680ms cubic-bezier(.22,.72,.2,1) forwards;
+  pointer-events:none}
+.bt-app .bt-gallery-viewport.is-moving .bt-gallery-card.card-0{animation-name:bt-gallery-fade-left}
+.bt-app .bt-gallery-viewport.is-moving .bt-gallery-card.card-4{animation-name:bt-gallery-enter-right}
+@keyframes bt-gallery-shift{from{transform:translateX(0)}
+  to{transform:translateX(calc(-100% - var(--bt-gallery-gap)))}}
+@keyframes bt-gallery-fade-left{0%{opacity:1;transform:translateX(0) scale(1)}
+  68%{opacity:0}100%{opacity:0;transform:translateX(calc(-100% - var(--bt-gallery-gap))) scale(.96)}}
+@keyframes bt-gallery-enter-right{0%{opacity:0;transform:translateX(20px) scale(.97)}
+  30%{opacity:0}100%{opacity:1;transform:translateX(calc(-100% - var(--bt-gallery-gap))) scale(1)}}
+.bt-app .bt-gallery-rail-arrow{position:absolute;z-index:4;top:50%;display:flex;align-items:center;
+  justify-content:center;width:35px;height:47px;padding:0;transform:translateY(-50%);
+  border:1px solid rgba(255,255,255,.5);background:rgba(9,20,34,.58);color:#fff;cursor:pointer;
+  font:28px/1 Georgia,serif;opacity:0;backdrop-filter:blur(6px);transition:opacity .25s,background .25s}
+.bt-app .bt-gallery-viewport:hover .bt-gallery-rail-arrow{opacity:1}
+.bt-app .bt-gallery-rail-arrow:hover{background:rgba(9,20,34,.82)}
+.bt-app .bt-gallery-rail-arrow.previous{left:9px;border-radius:0 7px 7px 0}
+.bt-app .bt-gallery-rail-arrow.next{right:9px;border-radius:7px 0 0 7px}
+.bt-app .bt-gallery-rail-footer{display:flex;justify-content:space-between;align-items:center;
+  min-height:36px;padding:7px 2px 0}
+.bt-app .bt-gallery-rail-footer>span{display:flex;align-items:center;gap:7px;color:var(--dim);
+  font:8px 'IBM Plex Mono',monospace;text-transform:uppercase;letter-spacing:.12em}
+.bt-app .bt-gallery-rail-footer>span i{width:5px;height:5px;border-radius:50%;
+  background:var(--accent);animation:bt-gallery-pulse 1.8s ease infinite}
+.bt-app .bt-gallery-rail-footer>span.paused i{background:#D7AF63;animation:none}
+@keyframes bt-gallery-pulse{50%{opacity:.28}}
+.bt-app .bt-gallery-rail-footer>button{padding:3px 0;border:0;background:transparent;color:var(--ink);
+  cursor:pointer;font:9px 'IBM Plex Mono',monospace;text-transform:uppercase;letter-spacing:.1em}
+.bt-app .bt-gallery-rail-footer>button b{margin-left:7px;font:16px/1 Georgia,serif;font-weight:400}
 .bt-app .bt-gallery-lightbox{position:fixed;z-index:1000;inset:0;display:flex;align-items:center;justify-content:center;
   padding:58px 74px;background:rgba(5,12,21,.94);backdrop-filter:blur(8px)}
 .bt-app .bt-gallery-lightbox img{display:block;max-width:100%;max-height:calc(100vh - 116px);object-fit:contain;
@@ -1734,20 +1761,12 @@ a{color:inherit}
   .bt-app .bt-hero--photo .bt-hero-in::before{display:none}
   .bt-app .bt-hero-media .bt-slide-arrow,.bt-app .bt-hero-media .bt-slide-dots{display:none}
   .bt-app .bt-site-intro{padding-top:30px;padding-bottom:0}
-  .bt-app .bt-site-gallery{padding-top:38px;padding-bottom:40px}
+  .bt-app .bt-site-gallery{padding-top:34px;padding-bottom:36px}
   .bt-app .bt-gallery-heading{grid-template-columns:1fr auto;gap:18px;margin-bottom:18px}
   .bt-app .bt-gallery-heading p{grid-column:1/-1;grid-row:2}
-  .bt-app .bt-gallery-heading h2{font-size:36px}
+  .bt-app .bt-gallery-heading h2{font-size:34px}
   .bt-app .bt-gallery-count{grid-column:2;grid-row:1}
-  .bt-app .bt-gallery-stage,.bt-app .bt-gallery-stage.single{display:block;height:auto;background:transparent}
-  .bt-app .bt-gallery-main{display:block;width:100%;height:auto;aspect-ratio:4/3}
-  .bt-app .bt-gallery-side,.bt-app .bt-gallery-single-panel{display:none}
-  .bt-app .bt-gallery-open{right:13px;top:13px;padding:8px 9px}
-  .bt-app .bt-gallery-number{left:14px;bottom:13px}
-  .bt-app .bt-gallery-controls{margin-top:10px}
-  .bt-app .bt-gallery-thumbs{max-width:calc(100% - 94px)}
-  .bt-app .bt-gallery-thumbs button{flex-basis:58px;width:58px;height:42px}
-  .bt-app .bt-gallery-nav button{width:38px;height:38px}
+  .bt-app .bt-gallery-card{height:220px}
   .bt-app .bt-gallery-lightbox{padding:64px 14px}
   .bt-app .bt-lightbox-prev,.bt-app .bt-lightbox-next{width:38px;height:48px;background:rgba(0,0,0,.48)}
   .bt-app .bt-lightbox-prev{left:8px}.bt-app .bt-lightbox-next{right:8px}
@@ -1755,5 +1774,15 @@ a{color:inherit}
   .bt-app .bt-availability-showcase{grid-template-columns:1fr;gap:22px}
   .bt-app .bt-availability-preview{min-height:300px;order:-1}
   .bt-app .bt-availability-preview img,.bt-app .bt-preview-empty{min-height:300px}
+}
+@media (max-width:560px){
+  .bt-app .bt-gallery-heading{grid-template-columns:1fr;gap:10px}
+  .bt-app .bt-gallery-heading p{grid-column:1;grid-row:auto;font-size:12px}
+  .bt-app .bt-gallery-count{display:none}
+  .bt-app .bt-gallery-card{flex-basis:78%;height:240px;border-radius:13px}
+  .bt-app .bt-gallery-viewport{border-radius:13px}
+  .bt-app .bt-gallery-rail-arrow{opacity:1;width:33px;height:44px}
+  .bt-app .bt-gallery-shade,.bt-app .bt-gallery-card-copy,.bt-app .bt-gallery-card-open{
+    opacity:1;transform:none}
 }
 `; }
