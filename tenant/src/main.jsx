@@ -148,6 +148,138 @@ function SiteSlideshow({ images, locale, className = "", label = "Photos" }) {
   );
 }
 
+function GalleryShowcase({ images, locale, title }) {
+  const [activeIndex, setActiveIndex] = useState(0);
+  const [lightboxOpen, setLightboxOpen] = useState(false);
+
+  useEffect(() => {
+    setActiveIndex((current) => Math.min(current, Math.max(images.length - 1, 0)));
+  }, [images.length]);
+
+  const move = useCallback((amount) => {
+    setActiveIndex((current) => (current + amount + images.length) % images.length);
+  }, [images.length]);
+
+  useEffect(() => {
+    if (!lightboxOpen) return undefined;
+    const onKeyDown = (event) => {
+      if (event.key === "Escape") setLightboxOpen(false);
+      if (event.key === "ArrowLeft") move(-1);
+      if (event.key === "ArrowRight") move(1);
+    };
+    document.addEventListener("keydown", onKeyDown);
+    return () => document.removeEventListener("keydown", onKeyDown);
+  }, [lightboxOpen, move]);
+
+  if (!images.length) return null;
+  const imageAt = (index) => images[(index + images.length) % images.length];
+  const active = imageAt(activeIndex);
+  const altFor = (image, fallback) =>
+    image?.[`alt_${locale}`] || image?.filename || fallback;
+  const photoLabel = locale === "zh" ? "張照片" : images.length === 1 ? "photo" : "photos";
+  const viewLabel = locale === "zh" ? "放大查看" : "View full size";
+  const eyebrow = locale === "zh" ? "探索社區" : "Explore the property";
+  const intro = locale === "zh"
+    ? "從建築外觀到住宅細節，看看 Baydo Pointe 的生活空間。"
+    : "A closer look at the spaces and details that make up life at Baydo Pointe.";
+
+  const photoButton = (image, imageIndex, className) => (
+    <button className={className} type="button" onClick={() => setActiveIndex(imageIndex)}
+            aria-label={`${locale === "zh" ? "查看照片" : "View photo"} ${imageIndex + 1}`}>
+      <img src={image.url} alt={altFor(image, `${title} ${imageIndex + 1}`)} />
+      <span>{String(imageIndex + 1).padStart(2, "0")}</span>
+    </button>
+  );
+
+  return (
+    <section className="bt-sec bt-site-gallery" aria-label={title}>
+      <div className="bt-gallery-heading">
+        <div>
+          <span className="bt-gallery-eyebrow">{eyebrow}</span>
+          <h2>{title}</h2>
+        </div>
+        <p>{intro}</p>
+        <span className="bt-gallery-count">
+          {String(images.length).padStart(2, "0")} {photoLabel}
+        </span>
+      </div>
+
+      <div className={`bt-gallery-stage ${images.length === 1 ? "single" : ""}`}>
+        <button className="bt-gallery-main" type="button" onClick={() => setLightboxOpen(true)}
+                aria-label={viewLabel}>
+          <img key={active.id} src={active.url} alt={altFor(active, title)} />
+          <span className="bt-gallery-open">{viewLabel} <b>↗</b></span>
+          <span className="bt-gallery-number">
+            {String(activeIndex + 1).padStart(2, "0")} / {String(images.length).padStart(2, "0")}
+          </span>
+        </button>
+
+        {images.length > 1 ? (
+          <div className="bt-gallery-side" aria-label={locale === "zh" ? "更多照片" : "More photos"}>
+            {photoButton(imageAt(activeIndex + 1), (activeIndex + 1) % images.length,
+              "bt-gallery-tile")}
+            {images.length > 2
+              ? photoButton(imageAt(activeIndex + 2), (activeIndex + 2) % images.length,
+                "bt-gallery-tile")
+              : (
+                <button className="bt-gallery-next-panel" type="button" onClick={() => move(1)}>
+                  <span>{locale === "zh" ? "下一張" : "Next photo"}</span>
+                  <strong>→</strong>
+                </button>
+              )}
+          </div>
+        ) : (
+          <div className="bt-gallery-single-panel">
+            <span>Baydo Pointe</span>
+            <strong>{locale === "zh" ? "現代、便利的城市生活" : "Modern living, connected to the city"}</strong>
+            <button type="button" onClick={() => setLightboxOpen(true)}>{viewLabel} →</button>
+          </div>
+        )}
+      </div>
+
+      {images.length > 1 && (
+        <div className="bt-gallery-controls">
+          <div className="bt-gallery-thumbs" role="group"
+               aria-label={locale === "zh" ? "選擇照片" : "Choose a photo"}>
+            {images.map((image, index) => (
+              <button key={image.id} type="button" onClick={() => setActiveIndex(index)}
+                      className={index === activeIndex ? "on" : ""}
+                      aria-label={`${locale === "zh" ? "照片" : "Photo"} ${index + 1}`}
+                      aria-current={index === activeIndex ? "true" : undefined}>
+                <img src={image.url} alt="" />
+              </button>
+            ))}
+          </div>
+          <div className="bt-gallery-nav">
+            <button type="button" onClick={() => move(-1)} aria-label="Previous photo">←</button>
+            <button type="button" onClick={() => move(1)} aria-label="Next photo">→</button>
+          </div>
+        </div>
+      )}
+
+      {lightboxOpen && (
+        <div className="bt-gallery-lightbox" role="dialog" aria-modal="true" aria-label={title}
+             onMouseDown={(event) => {
+               if (event.target === event.currentTarget) setLightboxOpen(false);
+             }}>
+          <button className="bt-lightbox-close" type="button" onClick={() => setLightboxOpen(false)}
+                  aria-label="Close">×</button>
+          {images.length > 1 && (
+            <button className="bt-lightbox-prev" type="button" onClick={() => move(-1)}
+                    aria-label="Previous photo">‹</button>
+          )}
+          <img src={active.url} alt={altFor(active, title)} />
+          {images.length > 1 && (
+            <button className="bt-lightbox-next" type="button" onClick={() => move(1)}
+                    aria-label="Next photo">›</button>
+          )}
+          <span>{activeIndex + 1} / {images.length}</span>
+        </div>
+      )}
+    </section>
+  );
+}
+
 function AvailabilityPreview({ type, fallbackImage, locale }) {
   const [floorplanFailed, setFloorplanFailed] = useState(false);
   const typeCode = type?.code || type?.unit_type_code || null;
@@ -629,15 +761,8 @@ function Home() {
       </section>
 
       {galleryImages.length > 0 && (
-        <section className="bt-sec bt-site-gallery">
-          <div className="bt-sec-h">
-            <h2>{copy.gallery_title || "Baydo Pointe"}</h2>
-            <span>{galleryImages.length} {galleryImages.length === 1 ? "photo" : "photos"}</span>
-          </div>
-          <SiteSlideshow images={galleryImages} locale={locale}
-                         className="bt-gallery-slideshow"
-                         label={copy.gallery_title || "Baydo Pointe gallery"} />
-        </section>
+        <GalleryShowcase images={galleryImages} locale={locale}
+                         title={copy.gallery_title || "Baydo Pointe"} />
       )}
 
       <ParkingHonesty />
@@ -1510,12 +1635,69 @@ a{color:inherit}
 .bt-app .bt-site-feature>.bt-site-slideshow{margin-bottom:24px;border-radius:4px}
 .bt-app .bt-site-feature-copy{margin:-6px 0 18px;color:var(--dim);font-size:13.5px;
   line-height:1.75;max-width:54ch}
-.bt-app .bt-site-gallery{padding-top:24px}
-.bt-app .bt-site-gallery .bt-sec-h{max-width:none}
-.bt-app .bt-site-gallery .bt-sec-h>span{font:11px 'IBM Plex Mono',monospace;
-  color:var(--dim);text-transform:uppercase;letter-spacing:.08em}
-.bt-app .bt-gallery-slideshow{border-radius:4px}
-.bt-app .bt-gallery-slideshow img{aspect-ratio:2/1;max-height:570px}
+.bt-app .bt-site-gallery{padding-top:54px;padding-bottom:56px}
+.bt-app .bt-gallery-heading{display:grid;grid-template-columns:minmax(260px,1.2fr) minmax(280px,.9fr) auto;
+  gap:42px;align-items:end;margin-bottom:25px;padding-top:22px;border-top:1px solid var(--rule)}
+.bt-app .bt-gallery-heading h2{margin:5px 0 0;font-size:clamp(31px,4vw,54px);line-height:1.02}
+.bt-app .bt-gallery-eyebrow,.bt-app .bt-gallery-count{font:10px 'IBM Plex Mono',monospace;
+  text-transform:uppercase;letter-spacing:.15em;color:var(--accent)}
+.bt-app .bt-gallery-heading p{max-width:43ch;margin:0;color:var(--dim);font-size:13.5px;line-height:1.75}
+.bt-app .bt-gallery-count{align-self:start;color:var(--dim);white-space:nowrap;padding-top:4px}
+.bt-app .bt-gallery-stage{display:grid;grid-template-columns:minmax(0,2fr) minmax(220px,.72fr);
+  gap:8px;height:clamp(430px,55vw,620px);overflow:hidden;background:var(--rule)}
+.bt-app .bt-gallery-main,.bt-app .bt-gallery-tile{position:relative;padding:0;border:0;overflow:hidden;
+  background:#DDE5EB;cursor:zoom-in;color:#fff}
+.bt-app .bt-gallery-main img,.bt-app .bt-gallery-tile img{display:block;width:100%;height:100%;object-fit:cover;
+  transition:transform .65s cubic-bezier(.2,.75,.25,1),filter .35s ease}
+.bt-app .bt-gallery-main:hover img{transform:scale(1.018)}
+.bt-app .bt-gallery-tile{cursor:pointer;text-align:left}
+.bt-app .bt-gallery-tile:hover img{transform:scale(1.04);filter:brightness(.88)}
+.bt-app .bt-gallery-side{display:grid;grid-template-rows:1fr 1fr;gap:8px;min-width:0}
+.bt-app .bt-gallery-tile>span{position:absolute;left:14px;bottom:12px;font:10px 'IBM Plex Mono',monospace;
+  letter-spacing:.12em;text-shadow:0 1px 12px rgba(0,0,0,.55)}
+.bt-app .bt-gallery-open{position:absolute;right:22px;top:20px;display:flex;align-items:center;gap:8px;
+  padding:9px 12px;background:rgba(8,18,31,.62);backdrop-filter:blur(6px);border:1px solid rgba(255,255,255,.3);
+  border-radius:2px;font:10px 'IBM Plex Mono',monospace;text-transform:uppercase;letter-spacing:.08em}
+.bt-app .bt-gallery-open b{font:17px/1 Georgia,serif;font-weight:400}
+.bt-app .bt-gallery-number{position:absolute;left:22px;bottom:20px;font:11px 'IBM Plex Mono',monospace;
+  letter-spacing:.12em;text-shadow:0 1px 14px rgba(0,0,0,.75)}
+.bt-app .bt-gallery-next-panel,.bt-app .bt-gallery-single-panel{border:0;background:var(--ink);color:#fff}
+.bt-app .bt-gallery-next-panel{display:flex;flex-direction:column;justify-content:space-between;align-items:flex-start;
+  padding:22px;cursor:pointer;text-align:left}
+.bt-app .bt-gallery-next-panel span{font:10px 'IBM Plex Mono',monospace;text-transform:uppercase;letter-spacing:.14em}
+.bt-app .bt-gallery-next-panel strong{font:42px/1 Georgia,serif;font-weight:400;color:#D7AF63}
+.bt-app .bt-gallery-single-panel{display:flex;flex-direction:column;justify-content:flex-end;padding:34px}
+.bt-app .bt-gallery-single-panel>span{font:10px 'IBM Plex Mono',monospace;text-transform:uppercase;
+  letter-spacing:.15em;color:#D7AF63;margin-bottom:18px}
+.bt-app .bt-gallery-single-panel strong{font:28px/1.22 'Fraunces','Noto Serif TC',serif;font-weight:500}
+.bt-app .bt-gallery-single-panel button{align-self:flex-start;margin-top:32px;padding:0 0 6px;border:0;
+  border-bottom:1px solid rgba(255,255,255,.45);background:transparent;color:#fff;cursor:pointer;
+  font:11px 'IBM Plex Mono',monospace;text-transform:uppercase;letter-spacing:.08em}
+.bt-app .bt-gallery-controls{display:flex;justify-content:space-between;align-items:center;gap:24px;
+  margin-top:12px}
+.bt-app .bt-gallery-thumbs{display:flex;gap:7px;overflow-x:auto;max-width:calc(100% - 108px);
+  padding:2px 2px 5px;scrollbar-width:thin}
+.bt-app .bt-gallery-thumbs button{flex:0 0 67px;width:67px;height:46px;padding:0;border:1px solid transparent;
+  background:#E5EBF0;cursor:pointer;opacity:.58;transition:opacity .2s,border-color .2s,transform .2s}
+.bt-app .bt-gallery-thumbs button:hover{opacity:.9}
+.bt-app .bt-gallery-thumbs button.on{opacity:1;border-color:var(--accent);transform:translateY(-2px)}
+.bt-app .bt-gallery-thumbs img{display:block;width:100%;height:100%;object-fit:cover}
+.bt-app .bt-gallery-nav{display:flex;gap:7px;flex:0 0 auto}
+.bt-app .bt-gallery-nav button{width:42px;height:42px;padding:0;border:1px solid var(--rule);background:transparent;
+  color:var(--ink);font-size:19px;cursor:pointer;transition:background .2s,color .2s,border-color .2s}
+.bt-app .bt-gallery-nav button:hover{background:var(--ink);border-color:var(--ink);color:#fff}
+.bt-app .bt-gallery-lightbox{position:fixed;z-index:1000;inset:0;display:flex;align-items:center;justify-content:center;
+  padding:58px 74px;background:rgba(5,12,21,.94);backdrop-filter:blur(8px)}
+.bt-app .bt-gallery-lightbox img{display:block;max-width:100%;max-height:calc(100vh - 116px);object-fit:contain;
+  box-shadow:0 22px 70px rgba(0,0,0,.38)}
+.bt-app .bt-gallery-lightbox>button{position:absolute;border:1px solid rgba(255,255,255,.35);background:rgba(0,0,0,.18);
+  color:#fff;cursor:pointer;display:flex;align-items:center;justify-content:center}
+.bt-app .bt-lightbox-close{right:24px;top:20px;width:42px;height:42px;font:31px/1 Arial,sans-serif}
+.bt-app .bt-lightbox-prev,.bt-app .bt-lightbox-next{top:50%;width:44px;height:58px;
+  transform:translateY(-50%);font:34px/1 Georgia,serif}
+.bt-app .bt-lightbox-prev{left:18px}.bt-app .bt-lightbox-next{right:18px}
+.bt-app .bt-gallery-lightbox>span{position:absolute;left:50%;bottom:22px;transform:translateX(-50%);
+  color:rgba(255,255,255,.78);font:10px 'IBM Plex Mono',monospace;letter-spacing:.14em}
 
 .bt-app .bt-availability-showcase{display:grid;grid-template-columns:minmax(0,660px) minmax(280px,1fr);
   gap:38px;align-items:stretch}
@@ -1552,7 +1734,24 @@ a{color:inherit}
   .bt-app .bt-hero--photo .bt-hero-in::before{display:none}
   .bt-app .bt-hero-media .bt-slide-arrow,.bt-app .bt-hero-media .bt-slide-dots{display:none}
   .bt-app .bt-site-intro{padding-top:30px;padding-bottom:0}
-  .bt-app .bt-gallery-slideshow img{aspect-ratio:4/3}
+  .bt-app .bt-site-gallery{padding-top:38px;padding-bottom:40px}
+  .bt-app .bt-gallery-heading{grid-template-columns:1fr auto;gap:18px;margin-bottom:18px}
+  .bt-app .bt-gallery-heading p{grid-column:1/-1;grid-row:2}
+  .bt-app .bt-gallery-heading h2{font-size:36px}
+  .bt-app .bt-gallery-count{grid-column:2;grid-row:1}
+  .bt-app .bt-gallery-stage,.bt-app .bt-gallery-stage.single{display:block;height:auto;background:transparent}
+  .bt-app .bt-gallery-main{display:block;width:100%;height:auto;aspect-ratio:4/3}
+  .bt-app .bt-gallery-side,.bt-app .bt-gallery-single-panel{display:none}
+  .bt-app .bt-gallery-open{right:13px;top:13px;padding:8px 9px}
+  .bt-app .bt-gallery-number{left:14px;bottom:13px}
+  .bt-app .bt-gallery-controls{margin-top:10px}
+  .bt-app .bt-gallery-thumbs{max-width:calc(100% - 94px)}
+  .bt-app .bt-gallery-thumbs button{flex-basis:58px;width:58px;height:42px}
+  .bt-app .bt-gallery-nav button{width:38px;height:38px}
+  .bt-app .bt-gallery-lightbox{padding:64px 14px}
+  .bt-app .bt-lightbox-prev,.bt-app .bt-lightbox-next{width:38px;height:48px;background:rgba(0,0,0,.48)}
+  .bt-app .bt-lightbox-prev{left:8px}.bt-app .bt-lightbox-next{right:8px}
+  .bt-app .bt-lightbox-close{right:12px;top:12px}
   .bt-app .bt-availability-showcase{grid-template-columns:1fr;gap:22px}
   .bt-app .bt-availability-preview{min-height:300px;order:-1}
   .bt-app .bt-availability-preview img,.bt-app .bt-preview-empty{min-height:300px}
