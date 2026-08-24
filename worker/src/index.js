@@ -53,9 +53,10 @@ app.use("*", async (c, next) => {
   c.header("X-Frame-Options", "DENY");
   c.header("Referrer-Policy", "no-referrer");
   c.header("Permissions-Policy", "camera=(), microphone=(), geolocation=()");
-  if (c.req.path.startsWith("/api/public/site-images/") ||
-      c.req.path.startsWith("/api/public/floorplan-images/"))
+  if (c.req.path.startsWith("/api/public/site-images/"))
     c.header("Cache-Control", "public, max-age=86400");
+  else if (c.req.path.startsWith("/api/public/floorplan-images/"))
+    c.header("Cache-Control", "public, max-age=60");
   else if (c.req.path === "/api/public/site-content")
     c.header("Cache-Control", "public, max-age=60, stale-while-revalidate=300");
   else c.header("Cache-Control", "no-store");

@@ -25,6 +25,7 @@ const safeFilename = (value, fallback = "floorplan") => {
     .replace(/[^A-Za-z0-9._-]+/g, "-").replace(/^-+|-+$/g, "");
   return name || fallback;
 };
+const floorplanKey = (code) => `floorplans/${safeFilename(code)}/current`;
 
 const ymdInEdmonton = (value = new Date()) => {
   const parts = new Intl.DateTimeFormat("en-CA", {
@@ -113,22 +114,16 @@ r.get("/public/availability", async (c) => {
 
 r.get("/public/floorplan-images/:code", async (c) => {
   const code = decodeURIComponent(c.req.param("code"));
-  const [floorplan] = await c.get("db")`
-    SELECT floorplan_storage_key, floorplan_filename, floorplan_mime_type
-    FROM unit_types
-    WHERE replace(code, ' (M)', '') = ${code} AND floorplan_storage_key IS NOT NULL
-    ORDER BY is_mirrored, code LIMIT 1`;
-  if (!floorplan) return c.json({ code: "NOT_FOUND" }, 404);
   if (!c.env.FILES) return c.json({ code: "FILE_STORAGE_NOT_CONFIGURED" }, 503);
-  const object = await c.env.FILES.get(floorplan.floorplan_storage_key);
+  const object = await c.env.FILES.get(floorplanKey(code));
   if (!object) return c.json({ code: "FILE_NOT_FOUND" }, 404);
   const headers = new Headers();
   object.writeHttpMetadata(headers);
-  headers.set("Content-Type", floorplan.floorplan_mime_type || "image/jpeg");
-  headers.set("Cache-Control", "public, max-age=86400");
+  headers.set("Content-Type", object.httpMetadata?.contentType || "image/jpeg");
+  headers.set("Cache-Control", "public, max-age=60");
   headers.set("ETag", object.httpEtag);
   headers.set("Content-Disposition",
-    `inline; filename="${safeFilename(floorplan.floorplan_filename)}"`);
+    `inline; filename="${safeFilename(object.customMetadata?.filename, `${code}-floorplan`)}"`);
   return new Response(object.body, { headers });
 });
 

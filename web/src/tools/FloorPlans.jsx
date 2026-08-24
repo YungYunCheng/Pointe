@@ -11,7 +11,7 @@ export default function FloorPlans({ session }) {
     try {
       const data = await api.get("/unit-types");
       if (!Array.isArray(data?.unit_types)) throw new Error("INVALID_UNIT_TYPES_RESPONSE");
-      setRows(data.unit_types.filter((row) => row && typeof row === "object"));
+      setRows(data.unit_types.filter((row) => row && typeof row === "object" && !row.is_mirrored));
       setError("");
     }
     catch (e) { setError(e.code || "LOAD_FAILED"); }
@@ -46,8 +46,8 @@ export default function FloorPlans({ session }) {
     {error && <div className="fp-error">{error}</div>}
     <div className="fp-grid">{rows.map((r) => <article key={r.code}>
       <div className="fp-cardh"><strong>{r.code}</strong><span>{r.bedroom_label_en}</span></div>
-      <div className={`fp-image ${r.floorplan_storage_key ? "live" : "empty"}`}>
-        {r.floorplan_storage_key
+      <div className={`fp-image ${r.has_floorplan_image ? "live" : "empty"}`}>
+        {r.has_floorplan_image
           ? <img src={`/api/public/floorplan-images/${encodeURIComponent(r.code)}?v=${encodeURIComponent(r.floorplan_updated_at || "")}`} alt={`${r.code} floor plan`} />
           : <span>No floor-plan image</span>}
       </div>
@@ -58,8 +58,8 @@ export default function FloorPlans({ session }) {
       <div className="fp-actions">{r.virtual_tour_url && <a href={r.virtual_tour_url} target="_blank" rel="noreferrer">Open tour</a>}
         {canEdit && <label className="fp-upload"><input type="file" accept="image/jpeg,image/png,image/webp,image/avif"
           disabled={!!busy} onChange={(e) => { uploadImage(r, e.target.files?.[0]); e.target.value = ""; }} />
-          {busy === r.code ? "Uploading…" : r.floorplan_storage_key ? "Replace image" : "Upload image"}</label>}
-        {canEdit && r.floorplan_storage_key && <button disabled={!!busy} onClick={() => removeImage(r)}>Remove image</button>}
+          {busy === r.code ? "Uploading…" : r.has_floorplan_image ? "Replace image" : "Upload image"}</label>}
+        {canEdit && r.has_floorplan_image && <button disabled={!!busy} onClick={() => removeImage(r)}>Remove image</button>}
         {canEdit && <button onClick={() => setEditing(r)}>{r.virtual_tour_url ? "Edit tour" : "Add tour"}</button>}</div>
     </article>)}</div>
     {editing && <Editor row={editing} onClose={() => setEditing(null)} onSaved={() => { setEditing(null); load(); }} />}

@@ -14,6 +14,7 @@ const safeFilename = (value, fallback = "floorplan") => {
     .replace(/[^A-Za-z0-9._-]+/g, "-").replace(/^-+|-+$/g, "");
   return name || fallback;
 };
+const floorplanKey = (code) => `floorplans/${safeFilename(code)}/current`;
 
 const amount = (value) => {
   const n = Number(value);
@@ -439,9 +440,16 @@ r.post("/purchase-orders/:id/bill", require_("po.bill"), async (c) => {
 
 /* Floor-plan management. Raw tour packages remain on the future company
  * server; this endpoint never accepts a file it cannot safely store. */
-r.get("/unit-types", require_("units.view"), async (c) => c.json({
-  unit_types: await c.get("db")`SELECT * FROM unit_types ORDER BY area_sqft, code`,
-}));
+r.get("/unit-types", require_("units.view"), async (c) => {
+  const rows = await c.get("db")`SELECT * FROM unit_types ORDER BY area_sqft, code`;
+  const unitTypes = await Promise.all(rows.map(async (row) => {
+    const object = c.env.FILES ? await c.env.FILES.head(floorplanKey(row.code)) : null;
+    return { ...row, has_floorplan_image: !!object,
+      floorplan_updated_at: object?.customMetadata?.uploaded_at ?? null,
+      floorplan_image_url: `/api/public/floorplan-images/${encodeURIComponent(row.code)}` };
+  }));
+  return c.json({ unit_types: unitTypes });
+});
 
 r.patch("/unit-types/:code/virtual-tour", require_("floorplans.manage"), async (c) => {
   const body = await c.req.json().catch(() => ({}));
@@ -465,7 +473,7 @@ r.post("/unit-types/:code/floorplan-image", require_("floorplans.manage"), async
   if (!c.env.FILES) return c.json({ code: "FILE_STORAGE_NOT_CONFIGURED" }, 503);
   const code = decodeURIComponent(c.req.param("code"));
   const sql = c.get("db");
-  const [existing] = await sql`SELECT floorplan_storage_key FROM unit_types WHERE code = ${code}`;
+  const [existing] = await sql`SELECT code FROM unit_types WHERE code = ${code}`;
   if (!existing) return c.json({ code: "NOT_FOUND" }, 404);
   const body = await c.req.parseBody().catch(() => ({}));
   const file = body.file;
@@ -478,44 +486,23 @@ r.post("/unit-types/:code/floorplan-image", require_("floorplans.manage"), async
 
   const user = c.get("user");
   const filename = safeFilename(file.name, `floorplan.${FLOORPLAN_TYPES.get(file.type)}`);
-  const key = `floorplans/${safeFilename(code)}/${uid("fpi_")}-${filename}`;
+  const key = floorplanKey(code);
   await c.env.FILES.put(key, new Uint8Array(await file.arrayBuffer()), {
     httpMetadata: { contentType: file.type },
-    customMetadata: { unit_type_code: code, uploaded_by: user.id },
+    customMetadata: { unit_type_code: code, uploaded_by: user.id, filename,
+      uploaded_at: new Date().toISOString() },
   });
-
-  try {
-    const [unitType] = await sql`
-      UPDATE unit_types SET floorplan_storage_key = ${key},
-        floorplan_filename = ${filename}, floorplan_mime_type = ${file.type},
-        floorplan_size_bytes = ${file.size}, floorplan_updated_by = ${user.id},
-        floorplan_updated_at = now()
-      WHERE code = ${code}
-      RETURNING *`;
-    if (existing.floorplan_storage_key && existing.floorplan_storage_key !== key)
-      await c.env.FILES.delete(existing.floorplan_storage_key).catch(() => {});
-    await audit(c, { action: "floorplan.image.upload", entityType: "unit_type",
-      entityId: code, after: { filename, size_bytes: file.size } });
-    return c.json({ unit_type: unitType,
-      image_url: `/api/public/floorplan-images/${encodeURIComponent(code)}` }, 201);
-  } catch (error) {
-    await c.env.FILES.delete(key).catch(() => {});
-    throw error;
-  }
+  await audit(c, { action: "floorplan.image.upload", entityType: "unit_type",
+    entityId: code, after: { filename, size_bytes: file.size } });
+  return c.json({ image_url: `/api/public/floorplan-images/${encodeURIComponent(code)}` }, 201);
 });
 
 r.delete("/unit-types/:code/floorplan-image", require_("floorplans.manage"), async (c) => {
   const code = decodeURIComponent(c.req.param("code"));
   const sql = c.get("db");
-  const [existing] = await sql`SELECT floorplan_storage_key FROM unit_types WHERE code = ${code}`;
+  const [existing] = await sql`SELECT code FROM unit_types WHERE code = ${code}`;
   if (!existing) return c.json({ code: "NOT_FOUND" }, 404);
-  await sql`
-    UPDATE unit_types SET floorplan_storage_key = NULL, floorplan_filename = NULL,
-      floorplan_mime_type = NULL, floorplan_size_bytes = NULL,
-      floorplan_updated_by = ${c.get("user").id}, floorplan_updated_at = now()
-    WHERE code = ${code}`;
-  if (existing.floorplan_storage_key && c.env.FILES)
-    await c.env.FILES.delete(existing.floorplan_storage_key).catch(() => {});
+  if (c.env.FILES) await c.env.FILES.delete(floorplanKey(code)).catch(() => {});
   await audit(c, { action: "floorplan.image.delete", entityType: "unit_type", entityId: code });
   return c.json({ ok: true });
 });
