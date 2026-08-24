@@ -157,7 +157,7 @@ function AvailabilityPreview({ type, fallbackImage, locale }) {
   // the newest optional fields. Older responses call the code
   // `unit_type_code`, which is still enough for the public image route.
   const floorplanSource = typeCode
-    ? `/api/public/floorplan-images/${encodeURIComponent(typeCode)}`
+    ? `/api/public/floorplan-images/${encodeURIComponent(typeCode)}?v=2`
     : type?.floorplan_image_url;
   const showFloorplan = !!floorplanSource && !floorplanFailed;
   const source = showFloorplan ? floorplanSource : fallbackImage?.url;
