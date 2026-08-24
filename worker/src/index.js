@@ -53,7 +53,8 @@ app.use("*", async (c, next) => {
   c.header("X-Frame-Options", "DENY");
   c.header("Referrer-Policy", "no-referrer");
   c.header("Permissions-Policy", "camera=(), microphone=(), geolocation=()");
-  if (c.req.path.startsWith("/api/public/site-images/"))
+  if (c.req.path.startsWith("/api/public/site-images/") ||
+      c.req.path.startsWith("/api/public/floorplan-images/"))
     c.header("Cache-Control", "public, max-age=86400");
   else if (c.req.path === "/api/public/site-content")
     c.header("Cache-Control", "public, max-age=60, stale-while-revalidate=300");
@@ -80,8 +81,9 @@ app.use("/api/*", async (c, next) => {
     const length = Number(c.req.header("content-length") ?? 0);
     const accountingFile = /^\/api\/accounting\/(?:documents\/[^/]+\/[^/]+\/upload|captures)$/.test(c.req.path);
     const websiteImage = c.req.path === "/api/admin/site-images";
+    const floorplanImage = /^\/api\/unit-types\/[^/]+\/floorplan-image$/.test(c.req.path);
     // Multipart framing adds a little overhead around the 10 MB file itself.
-    const limit = accountingFile || websiteImage ? 11 * 1024 * 1024 : 1_048_576;
+    const limit = accountingFile || websiteImage || floorplanImage ? 11 * 1024 * 1024 : 1_048_576;
     if (length > limit) return c.json({ code: "PAYLOAD_TOO_LARGE", max_bytes: limit }, 413);
   }
   return next();

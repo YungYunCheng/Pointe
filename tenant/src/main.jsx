@@ -134,6 +134,34 @@ function SiteSlideshow({ images, locale, className = "", label = "Photos" }) {
   );
 }
 
+function AvailabilityPreview({ type, fallbackImage, locale }) {
+  const [floorplanFailed, setFloorplanFailed] = useState(false);
+  useEffect(() => { setFloorplanFailed(false); }, [type?.code]);
+
+  const showFloorplan = !!type?.floorplan_image_url && !floorplanFailed;
+  const source = showFloorplan ? type.floorplan_image_url : fallbackImage?.url;
+  const fallbackAlt = fallbackImage?.[`alt_${locale}`] || fallbackImage?.filename || "Baydo Pointe";
+  const typeLabel = type
+    ? (locale === "zh" ? type.bedroom_label_zh : type.bedroom_label_en)
+    : null;
+
+  return (
+    <aside className={`bt-availability-preview ${showFloorplan ? "floorplan" : "photo"}`}>
+      {source ? (
+        <img key={`${type?.code || "property"}-${source}`} src={source}
+             alt={showFloorplan ? `${typeLabel || type.code} floor plan` : fallbackAlt}
+             onError={() => { if (showFloorplan) setFloorplanFailed(true); }} />
+      ) : (
+        <div className="bt-preview-empty">Baydo Pointe</div>
+      )}
+      <div className="bt-preview-label">
+        {showFloorplan ? <><span>Floor plan</span><strong>{typeLabel || type.code}</strong></>
+          : <><span>Baydo Pointe</span><strong>{locale === "zh" ? "將滑鼠移到戶型上查看平面圖" : "Hover over a suite type to see its floor plan"}</strong></>}
+      </div>
+    </aside>
+  );
+}
+
 /* ---------- data ---------- */
 const TYPES = {
   "1C": { beds: 1, den: false, sf: 462.8 }, "1A": { beds: 1, den: false, sf: 484.4 },
@@ -368,6 +396,8 @@ function Home() {
   const { t, money, locale } = useT();
   const d = useProperty();
   const site = useSiteContent();
+  const [previewCode, setPreviewCode] = useState(null);
+  const [touchPreviewCode, setTouchPreviewCode] = useState(null);
   const copy = { ...DEFAULT_SITE[locale], ...(site.content?.[locale] ?? {}) };
   const heroImages = siteImages(site, "hero");
   const amenityImages = siteImages(site, "amenities");
@@ -383,6 +413,9 @@ function Home() {
     .sort((a, b) => Number(a.rent) - Number(b.rent));
 
   const from = available.length ? Number(available[0].rent) : null;
+  const previewType = available.find((type) => type.code === previewCode) ?? null;
+  const defaultPreviewImage = galleryImages[0] ?? heroImages[0]
+    ?? neighbourhoodImages[0] ?? amenityImages[0] ?? null;
 
   return (
     <>
@@ -452,26 +485,38 @@ function Home() {
           numbers. A table puts the numbers in columns where they can be
           compared, which is the actual thing somebody is doing here. */}
       {available.length > 0 && (
-        <section className="bt-sec">
-          <div className="bt-sec-h">
-            <h2>{t("home.availableTitle")}</h2>
-            <Link to="/suites" className="bt-more">{t("home.seeAll")} →</Link>
-          </div>
+        <section className="bt-sec bt-availability-section">
+          <div className="bt-availability-showcase" onMouseLeave={() => setPreviewCode(null)}>
+            <div className="bt-availability-list">
+              <div className="bt-sec-h">
+                <h2>{t("home.availableTitle")}</h2>
+                <Link to="/suites" className="bt-more">{t("home.seeAll")} →</Link>
+              </div>
 
-          <div className="bt-avail">
-            {available.slice(0, 5).map((x) => (
-              <Link to="/suites" className="bt-avail-row" key={x.code}>
-                <span className="bt-avail-n">
-                  {locale === "zh" ? x.bedroom_label_zh : x.bedroom_label_en}
-                </span>
-                <span className="bt-avail-a">{x.area_sqft} ft²</span>
-                <span className="bt-avail-r">
-                  {Number(x.rent) > 0 ? money(x.rent) : t("suites.askRate")}
-                </span>
-                <span className="bt-avail-c">{t("suites.available", { n: x.available })}</span>
-                <span className="bt-avail-go" aria-hidden="true">→</span>
-              </Link>
-            ))}
+              <div className="bt-avail">
+                {available.slice(0, 5).map((x) => (
+                  <Link to="/suites" className={`bt-avail-row ${previewCode === x.code ? "previewing" : ""}`}
+                        key={x.code} onMouseEnter={() => setPreviewCode(x.code)}
+                        onFocus={() => setPreviewCode(x.code)}
+                        onClick={(event) => {
+                          if (window.matchMedia("(hover: none)").matches && touchPreviewCode !== x.code) {
+                            event.preventDefault(); setPreviewCode(x.code); setTouchPreviewCode(x.code);
+                          }
+                        }}>
+                    <span className="bt-avail-n">
+                      {locale === "zh" ? x.bedroom_label_zh : x.bedroom_label_en}
+                    </span>
+                    <span className="bt-avail-a">{x.area_sqft} ft²</span>
+                    <span className="bt-avail-r">
+                      {Number(x.rent) > 0 ? money(x.rent) : t("suites.askRate")}
+                    </span>
+                    <span className="bt-avail-c">{t("suites.available", { n: x.available })}</span>
+                    <span className="bt-avail-go" aria-hidden="true">→</span>
+                  </Link>
+                ))}
+              </div>
+            </div>
+            <AvailabilityPreview type={previewType} fallbackImage={defaultPreviewImage} locale={locale} />
           </div>
         </section>
       )}
@@ -1395,6 +1440,28 @@ a{color:inherit}
 .bt-app .bt-gallery-slideshow{border-radius:4px}
 .bt-app .bt-gallery-slideshow img{aspect-ratio:2/1;max-height:570px}
 
+.bt-app .bt-availability-showcase{display:grid;grid-template-columns:minmax(0,660px) minmax(280px,1fr);
+  gap:38px;align-items:stretch}
+.bt-app .bt-availability-list{min-width:0}
+.bt-app .bt-availability-preview{position:relative;min-height:390px;overflow:hidden;
+  border:1px solid var(--rule);border-radius:4px;background:#E7EDF2}
+.bt-app .bt-availability-preview img{display:block;width:100%;height:100%;min-height:390px;
+  object-fit:cover;animation:bt-photo-in .25s ease}
+.bt-app .bt-availability-preview.floorplan{background:#fff}
+.bt-app .bt-availability-preview.floorplan img{object-fit:contain;padding:22px;background:#fff}
+.bt-app .bt-preview-empty{height:100%;min-height:390px;display:flex;align-items:center;
+  justify-content:center;font-family:'Fraunces','Noto Serif TC',serif;font-size:24px;color:#9AABB9}
+.bt-app .bt-preview-label{position:absolute;left:0;right:0;bottom:0;padding:16px 18px;
+  display:flex;flex-direction:column;gap:2px;color:#fff;
+  background:linear-gradient(transparent,rgba(11,20,32,.82))}
+.bt-app .bt-availability-preview.floorplan .bt-preview-label{color:var(--ink);
+  background:linear-gradient(transparent,rgba(255,255,255,.98))}
+.bt-app .bt-preview-label span{font:10px 'IBM Plex Mono',monospace;text-transform:uppercase;
+  letter-spacing:.12em;opacity:.78}
+.bt-app .bt-preview-label strong{font-size:13px;font-weight:500;line-height:1.5}
+.bt-app .bt-avail-row.previewing{background:var(--tint)}
+.bt-app .bt-avail-row.previewing .bt-avail-go{color:var(--accent)}
+
 @media (max-width:760px){
   .bt-app .bt-hero-media{inset:0;width:100%;opacity:.42;
     -webkit-mask-image:none;mask-image:none}
@@ -1406,5 +1473,8 @@ a{color:inherit}
   .bt-app .bt-hero-media .bt-slide-arrow,.bt-app .bt-hero-media .bt-slide-dots{display:none}
   .bt-app .bt-site-intro{padding-top:30px;padding-bottom:0}
   .bt-app .bt-gallery-slideshow img{aspect-ratio:4/3}
+  .bt-app .bt-availability-showcase{grid-template-columns:1fr;gap:22px}
+  .bt-app .bt-availability-preview{min-height:300px;order:-1}
+  .bt-app .bt-availability-preview img,.bt-app .bt-preview-empty{min-height:300px}
 }
 `; }

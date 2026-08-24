@@ -144,7 +144,10 @@ CREATE TABLE IF NOT EXISTS buildings (
 CREATE TABLE IF NOT EXISTS unit_types (
   id TEXT PRIMARY KEY, code TEXT NOT NULL UNIQUE,
   bedroom_label_en TEXT NOT NULL, bedroom_label_zh TEXT NOT NULL,
-  bedrooms INTEGER, area_sqft NUMERIC(14,2), balcony_sqft NUMERIC(14,2), is_mirrored BOOLEAN DEFAULT FALSE
+  bedrooms INTEGER, area_sqft NUMERIC(14,2), balcony_sqft NUMERIC(14,2), is_mirrored BOOLEAN DEFAULT FALSE,
+  floorplan_storage_key TEXT, floorplan_filename TEXT, floorplan_mime_type TEXT,
+  floorplan_size_bytes INTEGER CHECK (floorplan_size_bytes IS NULL OR floorplan_size_bytes > 0),
+  floorplan_updated_by TEXT REFERENCES users(id), floorplan_updated_at TIMESTAMPTZ
 );
 
 CREATE TABLE IF NOT EXISTS units (

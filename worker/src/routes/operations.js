@@ -4,6 +4,16 @@ import { require_, audit, uid } from "../lib/auth.js";
 /* Maintenance, vendor quotes, purchase orders and the future contract archive.
  * Every money-moving transition is explicit and permission-gated. */
 const r = new Hono();
+const MAX_FLOORPLAN_BYTES = 10 * 1024 * 1024;
+const FLOORPLAN_TYPES = new Map([
+  ["image/jpeg", "jpg"], ["image/png", "png"], ["image/webp", "webp"],
+  ["image/avif", "avif"],
+]);
+const safeFilename = (value, fallback = "floorplan") => {
+  const name = String(value ?? "").split(/[\\/]/).pop()
+    .replace(/[^A-Za-z0-9._-]+/g, "-").replace(/^-+|-+$/g, "");
+  return name || fallback;
+};
 
 const amount = (value) => {
   const n = Number(value);
@@ -449,6 +459,65 @@ r.patch("/unit-types/:code/virtual-tour", require_("floorplans.manage"), async (
     entityId: unitType.code, after: { provider: unitType.virtual_tour_provider,
       has_url: !!unitType.virtual_tour_url, has_storage_key: !!unitType.virtual_tour_storage_key } });
   return c.json({ unit_type: unitType });
+});
+
+r.post("/unit-types/:code/floorplan-image", require_("floorplans.manage"), async (c) => {
+  if (!c.env.FILES) return c.json({ code: "FILE_STORAGE_NOT_CONFIGURED" }, 503);
+  const code = decodeURIComponent(c.req.param("code"));
+  const sql = c.get("db");
+  const [existing] = await sql`SELECT floorplan_storage_key FROM unit_types WHERE code = ${code}`;
+  if (!existing) return c.json({ code: "NOT_FOUND" }, 404);
+  const body = await c.req.parseBody().catch(() => ({}));
+  const file = body.file;
+  if (!file || typeof file.arrayBuffer !== "function")
+    return c.json({ code: "FILE_REQUIRED" }, 400);
+  if (!FLOORPLAN_TYPES.has(file.type))
+    return c.json({ code: "IMAGE_TYPE_NOT_ALLOWED" }, 415);
+  if (file.size <= 0 || file.size > MAX_FLOORPLAN_BYTES)
+    return c.json({ code: "IMAGE_SIZE_NOT_ALLOWED", max_bytes: MAX_FLOORPLAN_BYTES }, 413);
+
+  const user = c.get("user");
+  const filename = safeFilename(file.name, `floorplan.${FLOORPLAN_TYPES.get(file.type)}`);
+  const key = `floorplans/${safeFilename(code)}/${uid("fpi_")}-${filename}`;
+  await c.env.FILES.put(key, new Uint8Array(await file.arrayBuffer()), {
+    httpMetadata: { contentType: file.type },
+    customMetadata: { unit_type_code: code, uploaded_by: user.id },
+  });
+
+  try {
+    const [unitType] = await sql`
+      UPDATE unit_types SET floorplan_storage_key = ${key},
+        floorplan_filename = ${filename}, floorplan_mime_type = ${file.type},
+        floorplan_size_bytes = ${file.size}, floorplan_updated_by = ${user.id},
+        floorplan_updated_at = now()
+      WHERE code = ${code}
+      RETURNING *`;
+    if (existing.floorplan_storage_key && existing.floorplan_storage_key !== key)
+      await c.env.FILES.delete(existing.floorplan_storage_key).catch(() => {});
+    await audit(c, { action: "floorplan.image.upload", entityType: "unit_type",
+      entityId: code, after: { filename, size_bytes: file.size } });
+    return c.json({ unit_type: unitType,
+      image_url: `/api/public/floorplan-images/${encodeURIComponent(code)}` }, 201);
+  } catch (error) {
+    await c.env.FILES.delete(key).catch(() => {});
+    throw error;
+  }
+});
+
+r.delete("/unit-types/:code/floorplan-image", require_("floorplans.manage"), async (c) => {
+  const code = decodeURIComponent(c.req.param("code"));
+  const sql = c.get("db");
+  const [existing] = await sql`SELECT floorplan_storage_key FROM unit_types WHERE code = ${code}`;
+  if (!existing) return c.json({ code: "NOT_FOUND" }, 404);
+  await sql`
+    UPDATE unit_types SET floorplan_storage_key = NULL, floorplan_filename = NULL,
+      floorplan_mime_type = NULL, floorplan_size_bytes = NULL,
+      floorplan_updated_by = ${c.get("user").id}, floorplan_updated_at = now()
+    WHERE code = ${code}`;
+  if (existing.floorplan_storage_key && c.env.FILES)
+    await c.env.FILES.delete(existing.floorplan_storage_key).catch(() => {});
+  await audit(c, { action: "floorplan.image.delete", entityType: "unit_type", entityId: code });
+  return c.json({ ok: true });
 });
 
 /* Queues a completed signed document.  Until a connector is configured the

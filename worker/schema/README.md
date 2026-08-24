@@ -25,6 +25,8 @@ psql "$DATABASE_URL" -f 019_workers_ai_cloud.sql # AI 对话、来源、转人�
 psql "$DATABASE_URL" -f 020_pm_monthly_reports.sql # PM 製作與審核月報
 psql "$DATABASE_URL" -f 021_accounting_workspace.sql # QuickBooks 式會計工作區
 psql "$DATABASE_URL" -f 022_public_website_content.sql # 公開網站文案與 R2 圖片資料
+psql "$DATABASE_URL" -f 022_building_accounts_move_elevator.sql # 三棟樓帳戶與搬家電梯預約
+psql "$DATABASE_URL" -f 023_floorplan_images.sql # 戶型圖 R2 儲存與首頁預覽
 ```
 
 或直接貼進 Supabase 的 SQL Editor，一份一份來。

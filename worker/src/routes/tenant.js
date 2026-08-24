@@ -20,6 +20,11 @@ const SESSION_HOURS = 24 * 14;   // a tenant signs in rarely; a short one is fri
 const LOCK_AFTER = 5;
 const LOCK_MINUTES = 15;
 const EDMONTON_TZ = "America/Edmonton";
+const safeFilename = (value, fallback = "floorplan") => {
+  const name = String(value ?? "").split(/[\\/]/).pop()
+    .replace(/[^A-Za-z0-9._-]+/g, "-").replace(/^-+|-+$/g, "");
+  return name || fallback;
+};
 
 const ymdInEdmonton = (value = new Date()) => {
   const parts = new Intl.DateTimeFormat("en-CA", {
@@ -96,13 +101,35 @@ r.get("/public/availability", async (c) => {
   return c.json({
     // Mirrored layouts fold together. The same suite reversed is not two
     // options, and listing it twice reads as padding once somebody notices.
-    types: types.map((t) => ({ ...t, code: t.unit_type_code })),
+    types: types.map((t) => ({ ...t, code: t.unit_type_code,
+      floorplan_image_url: `/api/public/floorplan-images/${encodeURIComponent(t.unit_type_code)}` })),
     // Said out loud on the public page. 222 stalls against 330 units is
     // structural, and a tenant who finds out after signing has a reason to be
     // annoyed that one who was told does not.
     parking,
     fees: fees ?? null,
   });
+});
+
+r.get("/public/floorplan-images/:code", async (c) => {
+  const code = decodeURIComponent(c.req.param("code"));
+  const [floorplan] = await c.get("db")`
+    SELECT floorplan_storage_key, floorplan_filename, floorplan_mime_type
+    FROM unit_types
+    WHERE replace(code, ' (M)', '') = ${code} AND floorplan_storage_key IS NOT NULL
+    ORDER BY is_mirrored, code LIMIT 1`;
+  if (!floorplan) return c.json({ code: "NOT_FOUND" }, 404);
+  if (!c.env.FILES) return c.json({ code: "FILE_STORAGE_NOT_CONFIGURED" }, 503);
+  const object = await c.env.FILES.get(floorplan.floorplan_storage_key);
+  if (!object) return c.json({ code: "FILE_NOT_FOUND" }, 404);
+  const headers = new Headers();
+  object.writeHttpMetadata(headers);
+  headers.set("Content-Type", floorplan.floorplan_mime_type || "image/jpeg");
+  headers.set("Cache-Control", "public, max-age=86400");
+  headers.set("ETag", object.httpEtag);
+  headers.set("Content-Disposition",
+    `inline; filename="${safeFilename(floorplan.floorplan_filename)}"`);
+  return new Response(object.body, { headers });
 });
 
 /**
