@@ -85,6 +85,55 @@ function useSiteContent() {
   return site;
 }
 
+function siteImages(site, slot) {
+  return (site?.images ?? []).filter((image) => image.slot === slot);
+}
+
+function SiteSlideshow({ images, locale, className = "", label = "Photos" }) {
+  const [index, setIndex] = useState(0);
+
+  useEffect(() => {
+    setIndex((current) => Math.min(current, Math.max(images.length - 1, 0)));
+  }, [images.length]);
+
+  useEffect(() => {
+    if (images.length < 2) return undefined;
+    const timer = window.setInterval(() => {
+      setIndex((current) => (current + 1) % images.length);
+    }, 5500);
+    return () => window.clearInterval(timer);
+  }, [images.length]);
+
+  if (!images.length) return null;
+  const current = images[index] ?? images[0];
+  const alt = current?.[`alt_${locale}`] || current?.filename || label;
+  const move = (amount) => setIndex((currentIndex) =>
+    (currentIndex + amount + images.length) % images.length);
+
+  return (
+    <div className={`bt-site-slideshow ${className}`.trim()} aria-label={label}>
+      <img key={current.id} src={current.url} alt={alt} />
+      {images.length > 1 && (
+        <>
+          <button className="bt-slide-arrow prev" type="button"
+                  aria-label="Previous photo" onClick={() => move(-1)}>‹</button>
+          <button className="bt-slide-arrow next" type="button"
+                  aria-label="Next photo" onClick={() => move(1)}>›</button>
+          <div className="bt-slide-dots" role="group" aria-label="Choose photo">
+            {images.map((image, dotIndex) => (
+              <button key={image.id} type="button"
+                      className={dotIndex === index ? "on" : ""}
+                      aria-label={`Photo ${dotIndex + 1}`}
+                      aria-current={dotIndex === index ? "true" : undefined}
+                      onClick={() => setIndex(dotIndex)} />
+            ))}
+          </div>
+        </>
+      )}
+    </div>
+  );
+}
+
 /* ---------- data ---------- */
 const TYPES = {
   "1C": { beds: 1, den: false, sf: 462.8 }, "1A": { beds: 1, den: false, sf: 484.4 },
@@ -320,6 +369,10 @@ function Home() {
   const d = useProperty();
   const site = useSiteContent();
   const copy = { ...DEFAULT_SITE[locale], ...(site.content?.[locale] ?? {}) };
+  const heroImages = siteImages(site, "hero");
+  const amenityImages = siteImages(site, "amenities");
+  const neighbourhoodImages = siteImages(site, "neighbourhood");
+  const galleryImages = siteImages(site, "gallery");
 
   const totalFree = d ? (d.publicTypes
     ? d.publicTypes.reduce((s, x) => s + Number(x.available ?? 0), 0)
@@ -340,27 +393,33 @@ function Home() {
           figure does not reinforce it — it makes the page feel like it is
           padding, and somebody scrolling stops reading. So the count lives in
           exactly one place: the line under the heading. */}
-      <section className="bt-hero">
-        <div className="bt-hero-art" aria-hidden="true">
-          <svg viewBox="0 0 1200 560" preserveAspectRatio="xMidYMax slice">
-            <defs>
-              <linearGradient id="hg" x1="0" y1="0" x2="0" y2="1">
-                <stop offset="0%" stopColor="#2A6183" stopOpacity=".10" />
-                <stop offset="100%" stopColor="#2A6183" stopOpacity="0" />
-              </linearGradient>
-            </defs>
-            {[[690, 250, 175], [872, 190, 210], [1090, 288, 150]].map(([x, y, w], i) => (
-              <g key={i}>
-                <rect x={x} y={y} width={w} height={560 - y} fill="url(#hg)" />
-                <rect x={x} y={y} width={w} height="1.5" fill="#2A6183" opacity=".18" />
-                {Array.from({ length: 6 }, (_, f) => (
-                  <line key={f} x1={x} y1={y + 16 + f * 32} x2={x + w} y2={y + 16 + f * 32}
-                        stroke="#2A6183" strokeWidth=".7" opacity=".1" />
-                ))}
-              </g>
-            ))}
-          </svg>
-        </div>
+      <section className={`bt-hero ${heroImages.length ? "bt-hero--photo" : ""}`}>
+        {heroImages.length ? (
+          <div className="bt-hero-media">
+            <SiteSlideshow images={heroImages} locale={locale} label="Baydo Pointe" />
+          </div>
+        ) : (
+          <div className="bt-hero-art" aria-hidden="true">
+            <svg viewBox="0 0 1200 560" preserveAspectRatio="xMidYMax slice">
+              <defs>
+                <linearGradient id="hg" x1="0" y1="0" x2="0" y2="1">
+                  <stop offset="0%" stopColor="#2A6183" stopOpacity=".10" />
+                  <stop offset="100%" stopColor="#2A6183" stopOpacity="0" />
+                </linearGradient>
+              </defs>
+              {[[690, 250, 175], [872, 190, 210], [1090, 288, 150]].map(([x, y, w], i) => (
+                <g key={i}>
+                  <rect x={x} y={y} width={w} height={560 - y} fill="url(#hg)" />
+                  <rect x={x} y={y} width={w} height="1.5" fill="#2A6183" opacity=".18" />
+                  {Array.from({ length: 6 }, (_, f) => (
+                    <line key={f} x1={x} y1={y + 16 + f * 32} x2={x + w} y2={y + 16 + f * 32}
+                          stroke="#2A6183" strokeWidth=".7" opacity=".1" />
+                  ))}
+                </g>
+              ))}
+            </svg>
+          </div>
+        )}
 
         <div className="bt-hero-in">
           <div className="bt-eyebrow">{t("home.address")}</div>
@@ -378,6 +437,13 @@ function Home() {
           </div>
         </div>
       </section>
+
+      {(copy.intro_title || copy.intro_body) && (
+        <section className="bt-sec bt-site-intro">
+          {copy.intro_title && <h2>{copy.intro_title}</h2>}
+          {copy.intro_body && <p>{copy.intro_body}</p>}
+        </section>
+      )}
 
       {/* The layouts, as a table.
           
@@ -414,16 +480,22 @@ function Home() {
           what is it like to live here — and separating them made two thin
           sections where one full one belongs. */}
       <section className="bt-sec bt-two">
-        <div>
-          <h2>{t("amen.title")}</h2>
+        <div className="bt-site-feature">
+          <SiteSlideshow images={amenityImages} locale={locale}
+                         label={copy.amenities_title || t("amen.title")} />
+          <h2>{copy.amenities_title || t("amen.title")}</h2>
+          {copy.amenities_body && <p className="bt-site-feature-copy">{copy.amenities_body}</p>}
           <ul className="bt-amen">
             {["gym", "lounge", "petwash", "bike", "patio", "busPad"].map((k) => (
               <li key={k}>{t(`amen.${k}`)}</li>
             ))}
           </ul>
         </div>
-        <div>
-          <h2>{t("home.locationTitle")}</h2>
+        <div className="bt-site-feature">
+          <SiteSlideshow images={neighbourhoodImages} locale={locale}
+                         label={copy.neighbourhood_title || t("home.locationTitle")} />
+          <h2>{copy.neighbourhood_title || t("home.locationTitle")}</h2>
+          {copy.neighbourhood_body && <p className="bt-site-feature-copy">{copy.neighbourhood_body}</p>}
           <dl className="bt-loc">
             {[["home.locTransit", null], ["home.locDowntown", null],
               ["home.locShops", null], ["home.locSchools", null]].map(([key]) => (
@@ -435,6 +507,18 @@ function Home() {
           </dl>
         </div>
       </section>
+
+      {galleryImages.length > 0 && (
+        <section className="bt-sec bt-site-gallery">
+          <div className="bt-sec-h">
+            <h2>{copy.gallery_title || "Baydo Pointe"}</h2>
+            <span>{galleryImages.length} {galleryImages.length === 1 ? "photo" : "photos"}</span>
+          </div>
+          <SiteSlideshow images={galleryImages} locale={locale}
+                         className="bt-gallery-slideshow"
+                         label={copy.gallery_title || "Baydo Pointe gallery"} />
+        </section>
+      )}
 
       <ParkingHonesty />
 
@@ -1268,5 +1352,59 @@ a{color:inherit}
 @media (max-width:760px){
   .bt-app .bt-sec,.bt-app .bt-hero-in,.bt-app .bt-cta-band{
     padding-left:20px;padding-right:20px}
+}
+
+/* Photos published from Admin > Website content. */
+.bt-app .bt-site-slideshow{position:relative;overflow:hidden;background:#E7EDF2}
+.bt-app .bt-site-slideshow img{display:block;width:100%;aspect-ratio:16/10;
+  object-fit:cover;animation:bt-photo-in .35s ease}
+@keyframes bt-photo-in{from{opacity:.35;transform:scale(1.012)}to{opacity:1;transform:scale(1)}}
+.bt-app .bt-slide-arrow{position:absolute;top:50%;z-index:2;transform:translateY(-50%);
+  width:38px;height:38px;border:1px solid rgba(255,255,255,.55);border-radius:50%;
+  background:rgba(11,20,32,.56);color:#fff;font:28px/1 Georgia,serif;cursor:pointer;
+  display:flex;align-items:center;justify-content:center;backdrop-filter:blur(4px)}
+.bt-app .bt-slide-arrow:hover{background:rgba(11,20,32,.78)}
+.bt-app .bt-slide-arrow.prev{left:14px}.bt-app .bt-slide-arrow.next{right:14px}
+.bt-app .bt-slide-dots{position:absolute;z-index:2;left:50%;bottom:13px;
+  transform:translateX(-50%);display:flex;gap:7px;padding:7px 9px;
+  border-radius:18px;background:rgba(11,20,32,.42);backdrop-filter:blur(4px)}
+.bt-app .bt-slide-dots button{width:7px;height:7px;padding:0;border:0;border-radius:50%;
+  background:rgba(255,255,255,.52);cursor:pointer}
+.bt-app .bt-slide-dots button.on{background:#fff;box-shadow:0 0 0 2px rgba(255,255,255,.2)}
+
+.bt-app .bt-hero-media{position:absolute;z-index:0;right:0;top:0;bottom:0;width:58%;
+  -webkit-mask-image:linear-gradient(90deg,transparent 0,#000 30%);
+  mask-image:linear-gradient(90deg,transparent 0,#000 30%)}
+.bt-app .bt-hero-media .bt-site-slideshow,.bt-app .bt-hero-media img{height:100%}
+.bt-app .bt-hero-media img{aspect-ratio:auto}
+.bt-app .bt-hero--photo .bt-hero-in{z-index:1}
+.bt-app .bt-hero--photo .bt-hero-in::before{content:"";position:absolute;z-index:-1;
+  inset:-24px 48% -24px -24px;background:linear-gradient(90deg,rgba(246,249,251,.97) 0%,
+  rgba(246,249,251,.86) 72%,transparent 100%);pointer-events:none}
+
+.bt-app .bt-site-intro{padding-top:40px;padding-bottom:8px}
+.bt-app .bt-site-intro h2{margin-bottom:10px}
+.bt-app .bt-site-intro p{max-width:70ch;margin:0;color:var(--ink2);line-height:1.85}
+.bt-app .bt-site-feature>.bt-site-slideshow{margin-bottom:24px;border-radius:4px}
+.bt-app .bt-site-feature-copy{margin:-6px 0 18px;color:var(--dim);font-size:13.5px;
+  line-height:1.75;max-width:54ch}
+.bt-app .bt-site-gallery{padding-top:24px}
+.bt-app .bt-site-gallery .bt-sec-h{max-width:none}
+.bt-app .bt-site-gallery .bt-sec-h>span{font:11px 'IBM Plex Mono',monospace;
+  color:var(--dim);text-transform:uppercase;letter-spacing:.08em}
+.bt-app .bt-gallery-slideshow{border-radius:4px}
+.bt-app .bt-gallery-slideshow img{aspect-ratio:2/1;max-height:570px}
+
+@media (max-width:760px){
+  .bt-app .bt-hero-media{inset:0;width:100%;opacity:.42;
+    -webkit-mask-image:none;mask-image:none}
+  .bt-app .bt-hero--photo::after{content:"";position:absolute;inset:0;
+    background:linear-gradient(90deg,rgba(246,249,251,.96),rgba(246,249,251,.7));
+    pointer-events:none}
+  .bt-app .bt-hero--photo .bt-hero-in{z-index:2}
+  .bt-app .bt-hero--photo .bt-hero-in::before{display:none}
+  .bt-app .bt-hero-media .bt-slide-arrow,.bt-app .bt-hero-media .bt-slide-dots{display:none}
+  .bt-app .bt-site-intro{padding-top:30px;padding-bottom:0}
+  .bt-app .bt-gallery-slideshow img{aspect-ratio:4/3}
 }
 `; }
