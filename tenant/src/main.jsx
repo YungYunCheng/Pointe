@@ -438,7 +438,14 @@ function Footer() {
       </div>
 
       <div className="bt-foot-base">
-        <p>© {new Date().getFullYear()} Baydo Development Corporation. {t("footer.rights")}</p>
+        <div className="bt-foot-base-left">
+          <p className="bt-ai-note">
+            {locale === "zh"
+              ? "以上圖片由 AI 合成，僅供示意。"
+              : "Images shown above are AI-generated for illustrative purposes."}
+          </p>
+          <p>© {new Date().getFullYear()} Baydo Development Corporation. {t("footer.rights")}</p>
+        </div>
         <div className="bt-foot-legal">
           <Link to="/privacy">{t("common.privacy")}</Link>
           {/* Said on every page rather than once on a policy nobody opens.
@@ -1113,6 +1120,8 @@ a{color:inherit}
   display:flex;justify-content:space-between;align-items:center;
   gap:16px;flex-wrap:wrap}
 .bt-foot-base p{margin:0;font-size:11.5px;color:#5F7285}
+.bt-foot-base-left{display:flex;flex-direction:column;gap:7px;align-items:flex-start}
+.bt-foot-base .bt-ai-note{color:#8FA3B5}
 .bt-foot-legal{display:flex;gap:18px;align-items:center;flex-wrap:wrap;
   font-size:11.5px;color:#5F7285}
 .bt-foot-legal a{color:#8FA3B5;text-decoration:none}
