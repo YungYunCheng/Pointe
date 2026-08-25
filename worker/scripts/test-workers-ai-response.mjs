@@ -6,7 +6,9 @@ import {
 const json = JSON.stringify({ answer:"Hello", needs_confirmation:false, topic:"summary" });
 
 assert.equal(workersAiText({ response:json }), json);
+assert.equal(workersAiText({ response:JSON.parse(json) }), json);
 assert.equal(workersAiText({ result:{ response:json } }), json);
+assert.equal(workersAiText({ result:{ response:JSON.parse(json) } }), json);
 assert.equal(workersAiText({ choices:[{ message:{ content:json } }] }), json);
 assert.equal(workersAiText({ result:{ choices:[{ message:{ content:json } }] } }), json);
 assert.equal(workersAiText({ choices:[{ message:{ content:[{ type:"text", text:json }] } }] }), json);
@@ -25,4 +27,4 @@ await assert.rejects(
   (error) => error.code === "AI_TIMEOUT",
 );
 
-console.log("Workers AI response tests passed (11 cases).");
+console.log("Workers AI response tests passed (13 cases).");
