@@ -42,3 +42,26 @@ export const PUBLIC_CHAT_RESPONSE_FORMAT = {
     required: ["answer", "needs_confirmation", "topic"],
   },
 };
+
+export const AI_TIMEOUT_MS = 15_000;
+
+/** Keep a slow or capacity-constrained model from holding the browser open
+ * indefinitely. The caller still decides whether to hand the request to a
+ * person or return an error, but every AI path now has a bounded wait. */
+export async function runWorkersAi(ai, model, input, timeoutMs = AI_TIMEOUT_MS) {
+  let timer;
+  try {
+    return await Promise.race([
+      ai.run(model, input),
+      new Promise((_, reject) => {
+        timer = setTimeout(() => {
+          const error = new Error(`Workers AI did not respond within ${timeoutMs} ms`);
+          error.code = "AI_TIMEOUT";
+          reject(error);
+        }, timeoutMs);
+      }),
+    ]);
+  } finally {
+    clearTimeout(timer);
+  }
+}
