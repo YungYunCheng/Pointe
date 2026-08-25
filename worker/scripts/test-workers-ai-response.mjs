@@ -1,5 +1,7 @@
 import assert from "node:assert/strict";
-import { modelJson, PUBLIC_CHAT_RESPONSE_FORMAT, workersAiText } from "../src/lib/workers-ai.js";
+import {
+  modelJson, PUBLIC_CHAT_RESPONSE_FORMAT, runWorkersAi, workersAiText,
+} from "../src/lib/workers-ai.js";
 
 const json = JSON.stringify({ answer:"Hello", needs_confirmation:false, topic:"summary" });
 
@@ -16,4 +18,11 @@ assert.deepEqual(modelJson(`\`\`\`json\n${json}\n\`\`\``), {
 assert.deepEqual(PUBLIC_CHAT_RESPONSE_FORMAT.json_schema.required,
   ["answer", "needs_confirmation", "topic"]);
 
-console.log("Workers AI response tests passed (9 cases).");
+assert.deepEqual(await runWorkersAi({ run: async () => ({ response:json }) },
+  "test-model", {}, 25), { response:json });
+await assert.rejects(
+  runWorkersAi({ run: () => new Promise(() => {}) }, "test-model", {}, 5),
+  (error) => error.code === "AI_TIMEOUT",
+);
+
+console.log("Workers AI response tests passed (11 cases).");
