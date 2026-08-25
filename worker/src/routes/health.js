@@ -121,7 +121,7 @@ r.get("/outbox-health", async (c) => {
  * quota or create a fake conversation. */
 r.get("/ai-health", async (c) => {
   const configured = !!c.env.AI;
-  const model = c.env.WORKERS_AI_MODEL ?? "@cf/zai-org/glm-4.7-flash";
+  const model = c.env.WORKERS_AI_MODEL ?? "@cf/meta/llama-3.1-8b-instruct-fast";
   try {
     const [today] = await c.get("db")`
       SELECT COALESCE(SUM(request_count), 0)::int AS requests,
