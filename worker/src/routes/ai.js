@@ -210,8 +210,15 @@ const HUMAN_ONLY_PUBLIC = [
 
 const money = (value) => value == null || value === "" || !Number.isFinite(Number(value))
   ? null : `$${Math.round(Number(value)).toLocaleString("en-CA")}`;
-const dateText = (value, zh) => value ? new Date(`${String(value).slice(0, 10)}T12:00:00Z`)
-  .toLocaleDateString(zh ? "zh-TW" : "en-CA", { year:"numeric", month:"long", day:"numeric", timeZone:"UTC" }) : null;
+const dateText = (value, zh) => {
+  if (!value) return null;
+  const direct = value instanceof Date ? value : new Date(value);
+  const parsed = Number.isFinite(direct.getTime()) ? direct
+    : new Date(`${String(value).slice(0, 10)}T12:00:00Z`);
+  if (!Number.isFinite(parsed.getTime())) return null;
+  return parsed.toLocaleDateString(zh ? "zh-TW" : "en-CA",
+    { year:"numeric", month:"long", day:"numeric", timeZone:"UTC" });
+};
 const unitTypeFrom = (message) => {
   const m = String(message).toUpperCase().match(/(?:^|\s|[^A-Z0-9])(1A|1B|1C|2A|3A)(?:\s*\(M\)|\s*M)?(?:$|\s|[^A-Z0-9])/);
   return m?.[1] ?? null;
