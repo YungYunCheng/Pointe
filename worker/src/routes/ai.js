@@ -1,7 +1,9 @@
 import { Hono } from "hono";
 import { audit } from "../lib/auth.js";
 import { detectPublicIntents } from "../lib/public-intent.js";
-import { modelJson, PUBLIC_CHAT_RESPONSE_FORMAT, workersAiText } from "../lib/workers-ai.js";
+import {
+  modelJson, PUBLIC_CHAT_RESPONSE_FORMAT, runWorkersAi, workersAiText,
+} from "../lib/workers-ai.js";
 
 const r = new Hono();
 
@@ -111,7 +113,7 @@ async function publicPropertyFacts(sql) {
   };
 }
 
-const DEFAULT_WORKERS_AI_MODEL = "@cf/zai-org/glm-4.7-flash";
+const DEFAULT_WORKERS_AI_MODEL = "@cf/meta/llama-3.1-8b-instruct-fast";
 
 function workersAiModel(c) {
   return c.env.WORKERS_AI_MODEL ?? DEFAULT_WORKERS_AI_MODEL;
@@ -462,13 +464,13 @@ r.post("/public/ai/chat", async (c) => {
       try {
         const learned = await trainingContext(c, "public_chat");
         const system = `${PROMPTS.public_chat}\n\nReturn JSON only in this exact shape: {"answer":"short answer in the visitor language","needs_confirmation":false,"topic":"short topic"}. For a safe public question, give a useful answer from the supplied facts even when the question is broad. If one detail is missing, state that the detail is not available, but still answer the supported part and keep needs_confirmation false. Set needs_confirmation true only when a person must make a decision or inspect a private record. Never put private data or unit numbers in the answer.${learned ? `\n\n${learned}` : ""}`;
-        const result = await c.env.AI.run(workersAiModel(c), {
+        const result = await runWorkersAi(c.env.AI, workersAiModel(c), {
           messages: [
             { role:"system", content:system },
             { role:"user", content:`Visitor language: ${language}\nRecent conversation (may be empty):\n${clipped(body.history, 3000)}\n\nCurrent public property data:\n${JSON.stringify(facts)}\n\nVisitor question:\n${message}` },
           ],
           response_format: PUBLIC_CHAT_RESPONSE_FORMAT,
-          max_completion_tokens: 500,
+          max_tokens: 350,
           temperature: 0.1,
         });
         const rawAnswer = workersAiText(result);
@@ -495,7 +497,7 @@ r.post("/public/ai/chat", async (c) => {
           metadata:{ topic:clipped(parsed?.topic, 100) || "unrecognised",
             response_received:!!rawAnswer, snapshot_at:facts.snapshot_at } });
       } catch (error) {
-        aiStatus = "AI_PROVIDER_ERROR";
+        aiStatus = error?.code === "AI_TIMEOUT" ? "AI_TIMEOUT" : "AI_PROVIDER_ERROR";
         console.error("[public-workers-ai]", error?.message ?? error);
         await recordAiRun(sql, { question:message, language, provider:"workers_ai",
           model:workersAiModel(c), conversationKey, needsHuman:true,
@@ -601,7 +603,7 @@ r.post("/ai/:task", async (c) => {
     + (learned ? `\n\n${learned}` : "");
   let result;
   try {
-    result = await c.env.AI.run(workersAiModel(c), {
+    result = await runWorkersAi(c.env.AI, workersAiModel(c), {
       messages: [
         { role:"system", content:system },
         { role:"user", content:`Task: ${task}\nFacts/input:\n${encoded}` },
@@ -611,11 +613,12 @@ r.post("/ai/:task", async (c) => {
     });
   } catch (error) {
     console.error("[ai]", task, error?.message ?? error);
+    const code = error?.code === "AI_TIMEOUT" ? "AI_TIMEOUT" : "AI_PROVIDER_ERROR";
     await recordAiRun(c.get("db"), { source:"staff_task",
       question:`Task: ${task}`, language:"en", provider:"workers_ai",
-      model:workersAiModel(c), needsHuman:true, errorCode:"AI_PROVIDER_ERROR",
+      model:workersAiModel(c), needsHuman:true, errorCode:code,
       metadata:{ ref_type:body.ref_type ?? null, ref_id:body.ref_id ?? null } });
-    return c.json({ code: "AI_PROVIDER_ERROR" }, 502);
+    return c.json({ code }, code === "AI_TIMEOUT" ? 504 : 502);
   }
   const text = workersAiText(result);
   if (!text) {
