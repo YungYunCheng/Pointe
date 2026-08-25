@@ -66,7 +66,7 @@
     "FROM_NAME": "Baydo Pointe",
 
     "ENVIRONMENT": "production",
-    "WORKERS_AI_MODEL": "@cf/zai-org/glm-4.7-flash",
+    "WORKERS_AI_MODEL": "@cf/meta/llama-3.1-8b-instruct-fast",
     "PUBLIC_URL": "https://pointe-worker.dcheng0726.workers.dev",
     "PUBLIC_TENANT_URL": "https://pointe.dcheng0726.workers.dev",
     "REPLY_TO_EMAIL": "rentals@themizar.ca"
