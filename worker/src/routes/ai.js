@@ -1,9 +1,7 @@
 import { Hono } from "hono";
 import { audit } from "../lib/auth.js";
 import { detectPublicIntents } from "../lib/public-intent.js";
-import {
-  modelJson, PUBLIC_CHAT_RESPONSE_FORMAT, runWorkersAi, workersAiText,
-} from "../lib/workers-ai.js";
+import { runWorkersAi, workersAiText } from "../lib/workers-ai.js";
 
 const r = new Hono();
 
@@ -463,29 +461,25 @@ r.post("/public/ai/chat", async (c) => {
     if (c.env.AI) {
       try {
         const learned = await trainingContext(c, "public_chat");
-        const system = `${PROMPTS.public_chat}\n\nReturn JSON only in this exact shape: {"answer":"short answer in the visitor language","needs_confirmation":false,"topic":"short topic"}. For a safe public question, give a useful answer from the supplied facts even when the question is broad. If one detail is missing, state that the detail is not available, but still answer the supported part and keep needs_confirmation false. Set needs_confirmation true only when a person must make a decision or inspect a private record. Never put private data or unit numbers in the answer.${learned ? `\n\n${learned}` : ""}`;
+        const system = `${PROMPTS.public_chat}\n\nThis question has already passed the privacy and human-review safety rules. Give one useful plain-text answer using only the supplied public facts. If one detail is missing, state that it is not available while still answering the supported part. Never output JSON, Markdown, private data or unit numbers.${learned ? `\n\n${learned}` : ""}`;
         const result = await runWorkersAi(c.env.AI, workersAiModel(c), {
           messages: [
             { role:"system", content:system },
             { role:"user", content:`Visitor language: ${language}\nRecent conversation (may be empty):\n${clipped(body.history, 3000)}\n\nCurrent public property data:\n${JSON.stringify(facts)}\n\nVisitor question:\n${message}` },
           ],
-          response_format: PUBLIC_CHAT_RESPONSE_FORMAT,
-          max_tokens: 350,
+          max_tokens: 220,
           temperature: 0.1,
         });
         const rawAnswer = workersAiText(result);
-        const parsed = modelJson(rawAnswer);
-        const modelAnswer = clipped(parsed?.answer, 3000).trim();
+        const modelAnswer = clipped(rawAnswer, 3000).trim();
         // Sensitive and private topics were already removed above. For the
         // remaining safe public questions, show a truthful partial answer
         // instead of discarding it merely because the model marked the broad
         // question as needing more detail.
-        if (parsed && modelAnswer) {
+        if (modelAnswer) {
           const runId = await recordAiRun(sql, { question:message, answer:modelAnswer,
             language, provider:"workers_ai", model:workersAiModel(c), conversationKey,
-            metadata:{ topic:clipped(parsed.topic, 100) || "general",
-              model_requested_confirmation:parsed.needs_confirmation === true,
-              snapshot_at:facts.snapshot_at } });
+            metadata:{ topic:"general", snapshot_at:facts.snapshot_at } });
           return c.json({ text:modelAnswer, automated:true, provider:"workers_ai",
             model:workersAiModel(c), run_id:runId, ai_status:"answered",
             needs_confirmation:false, snapshot_at:facts.snapshot_at });
@@ -494,7 +488,7 @@ r.post("/public/ai/chat", async (c) => {
         await recordAiRun(sql, { question:message, answer:modelAnswer, language,
           provider:"workers_ai", model:workersAiModel(c), conversationKey,
           needsHuman:true, errorCode:aiStatus,
-          metadata:{ topic:clipped(parsed?.topic, 100) || "unrecognised",
+          metadata:{ topic:"unrecognised",
             response_received:!!rawAnswer, snapshot_at:facts.snapshot_at } });
       } catch (error) {
         aiStatus = error?.code === "AI_TIMEOUT" ? "AI_TIMEOUT" : "AI_PROVIDER_ERROR";
