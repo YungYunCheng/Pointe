@@ -21,10 +21,18 @@ import { useT } from "../lib/locale.jsx";
 export default function Booking() {
   const { t, locale, date: fmtD } = useT();
   const [params] = useSearchParams();
+  const requestedKind = params.get("kind");
+  const kind = ["showing", "signing", "keys"].includes(requestedKind)
+    ? requestedKind : "showing";
+  const zh = locale === "zh";
+  const kindLabel = zh
+    ? { showing:"看房", signing:"簽約", keys:"交接鑰匙" }[kind]
+    : { showing:"viewing", signing:"lease signing", keys:"key handover" }[kind];
   const [unitType, setUnitType] = useState(params.get("type") || "");
   const [day, setDay] = useState("");
   const [time, setTime] = useState("");
-  const [form, setForm] = useState({ name: "", email: "", phone: "", notes: "" });
+  const [form, setForm] = useState({ name: "", email: "", phone: "", notes: "",
+    notification: "email" });
   const [busy, setBusy] = useState(false);
   const [done, setDone] = useState(null);
   const [err, setErr] = useState("");
@@ -36,14 +44,16 @@ export default function Booking() {
     fetch("/api/tenant/me", { credentials: "include" })
       .then((r) => r.ok ? r.json() : null)
       .then((d) => d?.tenant && setForm((x) => ({ ...x,
-        name: d.tenant.name || "", email: d.tenant.email || "" })))
+        name: d.tenant.name || "", email: d.tenant.email || "",
+        phone: d.tenant.phone || x.phone })))
       .catch(() => {});
   }, []);
 
   useEffect(() => {
     let live = true;
     setDay(""); setTime(""); setSlotsBusy(true);
-    fetch(`/api/public/slots${unitType ? `?unit_type=${encodeURIComponent(unitType)}` : ""}`)
+    fetch(`/api/public/slots${kind === "showing" && unitType
+      ? `?unit_type=${encodeURIComponent(unitType)}` : ""}`)
       .then(async (r) => {
         if (!r.ok) throw new Error("slots");
         const d = await r.json();
@@ -52,30 +62,42 @@ export default function Booking() {
       .catch(() => { if (live) { setDays([]); setErr(t("common.error")); } })
       .finally(() => { if (live) setSlotsBusy(false); });
     return () => { live = false; };
-  }, [unitType, t]);
+  }, [kind, unitType, t]);
 
   const chosen = days.find((d) => d.date === day);
-  const canSubmit = day && time && form.name.trim() && form.email.trim() && !busy;
+  const wantsSms = form.notification === "sms" || form.notification === "both";
+  const canSubmit = day && time && form.name.trim() && form.email.trim()
+    && (!wantsSms || form.phone.trim()) && !busy;
 
   const submit = async () => {
     if (!canSubmit) return;
     setBusy(true); setErr("");
     try {
       const requestId = crypto.randomUUID();
-      const res = await fetch("/api/tenant/viewings", {
+      const res = await fetch("/api/tenant/appointments", {
         method: "POST", credentials: "include",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ unit_type: unitType || null,
+        body: JSON.stringify({ type:kind,
+          unit_type: kind === "showing" ? (unitType || null) : null,
           requested_date: day, requested_time: time, phone: form.phone,
-          notes: form.notes, locale, client_request_id: requestId }),
+          notes: form.notes, locale, notification_channel:form.notification,
+          client_request_id: requestId }),
       });
       const d = await res.json().catch(() => ({}));
       if (!res.ok) throw new Error(d.code || "booking");
-      setDone({ ref: d.booking.reference, unitType: d.booking.unit_type,
-        date: String(d.booking.requested_date).slice(0, 10), time,
-        email: form.email });
+      setDone({ ref:d.appointment.reference, unitType,
+        date:day, time, email:form.email, channel:d.notification_channel });
     } catch (e) {
-      setErr(t("common.error"));
+      const messages = zh ? {
+        KEYS_NOT_RELEASED:"交接鑰匙尚未獲得管理人員批准，請先聯絡辦公室。",
+        SIGNING_NOT_READY:"目前沒有可預約的簽約文件，請先聯絡租賃同事。",
+        SLOT_NOT_AVAILABLE:"這個時間剛被預約，請選擇另一個時間。",
+      } : {
+        KEYS_NOT_RELEASED:"Key handover has not yet been released by staff. Please contact the office first.",
+        SIGNING_NOT_READY:"There is no agreement ready for a signing appointment. Please contact the leasing team.",
+        SLOT_NOT_AVAILABLE:"That time was just booked. Please choose another slot.",
+      };
+      setErr(messages[e.message] || t("common.error"));
     }
     setBusy(false);
   };
@@ -84,10 +106,11 @@ export default function Booking() {
     return (
       <section className="bt-sec">
         <div className="bt-form">
-          <h2>{t("book.doneTitle")}</h2>
+          <h2>{zh ? `${kindLabel}預約完成` : `${kindLabel} booked`}</h2>
           <div className="bt-ok" style={{ marginTop: 12 }}>
-            {t("book.doneBody", { date: fmtD(done.date), time: done.time,
-                                  unit: done.unitType || "—", email: done.email })}
+            {zh
+              ? `${fmtD(done.date)} ${done.time}（Edmonton 時間）。確認與提醒會透過${done.channel === "sms" ? "簡訊" : done.channel === "both" ? "Email 和簡訊" : "Email"}發送。編號：${done.ref}`
+              : `${fmtD(done.date)} at ${done.time} (Edmonton time). Confirmation and reminder will be sent by ${done.channel === "sms" ? "SMS" : done.channel === "both" ? "email and SMS" : "email"}. Reference: ${done.ref}`}
           </div>
           <p className="bt-hint" style={{ marginTop: 12 }}>{t("book.reschedule")}</p>
           <div style={{ marginTop: 20, display: "flex", gap: 8, flexWrap: "wrap" }}>
@@ -102,16 +125,18 @@ export default function Booking() {
   return (
     <section className="bt-sec">
       <div className="bt-form">
-        <h2>{t("book.title")}</h2>
-        <p className="bt-body">{t("book.sub")}</p>
+          <h2>{zh ? `預約${kindLabel}` : `Book ${kindLabel}`}</h2>
+        <p className="bt-body">{kind === "showing" ? t("book.sub") : (zh
+          ? "登入後選擇可用時間；預約會加入負責同事的日程。"
+          : "Choose an available time after signing in. The appointment will be added to the responsible staff member's schedule.")}</p>
 
-        <div className="bt-f">
+        {kind === "showing" && <div className="bt-f">
           <label>{t("book.suite")}</label>
           <select className="bt-sel" value={unitType} onChange={(e) => setUnitType(e.target.value)}>
             <option value="">{t("book.anySuite")}</option>
             {["1C", "1A", "1B", "2A", "3A"].map((c) => <option key={c} value={c}>{c}</option>)}
           </select>
-        </div>
+        </div>}
 
         {occupied && <div className="bt-note" style={{ margin: "0 0 18px" }}>
           <p>{t("book.occupied")}</p>
@@ -160,6 +185,18 @@ export default function Booking() {
                  onChange={(e) => setForm({ ...form, phone: e.target.value })} />
         </div>
         <div className="bt-f">
+          <label>{zh ? "確認與提醒方式" : "Confirmation and reminder"}</label>
+          <select className="bt-sel" value={form.notification}
+                  onChange={(e) => setForm({ ...form, notification:e.target.value })}>
+            <option value="email">Email</option>
+            <option value="sms">SMS</option>
+            <option value="both">{zh ? "Email 和 SMS" : "Email and SMS"}</option>
+          </select>
+          {wantsSms && !form.phone.trim() && <p className="bt-hint">
+            {zh ? "選擇 SMS 時請填寫含國家區號的手機號碼。" : "Enter a mobile number with country code for SMS."}
+          </p>}
+        </div>
+        <div className="bt-f">
           <label>{t("book.notes")}</label>
           <textarea className="bt-ta" value={form.notes}
                     onChange={(e) => setForm({ ...form, notes: e.target.value })} />
@@ -167,7 +204,7 @@ export default function Booking() {
 
         {err && <div className="bt-err">{err}</div>}
         <button className="bt-btn" onClick={submit} disabled={!canSubmit}>
-          {busy ? t("book.booking") : t("book.submit")}
+          {busy ? t("book.booking") : (zh ? `確認${kindLabel}時間` : `Confirm ${kindLabel}`)}
         </button>
       </div>
 

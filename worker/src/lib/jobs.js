@@ -464,68 +464,89 @@ async function reclaimLeases(sql) {
   return back.length;
 }
 
+async function sendOutboxEmail(row, env) {
+  if (!env.RESEND_API_KEY) throw new Error("No email delivery provider configured");
+  if (!row.to_email || !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(row.to_email))
+    throw new Error("Missing or invalid email address");
+  const res = await fetch("https://api.resend.com/emails", {
+    method: "POST",
+    headers: { Authorization:`Bearer ${env.RESEND_API_KEY}`, "Content-Type":"application/json" },
+    body: JSON.stringify({
+      from: `${env.FROM_NAME ?? "Baydo Pointe"} <${env.FROM_EMAIL ?? "noreply@themizar.ca"}>`,
+      to: [row.to_email], subject:row.subject ?? "A message from Baydo Pointe",
+      text:row.body, reply_to:env.REPLY_TO_EMAIL ?? "rentals@themizar.ca",
+    }),
+  });
+  if (!res.ok) {
+    const raw = await res.text().catch(() => "");
+    let detail = raw;
+    try {
+      const parsed = JSON.parse(raw);
+      detail = parsed.message ?? parsed.name ?? parsed.error ?? raw;
+    } catch (_) {}
+    detail = String(detail || res.statusText || "Provider rejected the message")
+      .replace(/\s+/g, " ").slice(0, 350);
+    throw new Error(`EMAIL_${res.status}: ${detail}`);
+  }
+  return (await res.json()).id ?? "email";
+}
+
+async function sendOutboxSms(row, env) {
+  if (!env.TWILIO_ACCOUNT_SID || !env.TWILIO_AUTH_TOKEN || !env.TWILIO_FROM)
+    throw new Error("No SMS delivery provider configured");
+  const phone = String(row.to_phone ?? "").replace(/[^+\d]/g, "");
+  if (!/^\+\d{10,15}$/.test(phone))
+    throw new Error("Missing or invalid SMS phone number; include the country code");
+  const body = new URLSearchParams({ To:phone, From:env.TWILIO_FROM,
+    Body:String(row.body ?? "").slice(0, 1500) });
+  const res = await fetch(`https://api.twilio.com/2010-04-01/Accounts/${
+    env.TWILIO_ACCOUNT_SID}/Messages.json`, {
+    method:"POST",
+    headers:{ Authorization:`Basic ${btoa(`${env.TWILIO_ACCOUNT_SID}:${env.TWILIO_AUTH_TOKEN}`)}`,
+      "Content-Type":"application/x-www-form-urlencoded" },
+    body:body.toString(),
+  });
+  if (!res.ok) {
+    const detail = String(await res.text().catch(() => res.statusText)).replace(/\s+/g, " ").slice(0, 350);
+    throw new Error(`SMS_${res.status}: ${detail}`);
+  }
+  return (await res.json()).sid ?? "sms";
+}
+
 async function drainOutbox(sql, env, limit) {
   // Anything abandoned comes back before deciding what to send.
   await reclaimLeases(sql);
 
   const rows = await sql`
     SELECT * FROM outbox
-    WHERE state = 'queued' AND channel IN ('email', 'both')
+    WHERE state = 'queued' AND channel IN ('email', 'sms', 'both')
+      AND (kind NOT LIKE '%_reminder' OR required_by IS NULL
+        OR required_by::timestamptz <= now())
     ORDER BY created_at LIMIT ${limit}`;
   if (!rows.length) return { attempted: 0, sent: 0 };
 
   let sent = 0;
   for (const row of rows) {
-    try {
-      if (!env.RESEND_API_KEY) {
-        // No provider. Recorded as unattempted rather than failed, because a
-        // message nobody tried to send is a different problem from one that
-        // bounced.
-        await sql`UPDATE outbox SET
-          last_error = 'No delivery provider configured' WHERE id = ${row.id}`;
-        continue;
-      }
+    const providers = [];
+    const errors = [];
+    const wantsEmail = row.channel === "email" || row.channel === "both";
+    const wantsSms = row.channel === "sms" || row.channel === "both";
+    if (wantsEmail) try { providers.push(await sendOutboxEmail(row, env)); }
+      catch (error) { errors.push(error.message); }
+    if (wantsSms) try { providers.push(await sendOutboxSms(row, env)); }
+      catch (error) { errors.push(error.message); }
 
-      if (!row.to_email || !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(row.to_email)) {
-        await sql`UPDATE outbox SET attempts = 5, state = 'failed',
-          last_error = 'Missing or invalid email address' WHERE id = ${row.id}`;
-        continue;
-      }
-
-      const res = await fetch("https://api.resend.com/emails", {
-        method: "POST",
-        headers: { Authorization: `Bearer ${env.RESEND_API_KEY}`,
-                   "Content-Type": "application/json" },
-        body: JSON.stringify({
-          from: `${env.FROM_NAME ?? "Baydo Pointe"} <${env.FROM_EMAIL ?? "noreply@themizar.ca"}>`,
-          to: [row.to_email],
-          subject: row.subject ?? "A message from Baydo Pointe",
-          text: row.body,
-          reply_to: env.REPLY_TO_EMAIL ?? "rentals@themizar.ca",
-        }),
-      });
-
-      if (!res.ok) {
-        // Resend returns the useful reason in its JSON body (for example an
-        // unverified sending domain or a restricted API key). Keeping only
-        // the HTTP status made every configuration problem look identical.
-        const raw = await res.text().catch(() => "");
-        let detail = raw;
-        try {
-          const parsed = JSON.parse(raw);
-          detail = parsed.message ?? parsed.name ?? parsed.error ?? raw;
-        } catch (_) {}
-        detail = String(detail || res.statusText || "Provider rejected the message")
-          .replace(/\s+/g, " ").slice(0, 350);
-        throw new Error(`EMAIL_${res.status}: ${detail}`);
-      }
-      const { id } = await res.json();
-      await sql`UPDATE outbox SET state='sent', sent_at=now(), provider_id=${id ?? null},
-        attempts = attempts + 1 WHERE id = ${row.id}`;
+    if (providers.length) {
+      await sql`UPDATE outbox SET state='sent', sent_at=now(),
+        provider_id=${providers.join(",")}, attempts=attempts + 1,
+        last_error=${errors.length ? `Partial delivery: ${errors.join("; ")}` : null}
+        WHERE id = ${row.id}`;
       sent++;
-    } catch (e) {
+    } else {
       const attempts = row.attempts + 1;
-      await sql`UPDATE outbox SET attempts=${attempts}, last_error=${e.message},
+      const providerMissing = errors.length && errors.every((x) => x.startsWith("No "));
+      await sql`UPDATE outbox SET attempts=${providerMissing ? row.attempts : attempts},
+        last_error=${errors.join("; ") || "No usable delivery channel"},
         state=${attempts >= 5 ? "failed" : "queued"} WHERE id = ${row.id}`;
     }
   }

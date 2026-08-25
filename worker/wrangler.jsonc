@@ -74,6 +74,9 @@
 
   // Secrets are not here. Set them with:
   //   npx wrangler secret put RESEND_API_KEY
+  //   npx wrangler secret put TWILIO_ACCOUNT_SID
+  //   npx wrangler secret put TWILIO_AUTH_TOKEN
+  //   npx wrangler secret put TWILIO_FROM
   //   npx wrangler secret put SESSION_PEPPER
   // Anything in vars is visible in the dashboard and in this file.
 }

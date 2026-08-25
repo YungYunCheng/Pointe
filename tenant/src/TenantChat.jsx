@@ -1,4 +1,5 @@
 import React, { useState, useEffect, useRef, useCallback } from "react";
+import { useNavigate } from "react-router-dom";
 import { publicAi, publicHandoff } from "./lib/ai.js";
 
 /* ============================================================
@@ -56,6 +57,8 @@ const T = {
     offlineErr: "That did not go through. Try again, or ask for a person.",
     emergencyTitle: "If this is urgent",
     emergencyBody: "For a leak, no heat, no hot water or anything unsafe, call the office rather than waiting here.",
+    appointmentLogin: "To protect your information, please sign in before choosing a time. This conversation will stay here while you sign in.",
+    appointmentAction: "Sign in and choose a time",
   },
   zh: {
     launcher: "有問題嗎？",
@@ -77,6 +80,8 @@ const T = {
     offlineErr: "訊息沒送出去，請再試一次，或轉真人。",
     emergencyTitle: "如果是緊急狀況",
     emergencyBody: "漏水、沒暖氣、沒熱水或任何安全問題，請直接打電話到辦公室，不要在這裡等。",
+    appointmentLogin: "為了保護你的資料，請先登入再選擇時間。登入期間這段聊天會保留。",
+    appointmentAction: "登入並選擇時間",
   },
 };
 
@@ -108,16 +113,31 @@ const inHours = () => {
   return dow >= 1 && dow <= 5 && h >= HANDOFF_HOURS.start && h < HANDOFF_HOURS.end;
 };
 const looksChinese = (s) => /[\u4e00-\u9fff]/.test(s);
+const CHAT_STATE_KEY = "baydo:pointe-chat-v2";
+const APPOINTMENT_PATTERNS = [
+  { type:"showing", re: /(?:book|schedule|arrange|want|like).{0,24}(?:showing|viewing|tour)|when can i.{0,20}(?:view|tour|see)|(?:showing|viewing|tour).{0,24}(?:time|appointment)|(?:想|要|預約|预约|安排|什麼時候|什么时候).{0,12}(?:看房|參觀|参观)|(?:看房|參觀|参观).{0,12}(?:時間|时间|預約|预约)/i },
+  { type:"keys", re: /(?:book|schedule|arrange|pick ?up|collect).{0,24}(?:keys?|fob)|(?:keys?|fob).{0,24}(?:time|appointment|pick ?up|collect)|(?:預約|预约|安排|領|领|拿|交接).{0,12}(?:鑰匙|钥匙|門禁卡|门禁卡)|(?:鑰匙|钥匙|門禁卡|门禁卡).{0,12}(?:時間|时间|預約|预约|領|领|拿|交接)/i },
+  { type:"signing", re: /(?:book|schedule|arrange|want|need).{0,24}(?:signing|sign (?:the )?(?:lease|contract))|(?:signing|sign (?:the )?(?:lease|contract)).{0,24}(?:time|appointment)|(?:想|要|預約|预约|安排).{0,12}(?:簽約|签约|簽合同|签合同|簽租約|签租约)|(?:簽約|签约|簽合同|签合同|簽租約|签租约).{0,12}(?:時間|时间|預約|预约)/i },
+];
+
+function savedChatState() {
+  try {
+    const parsed = JSON.parse(sessionStorage.getItem(CHAT_STATE_KEY) || "null");
+    return parsed && Array.isArray(parsed.msgs) ? parsed : null;
+  } catch { return null; }
+}
 
 export default function TenantChat() {
+  const navigate = useNavigate();
+  const saved = useRef(savedChatState()).current;
   const [open, setOpen] = useState(false);
-  const [lang, setLang] = useState("en");
-  const [msgs, setMsgs] = useState([]);
+  const [lang, setLang] = useState(saved?.lang === "zh" ? "zh" : "en");
+  const [msgs, setMsgs] = useState(saved?.msgs ?? []);
   const [input, setInput] = useState("");
   const [busy, setBusy] = useState(false);
   const [handedOff, setHandedOff] = useState(false);
   const [unread, setUnread] = useState(0);
-  const [threadId] = useState(() => uid("th_"));
+  const [threadId] = useState(() => saved?.threadId || uid("th_"));
   const bodyRef = useRef(null);
   const t = T[lang];
 
@@ -126,6 +146,13 @@ export default function TenantChat() {
   }, [msgs, busy]);
 
   useEffect(() => { if (open) setUnread(0); }, [open]);
+
+  useEffect(() => {
+    try {
+      sessionStorage.setItem(CHAT_STATE_KEY, JSON.stringify({ threadId, lang,
+        msgs:msgs.slice(-60) }));
+    } catch {}
+  }, [threadId, lang, msgs]);
 
   const push = (m) => setMsgs((x) => [...x, { id: uid("m_"), at: nowISO(), ...m }]);
 
@@ -155,6 +182,16 @@ export default function TenantChat() {
     const detected = looksChinese(body) ? "zh" : "en";
     if (detected !== lang) setLang(detected);
     const tt = T[detected];
+
+    // Appointments are account actions, not questions for the model. Keep the
+    // conversation in sessionStorage, send the visitor through the existing
+    // sign-in gate, then continue on the real scheduling page.
+    const appointment = APPOINTMENT_PATTERNS.find((item) => item.re.test(body));
+    if (appointment) {
+      push({ role:"bot", text:tt.appointmentLogin, auto:true,
+        action:{ type:appointment.type, href:`/book?kind=${appointment.type}` } });
+      return;
+    }
 
     // 1. Hard stops run first, before any automated answer
     const hit = HARD_STOPS.find((r) => r.re.test(body));
@@ -238,6 +275,11 @@ export default function TenantChat() {
             {msgs.map((m) => (
               <div key={m.id} className={`tc-msg tc-msg--${m.role}`}>
                 <p>{m.text}</p>
+                {m.action && (
+                  <button className="tc-action" onClick={() => navigate(m.action.href)}>
+                    {t.appointmentAction}
+                  </button>
+                )}
                 <div className="tc-meta">
                   <span>{clock(m.at)}</span>
                   {m.auto && <span className="tc-auto">{t.autoNote}</span>}
@@ -346,6 +388,10 @@ const CSS = `
   font-size:10.5px;color:var(--dim)}
 .tc-msg--tenant .tc-meta{justify-content:flex-end}
 .tc-auto{border:1px solid var(--rule);border-radius:8px;padding:0 6px}
+.tc-action{font:inherit;font-size:12.5px;font-weight:600;cursor:pointer;border:0;
+  border-radius:7px;background:var(--accent);color:#fff;padding:8px 12px;margin-top:7px}
+.tc-action:hover{filter:brightness(.92)}
+.tc-action:focus-visible{outline:2px solid var(--accent);outline-offset:2px}
 
 .tc-quick{display:flex;flex-wrap:wrap;gap:6px;margin-top:2px}
 .tc-quick button{font:inherit;font-size:12.5px;cursor:pointer;background:var(--paper);

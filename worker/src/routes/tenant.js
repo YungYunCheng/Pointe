@@ -279,7 +279,7 @@ r.get("/tenant/me", async (c) => {
         AND sp.signed_at IS NULL AND sr.state IN ('sent','viewed','signed')`;
 
     return c.json({
-      tenant: { name: t.name, email: t.email, locale: t.locale },
+      tenant: { name: t.name, email: t.email, phone:t.phone, locale: t.locale },
       account_state: account?.account_state ?? "prospect",
       email_verified: !!account?.email_verified_at,
       unit: null, lease: null,
@@ -322,7 +322,7 @@ r.get("/tenant/me", async (c) => {
     .reduce((s, x) => s + Number(x.amount) - Number(x.paid_amount), 0);
 
   return c.json({
-    tenant: { name: t.name, email: t.email, unit, locale: t.locale },
+    tenant: { name: t.name, email: t.email, phone:t.phone, unit, locale: t.locale },
     account_state: "tenant",
     email_verified: !!account.email_verified_at,
     unit, lease: lease ?? null,
@@ -395,6 +395,159 @@ r.get("/tenant/viewings", async (c) => {
     WHERE sr.account_id = ${t.id}
     ORDER BY COALESCE(e.starts_at, sr.requested_time) DESC NULLS LAST
     LIMIT 50` });
+});
+
+const APPOINTMENT_TYPES = new Set(["showing", "signing", "keys"]);
+const appointmentRole = (type) => type === "signing" ? "property_manager" : "building_manager";
+const appointmentDuration = () => 30;
+
+function appointmentCopy(type, locale, date, time, assignee, reference) {
+  const zh = locale === "zh";
+  const labels = zh
+    ? { showing:"看房", signing:"簽約", keys:"交接鑰匙" }
+    : { showing:"viewing", signing:"lease-signing appointment", keys:"key handover" };
+  return {
+    subject: zh ? `${labels[type]}預約已確認 · ${date} ${time}`
+      : `${labels[type]} confirmed · ${date} ${time}`,
+    body: zh
+      ? `你的${labels[type]}已預約在 ${date} ${time}（Edmonton 時間）。負責同事：${assignee}。預約編號：${reference}。如需改期，請回覆此訊息。`
+      : `Your ${labels[type]} is booked for ${date} at ${time} (Edmonton time). Your staff contact is ${assignee}. Reference: ${reference}. Reply to this message if you need to reschedule.`,
+    reminder: zh
+      ? `提醒：你的${labels[type]}在 ${date} ${time}（Edmonton 時間）。負責同事：${assignee}。預約編號：${reference}。`
+      : `Reminder: your ${labels[type]} is on ${date} at ${time} (Edmonton time). Staff contact: ${assignee}. Reference: ${reference}.`,
+  };
+}
+
+/** One authenticated booking path for chat and the booking page. It writes
+ * the shared staff schedule, assigns the correct role, queues confirmations,
+ * and creates a reminder 24 hours before the appointment. */
+r.post("/tenant/appointments", async (c) => {
+  const sql = c.get("db");
+  const t = c.get("tenant");
+  const body = await c.req.json().catch(() => ({}));
+  const type = String(body.type ?? "showing");
+  const unitType = String(body.unit_type ?? "").trim() || null;
+  const requestedDate = String(body.requested_date ?? "");
+  const requestedClock = String(body.requested_time ?? "");
+  const requestId = String(body.client_request_id ?? "").slice(0, 80) || null;
+  const requestedChannel = ["email", "sms", "both"].includes(body.notification_channel)
+    ? body.notification_channel : "email";
+
+  if (!APPOINTMENT_TYPES.has(type)) return c.json({ code:"INVALID_APPOINTMENT_TYPE" }, 400);
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(requestedDate) || !/^\d{2}:\d{2}$/.test(requestedClock))
+    return c.json({ code:"INVALID_SLOT" }, 400);
+
+  const [account] = await sql`SELECT email, phone, full_name, unit_number, lease_id, locale
+    FROM tenant_accounts WHERE id = ${t.id} AND is_active`;
+  if (!account) return c.json({ code:"ACCOUNT_NOT_FOUND" }, 404);
+
+  if (type === "keys") {
+    if (!account.unit_number || !account.lease_id)
+      return c.json({ code:"KEYS_NOT_RELEASED" }, 409);
+    const [released] = await sql`SELECT id FROM key_release_approvals
+      WHERE unit_number = ${account.unit_number} AND lease_id = ${account.lease_id}
+        AND lease_signed AND approved_at IS NOT NULL`;
+    if (!released) return c.json({ code:"KEYS_NOT_RELEASED" }, 409);
+  }
+  if (type === "signing") {
+    const [pending] = await sql`SELECT sp.id FROM signature_parties sp
+      JOIN signature_requests sr ON sr.id = sp.request_id
+      WHERE lower(sp.email) = ${String(account.email).toLowerCase()}
+        AND sp.signed_at IS NULL AND sr.state IN ('sent','viewed','signed') LIMIT 1`;
+    if (!pending) return c.json({ code:"SIGNING_NOT_READY" }, 409);
+  }
+
+  if (unitType) {
+    const [known] = await sql`SELECT code FROM unit_types WHERE code = ${unitType}`;
+    if (!known) return c.json({ code:"UNIT_TYPE_NOT_FOUND" }, 404);
+  }
+
+  const offered = await availableSlots(sql, type === "showing" ? unitType : null);
+  const day = offered.days.find((d) => d.date === requestedDate);
+  if (!day?.slots.includes(requestedClock))
+    return c.json({ code:"SLOT_NOT_AVAILABLE", detail:"Choose another time." }, 409);
+
+  const startsAt = edmontonInstant(requestedDate, requestedClock);
+  const endsAt = new Date(startsAt.getTime() + appointmentDuration(type) * 60000);
+  const role = appointmentRole(type);
+  const [assignee] = await sql`SELECT id, full_name, email FROM users
+    WHERE role_code = ${role} AND is_active ORDER BY full_name, id LIMIT 1`;
+  if (!assignee) return c.json({ code:"ACTIVE_ASSIGNEE_REQUIRED" }, 503);
+
+  const phone = String(body.phone ?? account.phone ?? "").trim() || null;
+  const channel = requestedChannel === "sms" && !phone ? "email"
+    : requestedChannel === "both" && !phone ? "email" : requestedChannel;
+  const locale = body.locale === "zh" ? "zh" : (account.locale === "zh" ? "zh" : "en");
+  const prefix = { showing:"V", signing:"S", keys:"K" }[type];
+  const reference = `${prefix}${Date.now().toString(36).toUpperCase()}${crypto.randomUUID()
+    .replace(/-/g, "").slice(0, 4).toUpperCase()}`;
+  const copy = appointmentCopy(type, locale, requestedDate, requestedClock,
+    assignee.full_name, reference);
+
+  try {
+    const result = await sql.begin(async (tx) => {
+      await tx`SELECT pg_advisory_xact_lock(hashtext(
+        ${`${type}:${requestedDate}:${requestedClock}:${assignee.id}`}))`;
+      if (requestId) {
+        const [repeat] = await tx`SELECT id, ref_id, starts_at, type, assignee
+          FROM events WHERE created_via = ${`tenant_portal:${requestId}`}`;
+        if (repeat) return { event:repeat, repeated:true };
+      }
+      const [conflict] = await tx`SELECT EXISTS (
+        SELECT 1 FROM events WHERE state = 'booked' AND blocking
+          AND assignee_id = ${assignee.id}
+          AND starts_at < ${endsAt.toISOString()}
+          AND starts_at + duration_min * INTERVAL '1 minute' > ${startsAt.toISOString()}
+      ) AS taken`;
+      if (conflict.taken)
+        throw Object.assign(new Error("SLOT_NOT_AVAILABLE"), { status:409 });
+
+      const eventId = uid("ev_");
+      const [event] = await tx`INSERT INTO events (id, type, unit_number,
+        contact_name, contact_info, assignee_id, assignee, starts_at, duration_min,
+        blocking, state, ref_id, created_via, signing_state)
+        VALUES (${eventId}, ${type}, ${account.unit_number}, ${account.full_name},
+          ${[account.email, phone].filter(Boolean).join(" · ")}, ${assignee.id},
+          ${assignee.full_name}, ${startsAt.toISOString()}, ${appointmentDuration(type)},
+          TRUE, 'booked', ${reference}, ${requestId ? `tenant_portal:${requestId}` : "tenant_portal"},
+          ${type === "signing" ? "pending_review" : null})
+        RETURNING id, type, starts_at, duration_min, assignee, ref_id`;
+
+      if (type === "showing") await tx`INSERT INTO showing_requests
+        (id, reference, unit_type, requested_date, requested_time, name, email,
+         phone, notes, locale, event_id, state, account_id, client_request_id)
+        VALUES (${uid("sr_")}, ${reference}, ${unitType}, ${requestedDate},
+          ${startsAt.toISOString()}, ${account.full_name}, ${account.email}, ${phone},
+          ${String(body.notes ?? "").slice(0, 2000) || null}, ${locale}, ${eventId},
+          'confirmed', ${t.id}, ${requestId})`;
+
+      await tx`INSERT INTO notifications (id, audience, kind, code, params, link)
+        VALUES (${uid("nt_")}, ${assignee.id}, 'appointment', 'APPOINTMENT_BOOKED',
+          ${JSON.stringify({ event_id:eventId, type, reference, starts_at:startsAt.toISOString(),
+            contact_name:account.full_name })}, '/schedule')`;
+      await tx`INSERT INTO outbox (id, channel, to_email, to_phone, to_name, locale,
+        kind, subject, body, ref_type, ref_id, required_by)
+        VALUES (${uid("ob_")}, ${channel}, ${account.email}, ${phone}, ${account.full_name},
+          ${locale}, ${`${type}_confirm`}, ${copy.subject}, ${copy.body}, 'event', ${eventId},
+          ${new Date(Date.now() + 5 * 60000).toISOString()})`;
+
+      const reminderAt = new Date(startsAt.getTime() - 24 * 3600e3);
+      if (reminderAt > new Date()) await tx`INSERT INTO outbox
+        (id, channel, to_email, to_phone, to_name, locale, kind, subject, body,
+         ref_type, ref_id, required_by)
+        VALUES (${uid("ob_")}, ${channel}, ${account.email}, ${phone}, ${account.full_name},
+          ${locale}, ${`${type}_reminder`}, ${copy.subject}, ${copy.reminder}, 'event',
+          ${eventId}, ${reminderAt.toISOString()})`;
+
+      return { event, repeated:false };
+    });
+    return c.json({ appointment:{ ...result.event, reference }, repeated:result.repeated,
+      notification_channel:channel }, result.repeated ? 200 : 201);
+  } catch (error) {
+    if (error.status === 409 || error.code === "23505")
+      return c.json({ code:"SLOT_NOT_AVAILABLE", detail:"Choose another time." }, 409);
+    throw error;
+  }
 });
 
 /** Book only a slot the server is still offering. The session supplies the

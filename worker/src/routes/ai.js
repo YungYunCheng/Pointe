@@ -1,12 +1,14 @@
 import { Hono } from "hono";
 import { audit } from "../lib/auth.js";
 import { detectPublicIntents } from "../lib/public-intent.js";
+import { numericFacts, routeStaffMessage, staffFactsForTopics }
+  from "../lib/staff-message-routing.js";
 import { runWorkersAi, workersAiText } from "../lib/workers-ai.js";
 
 const r = new Hono();
 
 const PROMPTS = {
-  inbox_draft: `Classify a property-management message and draft a concise reply using only the supplied facts. Output JSON only: {"intent":"one supplied intent","confidence":0.0,"draft":"reply","facts_used":[],"missing_info":null}. Never invent prices, availability, policy, legal conclusions, or promises. If facts are missing, say so in missing_info.`,
+  inbox_draft: `Draft a concise property-management reply after the application has already routed the message. Do not reclassify it and do not decide whether to query a database. Use a supplied property fact only when it directly answers the customer's question. If no property facts are supplied, do not introduce rents, vacancies, units, parking or fees. Reply in the customer's language. Never invent prices, availability, policy, legal conclusions or promises. Return only the reply text, with no JSON or Markdown.`,
   intake_question: `Help collect lease-intake fields. Extract only clearly stated values. Ask one neutral question at a time and do not ask about protected personal characteristics. Output JSON only: {"extracted":{},"next_question":"question or null","done":false}.`,
   template_fields: `Identify fillable fields explicitly present in the supplied approved document text. Output a JSON array only. Each item must have key, label, source_text and confidence. Do not add clauses or legal language.`,
   document_convert: `Reformat the supplied document content for the requested operational target without changing its meaning, amounts, clauses, or obligations. Return only the converted content.`,
@@ -14,7 +16,7 @@ const PROMPTS = {
   purchase_order: `Draft a purchase-order description, scope and expense lines from the maintenance facts. Output JSON only with description, scope, gl_code, lines and needs_quote. Amounts must be blank unless a vendor quote is supplied.`,
   parking_advice: `Analyse the supplied parking allocation facts. Explain operational risks and practical next checks without inventing availability or policy. Return concise staff guidance.`,
   report_narrative: `Turn the supplied accounting figures into a concise factual management narrative. Do not change or infer figures. Flag missing comparisons.`,
-  public_chat: `Answer a prospective tenant using only the supplied public property data and approved company rules. Reply in the visitor's language. Never invent or guarantee availability, rent, fees, parking, dates, policies, approval, a reservation or an outcome. Counts are a current snapshot and may change. If the answer is not present, say the leasing team must confirm it. Do not reveal unit numbers, tenant information, leases, payments, vehicle information or internal notes. Keep the answer concise and do not output JSON.`,
+  public_chat: `Answer a prospective tenant using only the supplied public property data and approved company rules. Reply in the visitor's language. First answer the visitor's actual question; do not turn a greeting, conversational question or unrelated question into a rent, vacancy or database lookup. Use a property fact only when it is directly relevant. Never invent or guarantee availability, rent, fees, parking, dates, policies, approval, a reservation or an outcome. Counts are a current snapshot and may change. If the answer is not present, say the leasing team must confirm it. Do not reveal unit numbers, tenant information, leases, payments, vehicle information or internal notes. Keep the answer concise and do not output JSON.`,
 };
 
 const adminOnly = async (c, next) => {
@@ -23,6 +25,48 @@ const adminOnly = async (c, next) => {
 };
 
 const clipped = (value, max = 4000) => String(value ?? "").slice(0, max);
+
+const STAFF_FACT_LABELS = {
+  availability: "Live suite availability", rent_quote: "Current rent range",
+  unit_spec: "Unit type and size", amenities: "Approved amenities",
+  location: "Approved address and transit", pet_policy: "Current pet fees and limits",
+  fees: "Current fee settings", parking_availability: "Live parking availability",
+  waitlist_position: "Current aggregate parking waitlist",
+};
+
+function staffMissingInfo(route) {
+  if (route.intent === "waitlist_position")
+    return "An individual's waitlist position requires staff confirmation.";
+  if (["showing_hours", "showing_booking", "showing_reschedule", "showing_cancel",
+    "signing_booking"].includes(route.intent))
+    return "The scheduling system must confirm the requested time.";
+  if (route.intent === "parking_request")
+    return "A parking assignment requires staff confirmation.";
+  return null;
+}
+
+function staffFallbackDraft(message, route) {
+  const zh = /[\u3400-\u9fff]/.test(message);
+  if (route.intent === "maintenance") return zh
+    ? "已收到你的維修問題。我們會交由大樓管理同事查看並回覆你；若情況緊急，請直接致電辦公室。"
+    : "We received your maintenance request. Building staff will review it and reply; if it is urgent, please call the office.";
+  return zh
+    ? "已收到你的問題。這項內容需要同事確認，我們會盡快回覆你。"
+    : "We received your question. A team member needs to confirm this and will reply as soon as possible.";
+}
+
+function staffDraftResult({ route, draft, selectedFacts, missingInfo, fallback = false }) {
+  return JSON.stringify({
+    intent: route.intent,
+    topics: route.topics,
+    confidence: route.confidence,
+    draft: clipped(draft, 5000),
+    facts_used: route.dataTopics.map((topic) => STAFF_FACT_LABELS[topic]).filter(Boolean),
+    allowed_numbers: numericFacts(selectedFacts),
+    missing_info: missingInfo,
+    needs_review: fallback || route.intent === "other" || !!missingInfo,
+  });
+}
 
 async function trainingContext(c, task) {
   try {
@@ -587,9 +631,47 @@ r.post("/ai/:task", async (c) => {
   const task = c.req.param("task");
   const body = await c.req.json().catch(() => ({}));
   const input = body.input ?? {};
-  const encoded = JSON.stringify(input);
+  let inboxRoute = null;
+  let inboxFacts = {};
+  let inboxMissingInfo = null;
+  let encoded;
+
+  if (task === "inbox_draft") {
+    const message = clipped(input.message, 5000).trim();
+    if (!message) return c.json({ code: "MESSAGE_REQUIRED" }, 400);
+    inboxRoute = routeStaffMessage(message);
+    if (inboxRoute.dataTopics.length) {
+      try {
+        const liveFacts = await publicPropertyFacts(c.get("db"));
+        inboxFacts = staffFactsForTopics(liveFacts, inboxRoute.dataTopics);
+      } catch (error) {
+        console.error("[inbox-live-facts]", error?.message ?? error);
+        inboxMissingInfo = "Live property data is temporarily unavailable; staff confirmation is required.";
+      }
+    }
+    inboxMissingInfo = inboxMissingInfo ?? staffMissingInfo(inboxRoute);
+    encoded = JSON.stringify({
+      customer_message: message,
+      channel: clipped(input.channel, 30),
+      routed_intent: inboxRoute.intent,
+      detected_topics: inboxRoute.topics,
+      relevant_property_facts: inboxFacts,
+      missing_information: inboxMissingInfo,
+    });
+  } else {
+    encoded = JSON.stringify(input);
+  }
   if (encoded.length > 80_000) return c.json({ code: "AI_INPUT_TOO_LARGE" }, 413);
-  if (!c.env.AI) return c.json({ code: "AI_NOT_CONFIGURED" }, 503);
+  if (!c.env.AI) {
+    if (task === "inbox_draft" && inboxRoute) {
+      const text = staffDraftResult({ route:inboxRoute,
+        draft:staffFallbackDraft(input.message, inboxRoute), selectedFacts:inboxFacts,
+        missingInfo:inboxMissingInfo ?? "The AI provider is not configured; staff review is required.",
+        fallback:true });
+      return c.json({ text, provider:"fallback", ai_status:"AI_NOT_CONFIGURED" });
+    }
+    return c.json({ code: "AI_NOT_CONFIGURED" }, 503);
+  }
 
   const learned = await trainingContext(c, task);
   const system = (PROMPTS[task] ??
@@ -608,13 +690,35 @@ r.post("/ai/:task", async (c) => {
   } catch (error) {
     console.error("[ai]", task, error?.message ?? error);
     const code = error?.code === "AI_TIMEOUT" ? "AI_TIMEOUT" : "AI_PROVIDER_ERROR";
+    if (task === "inbox_draft" && inboxRoute) {
+      const fallback = staffFallbackDraft(input.message, inboxRoute);
+      const text = staffDraftResult({ route:inboxRoute, draft:fallback,
+        selectedFacts:inboxFacts,
+        missingInfo:inboxMissingInfo ?? "The AI provider was unavailable; staff review is required.",
+        fallback:true });
+      await recordAiRun(c.get("db"), { source:"staff_task",
+        question:`Task: ${task}`, answer:text, language:"en", provider:"fallback",
+        model:workersAiModel(c), needsHuman:true, errorCode:code,
+        metadata:{ ref_type:body.ref_type ?? null, ref_id:body.ref_id ?? null,
+          routed_intent:inboxRoute.intent, data_topics:inboxRoute.dataTopics } });
+      return c.json({ text, model:workersAiModel(c), provider:"fallback",
+        ai_status:code });
+    }
     await recordAiRun(c.get("db"), { source:"staff_task",
       question:`Task: ${task}`, language:"en", provider:"workers_ai",
       model:workersAiModel(c), needsHuman:true, errorCode:code,
       metadata:{ ref_type:body.ref_type ?? null, ref_id:body.ref_id ?? null } });
     return c.json({ code }, code === "AI_TIMEOUT" ? 504 : 502);
   }
-  const text = workersAiText(result);
+  const rawText = workersAiText(result);
+  const text = task === "inbox_draft" && inboxRoute
+    ? staffDraftResult({ route:inboxRoute,
+      draft:rawText || staffFallbackDraft(input.message, inboxRoute),
+      selectedFacts:inboxFacts,
+      missingInfo:rawText ? inboxMissingInfo
+        : (inboxMissingInfo ?? "The AI returned no draft; staff review is required."),
+      fallback:!rawText })
+    : rawText;
   if (!text) {
     await recordAiRun(c.get("db"), { source:"staff_task",
       question:`Task: ${task}`, language:"en", provider:"workers_ai",

@@ -17,6 +17,11 @@ const cases = [
   ["房租和车位多少钱", ["parking", "rent"]],
   ["多少钱", ["clarification"]],
   ["Where is the building?", ["location"]],
+  ["Where can I read more about this?", []],
+  ["你还有什么想告诉我的？", []],
+  ["有没有更好的办法？", []],
+  ["I want to rent here. What should I know?", []],
+  ["什么时候可以入住 1A？", ["availability"]],
 ];
 
 for (const [question, expected] of cases) {

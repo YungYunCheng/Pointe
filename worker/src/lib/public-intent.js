@@ -3,15 +3,16 @@ const PATTERNS = {
   pets: /\bpets?\b|\bdogs?\b|\bcats?\b|\banimals?\b|寵物|宠物|養狗|养狗|養貓|养猫|貓|猫|狗/i,
   fees: /\bdeposit\b|\bstorage\b|application\s+fee|utilities?|security\s+deposit|押金|保證金|保证金|儲物|储物|水電|水电|申請費|申请费/i,
   amenities: /\bamenit(?:y|ies)\b|\bgym\b|\blounge\b|game\s+room|bike\s+storage|健身|休息室|遊戲室|游戏室|自行車|自行车/i,
-  location: /\baddress\b|\blocation\b|\bwhere\b|\btransit\b|\blrt\b|地址|位置|在哪|交通|地鐵|地铁/i,
-  availability: /\bavailable\b|\bavailability\b|\bvacan(?:t|cy|cies)\b|empty\s+(?:unit|suite)|how\s+many|do\s+you\s+have|any\s+(?:unit|suite|vacanc)|空房|空屋|幾套|几套|幾間|几间|還有|还有|剩下|剩多少|有沒有|有没有|有無|有无|有嗎|有吗|可租|出租|入住|move[ -]?in/i,
-  rent: /\brent(?:al)?\b|monthly\s+(?:rent|rate)|suite\s+(?:rent|price)|unit\s+(?:rent|price)|房租|租金|月租|租(?:一間|一间|一套|房)/i,
+  location: /\baddress\b|\blocation\b|\btransit\b|\blrt\b|where\s+(?:is|are).{0,24}(?:building|property|baydo|pointe)|(?:building|property|baydo|pointe).{0,24}where|地址|位置|交通|地鐵|地铁|(?:大樓|大楼|公寓|Baydo|Pointe).{0,12}(?:在哪|哪裡|哪里)|(?:在哪|哪裡|哪里).{0,12}(?:大樓|大楼|公寓|Baydo|Pointe)/i,
+  availability: /\bavailable\b|\bavailability\b|\bvacan(?:t|cy|cies)\b|empty\s+(?:unit|suite)|how\s+many\s+(?:units?|suites?|apartments?)|any\s+(?:unit|suite|vacanc)|空房|空屋|幾套|几套|幾間|几间|剩多少(?:房|套|間|间)?|可租(?:的)?(?:房|單位|单位|套房)|出租(?:的)?(?:房|單位|单位|套房)/i,
+  rent: /monthly\s+(?:rent|rate)|(?:suite|unit|apartment)\s+(?:rent|price)|rent\s+(?:price|rate|cost)|how\s+much\s+is\s+(?:the\s+)?rent|房租|租金|月租|租(?:一間|一间|一套|房).{0,12}(?:多少|價格|价格)/i,
   price: /how\s+much|what(?:'s|\s+is)\s+the\s+(?:price|cost)|\bprice\b|\bcost\b|\brate\b|多少錢|多少钱|價錢|价钱|價格|价格|幾錢|几钱|一個月多少|一个月多少/i,
   housing: /\bsuite\b|\bunit\b|\bapartment\b|\bbedroom\b|套房|房型|戶型|户型|公寓|房間|房间|房子|住房|一套/i,
 };
 
 const UNIT_TYPE = /(?:^|[^a-z0-9])(1a|1b|1c|2a|3a)(?:\s*\(m\)|\s*m)?(?:$|[^a-z0-9])/i;
 const RENT_AND_PARKING = /(?:rent|房租|租金).{0,12}(?:and|plus|和|與|与|及|跟).{0,12}(?:parking|stall|车位|車位)|(?:parking|stall|车位|車位).{0,12}(?:and|plus|和|與|与|及|跟).{0,12}(?:rent|房租|租金)/i;
+const GENERIC_AVAILABILITY = /do\s+you\s+have|(?:還有|还有|有沒有|有没有|有無|有无|有嗎|有吗|剩下)|move[ -]?in|入住/i;
 
 export function normalizePublicQuestion(value) {
   return String(value ?? "").normalize("NFKC").toLowerCase().replace(/\s+/g, " ").trim();
@@ -31,10 +32,11 @@ export function detectPublicIntents(value) {
   const fees = PATTERNS.fees.test(text);
   const amenities = PATTERNS.amenities.test(text);
   const location = PATTERNS.location.test(text);
-  const availability = PATTERNS.availability.test(text);
+  const housing = PATTERNS.housing.test(text) || UNIT_TYPE.test(text);
+  const availability = PATTERNS.availability.test(text)
+    || (GENERIC_AVAILABILITY.test(text) && housing);
   const rent = PATTERNS.rent.test(text);
   const price = PATTERNS.price.test(text);
-  const housing = PATTERNS.housing.test(text) || UNIT_TYPE.test(text);
 
   // A named subject always wins over the generic words "price" and "rent".
   // Explicitly asking for both apartment rent and parking is still supported.

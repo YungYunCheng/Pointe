@@ -230,13 +230,13 @@ async function staffSession(c, token) {
 async function tenantSession(c, token) {
   const hash = await sha256(token);
   const [row] = await c.get("db")`
-    SELECT s.id AS session_id, s.expires_at, a.id, a.email, a.full_name,
+    SELECT s.id AS session_id, s.expires_at, a.id, a.email, a.phone, a.full_name,
            a.unit_number, a.lease_id, a.locale, a.is_active
     FROM tenant_sessions s JOIN tenant_accounts a ON a.id = s.account_id
     WHERE s.token_hash = ${hash} AND s.revoked_at IS NULL`;
   if (!row || !row.is_active) return null;
   if (new Date(row.expires_at) < new Date()) return null;
-  return { id: row.id, email: row.email, name: row.full_name, unit: row.unit_number,
+  return { id: row.id, email: row.email, phone:row.phone, name: row.full_name, unit: row.unit_number,
            leaseId: row.lease_id, locale: row.locale, sessionId: row.session_id };
 }
 

@@ -125,7 +125,6 @@ const SEED = [
 const money = (n) => (n === "" || n == null || isNaN(n) ? null : "$" + Math.round(Number(n)).toLocaleString("en-CA"));
 
 export default function AIInbox({ session, embedded = false }) {
-  const [facts, setFacts] = useState(null);
   const [loading, setLoading] = useState(true);
   const [msgs, setMsgs] = useState(() => SEED.map((m) => ({ ...m, ts: Date.now(), state: "new" })));
   const [sel, setSel] = useState("m1");
@@ -164,13 +163,8 @@ useEffect(() => {
 
     const savedEscalations = await read("baydo:escalations", []);
     const savedShadowRuns = await read("baydo:shadowruns", []);
-    const pricing = await read("baydo:pricing");
-    const overrides = await read("baydo:overrides", {});
-    const parking = await read("baydo:parking");
-
     setEscalations(savedEscalations);
     setShadowRuns(savedShadowRuns);
-    setFacts(buildFacts(pricing, overrides, parking));
     setLoading(false);
   };
 
@@ -257,8 +251,7 @@ useEffect(() => {
     // 2 and 4. Classify, then draft.
     try {
       const raw = await ai("inbox_draft",
-        { facts, message: m.body, channel: m.channel,
-          intents: Object.keys(INTENT_RULES) },
+        { message: m.body, channel: m.channel },
         { ref_type: "message", ref_id: m.id });
       const parsed = JSON.parse(raw.replace(/```json|```/g, "").trim());
 
@@ -266,11 +259,14 @@ useEffect(() => {
       let level = rule.lvl;
       let warn = null;
 
-      // 4. Check: every amount in the draft must exist in the retrieved facts.
-      const bad = checkNumbers(parsed.draft, facts.allowedNumbers);
+      // 4. Check against the exact live facts selected by the server. The
+      // browser no longer supplies its older local pricing snapshot.
+      const allowedNumbers = new Set((parsed.allowed_numbers || []).map(Number));
+      const bad = checkNumbers(parsed.draft, allowedNumbers);
       if (bad.length) { level = "L1"; warn = `The draft contains amounts not found in the data: ${bad.join(", ")}. Downgraded for review.`; }
       if (parsed.missing_info) { level = "L1"; warn = warn || `Missing data: ${parsed.missing_info}. Downgraded for review.`; }
       if (parsed.confidence < 0.7) { level = "L1"; warn = warn || `Classification confidence ${parsed.confidence} is below threshold. Downgraded for review.`; }
+      if (parsed.needs_review) level = "L1";
 
       patch(m.id, {
         state: level === "L1" ? "review" : "ready",
@@ -284,7 +280,7 @@ useEffect(() => {
                     draft: "" });
     }
     setBusy(null);
-  }, [facts]);
+  }, []);
 
   const processAll = async () => {
     for (const m of msgs.filter((x) => x.state === "new")) await process(m);
@@ -296,7 +292,7 @@ useEffect(() => {
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ task: "inbox_draft", ref_type: "message", ref_id: m.id,
         original: m.body, draft: m.draft, final: body,
-        model: "@cf/zai-org/glm-4.7-flash" }),
+        model: "@cf/meta/llama-3.1-8b-instruct-fast" }),
     }).catch(() => null);
     patch(m.id, { state: "sent", draft: body, sentAt: Date.now(), edited: body !== m.draft });
   };
@@ -310,7 +306,7 @@ useEffect(() => {
     setSel(id);
   };
 
-  if (loading) return <div className="ai-root"><style>{CSS}</style><div className="ai-load">Loading property data…</div></div>;
+  if (loading) return <div className="ai-root"><style>{CSS}</style><div className="ai-load">Loading AI workspace…</div></div>;
 
   return (
     <div className={`ai-root ${embedded ? "ai-root--embedded" : ""}`}>
@@ -349,13 +345,6 @@ useEffect(() => {
 
       {view === "shadow" && (
         <Shadow runs={shadowRuns} session={session} onSave={saveShadow} />
-      )}
-
-      {view === "inbox" && !facts.hasPricing && (
-        <div className="ai-banner">
-          No rents are set, so the AI cannot look up a price and anything involving money is downgraded for review. That is the fact layer working as intended.
-          Set rents under Pricing in the leasing console, then come back.
-        </div>
       )}
 
       {view === "inbox" && (<>
@@ -499,8 +488,8 @@ useEffect(() => {
                       intent: selected.intent,
                       intent_confidence: selected.confidence,
                       facts_used: selected.factsUsed || [],
-                      model: "@cf/zai-org/glm-4.7-flash",
-                      prompt_version: "v1.0",
+                      model: "@cf/meta/llama-3.1-8b-instruct-fast",
+                      prompt_version: "v2.0-routed",
                       draft_edited_by_human: !!selected.edited,
                       sent_at: selected.sentAt ? new Date(selected.sentAt).toISOString() : null,
                     }, null, 2)}</pre>
