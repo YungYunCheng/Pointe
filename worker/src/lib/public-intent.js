@@ -7,7 +7,7 @@ const PATTERNS = {
   availability: /\bavailable\b|\bavailability\b|\bvacan(?:t|cy|cies)\b|empty\s+(?:unit|suite)|how\s+many\s+(?:units?|suites?|apartments?)|any\s+(?:unit|suite|vacanc)|空房|空屋|幾套|几套|幾間|几间|剩多少(?:房|套|間|间)?|可租(?:的)?(?:房|單位|单位|套房)|出租(?:的)?(?:房|單位|单位|套房)/i,
   rent: /monthly\s+(?:rent|rate)|(?:suite|unit|apartment)\s+(?:rent|price)|rent\s+(?:price|rate|cost)|how\s+much\s+is\s+(?:the\s+)?rent|房租|租金|月租|租(?:一間|一间|一套|房).{0,12}(?:多少|價格|价格)/i,
   price: /how\s+much|what(?:'s|\s+is)\s+the\s+(?:price|cost)|\bprice\b|\bcost\b|\brate\b|多少錢|多少钱|價錢|价钱|價格|价格|幾錢|几钱|一個月多少|一个月多少/i,
-  housing: /\bsuite\b|\bunit\b|\bapartment\b|\bbedroom\b|套房|房型|戶型|户型|公寓|房間|房间|房子|住房|一套/i,
+  housing: /\bsuite\b|\bunit\b|\bapartment\b|\bbedroom\b|套房|房型|戶型|户型|公寓|房間|房间|房子|住房|一套|一房|两房|兩房|二房|[12]\s*房|一居|两居|兩居|二居/i,
 };
 
 const UNIT_TYPE = /(?:^|[^a-z0-9])(1a|1b|1c|2a|3a)(?:\s*\(m\)|\s*m)?(?:$|[^a-z0-9])/i;
@@ -16,6 +16,15 @@ const GENERIC_AVAILABILITY = /do\s+you\s+have|(?:還有|还有|有沒有|有没�
 
 export function normalizePublicQuestion(value) {
   return String(value ?? "").normalize("NFKC").toLowerCase().replace(/\s+/g, " ").trim();
+}
+
+/** Visitors normally ask for a one- or two-bedroom home, not an internal
+ * floor-plan code. Keep the public language separate from 1A/2A routing. */
+export function bedroomCountFromPublicQuestion(value) {
+  const text = normalizePublicQuestion(value);
+  if (/\b(?:two|2)[ -]?bed(?:room)?s?\b|(?:兩|两|二|2)\s*(?:房|居|室)/i.test(text)) return 2;
+  if (/\b(?:one|1)[ -]?bed(?:room)?s?\b|(?:一|1)\s*(?:房|居|室)/i.test(text)) return 1;
+  return null;
 }
 
 /**

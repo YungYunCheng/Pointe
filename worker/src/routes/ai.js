@@ -1,6 +1,7 @@
 import { Hono } from "hono";
 import { audit } from "../lib/auth.js";
-import { detectPublicIntents } from "../lib/public-intent.js";
+import { bedroomCountFromPublicQuestion, detectPublicIntents }
+  from "../lib/public-intent.js";
 import { numericFacts, routeStaffMessage, staffFactsForTopics }
   from "../lib/staff-message-routing.js";
 import { runWorkersAi, workersAiText } from "../lib/workers-ai.js";
@@ -224,6 +225,54 @@ const unitTypeFrom = (message) => {
   return m?.[1] ?? null;
 };
 
+const bedroomCountForUnit = (unit) => {
+  const labelled = String(unit?.label_en ?? "").match(/\b([12])\b/);
+  if (labelled) return Number(labelled[1]);
+  return ["1A", "1B", "1C"].includes(unit?.code) ? 1
+    : ["2A", "3A"].includes(unit?.code) ? 2 : null;
+};
+
+function publicBedroomAnswer(message, facts, zh, intents) {
+  const bedrooms = bedroomCountFromPublicQuestion(message);
+  if (!bedrooms) return null;
+  const rows = facts.unit_types.filter((unit) => bedroomCountForUnit(unit) === bedrooms);
+  if (!rows.length) return null;
+
+  const availableRows = rows.filter((unit) => Number(unit.available) > 0);
+  const available = availableRows.reduce((sum, unit) => sum + Number(unit.available), 0);
+  const rents = rows.flatMap((unit) => [unit.rent_from, unit.rent_to])
+    .map(Number).filter(Number.isFinite);
+  const areas = [...new Set(rows.map((unit) => Math.round(Number(unit.area_sqft)))
+    .filter(Number.isFinite))].sort((a, b) => a - b);
+  const dates = availableRows.map((unit) => unit.earliest).filter(Boolean)
+    .map((value) => ({ value, time:new Date(value).getTime() }))
+    .filter((item) => Number.isFinite(item.time)).sort((a, b) => a.time - b.time);
+  const earliest = dates.length ? dateText(dates[0].value, zh) : null;
+  const hasDen = rows.some((unit) => /den|書房|书房/i.test(
+    `${unit.label_en ?? ""} ${unit.label_zh ?? ""}`));
+  const kind = zh ? `${bedrooms === 1 ? "一" : "兩"}房` : `${bedrooms}-bedroom`;
+  const parts = [];
+
+  if (intents.includes("availability")) parts.push(zh
+    ? (available
+      ? `目前${kind}戶型共有 ${available} 套可租${earliest ? `，最早可於 ${earliest} 入住` : ""}`
+      : `目前沒有${kind}空房`)
+    : (available
+      ? `There are currently ${available} ${kind} suites available${earliest ? `, with the earliest move-in on ${earliest}` : ""}`
+      : `There are no ${kind} suites currently available`));
+  if (intents.includes("rent") && rents.length) {
+    const low = money(Math.min(...rents)), high = money(Math.max(...rents));
+    parts.push(zh ? `${kind}月租約 ${low}${high !== low ? `–${high}` : ""}`
+      : `${kind} rent is currently ${low}${high !== low ? `–${high}` : ""} per month`);
+  }
+  if (areas.length) parts.push(zh
+    ? `可選面積約 ${areas.join("、")} 平方英尺${hasDen ? "，部分格局帶書房" : ""}`
+    : `Available layouts are approximately ${areas.join(", ")} sq. ft.${hasDen ? ", including layouts with a den" : ""}`);
+
+  return { intent:intents.join("+"), text:`${parts.join(zh ? "；" : ". ")}${zh ? "。" : ". "}${
+    zh ? "空房與價格為目前資料，可能隨時變動。" : "Availability and pricing are a current snapshot and may change."}` };
+}
+
 function publicAnswerForIntent(message, facts, zh, intent) {
   const type = unitTypeFrom(message);
   const unit = type ? facts.unit_types.find((x) => x.code === type) : null;
@@ -305,6 +354,10 @@ function publicAnswer(message, facts, zh) {
       ? "你想問的是房租、車位價格、空房數量，還是其他費用？請告訴我項目，我會查目前資料。"
       : "Are you asking about suite rent, parking price, available suites, or another fee? Tell me the item and I will check the current data.",
   };
+  if (intents.some((intent) => ["availability", "rent"].includes(intent))) {
+    const bedroomAnswer = publicBedroomAnswer(message, facts, zh, intents);
+    if (bedroomAnswer) return bedroomAnswer;
+  }
   const answers = intents.map((intent) => publicAnswerForIntent(message, facts, zh, intent)).filter(Boolean);
   if (!answers.length) return null;
   return {
