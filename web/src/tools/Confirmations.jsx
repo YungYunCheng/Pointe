@@ -86,6 +86,7 @@ export default function Confirmations({ session: suppliedSession, section = "all
   const [chatConfirmations, setChatConfirmations] = useState([]);
   const [view, setView] = useState("yours");
   const [open, setOpen] = useState(null);
+  const [deleteConfirm, setDeleteConfirm] = useState(null);
   const [loading, setLoading] = useState(true);
   const [msg, setMsg] = useState("");
 
@@ -180,13 +181,13 @@ export default function Confirmations({ session: suppliedSession, section = "all
   };
 
   const deleteChat = async (item) => {
-    if (!window.confirm("Permanently delete this chat record and its related notification?")) return;
     try {
       const response = await fetch(`/api/escalations/${item.id}`, {
         method:"DELETE", credentials:"include",
       });
       if (!response.ok) throw new Error("delete failed");
       setChatConfirmations((items) => items.filter((x) => x.id !== item.id));
+      setDeleteConfirm(null);
       flash("Chat record deleted.");
     } catch { flash("Could not delete this record. Please try again."); }
   };
@@ -294,10 +295,20 @@ export default function Confirmations({ session: suppliedSession, section = "all
                     {pending && <button className="cf-btn" onClick={() => confirmChat(item)}>
                       Confirm handled
                     </button>}
-                    {session?.role === "admin" && (
-                      <button className="cf-btn cf-btn--danger" onClick={() => deleteChat(item)}>
+                    {session?.role === "admin" && deleteConfirm !== item.id && (
+                      <button className="cf-btn cf-btn--danger" onClick={() => setDeleteConfirm(item.id)}>
                         Delete record
                       </button>
+                    )}
+                    {session?.role === "admin" && deleteConfirm === item.id && (
+                      <span className="cf-delete-confirm">
+                        <button className="cf-btn cf-btn--danger-solid" onClick={() => deleteChat(item)}>
+                          Permanently delete
+                        </button>
+                        <button className="cf-btn cf-btn--ghost" onClick={() => setDeleteConfirm(null)}>
+                          Cancel
+                        </button>
+                      </span>
                     )}
                     {!pending && item.claimed_name &&
                       <p className="cf-dim">Handled by {item.claimed_name}.</p>}
@@ -907,6 +918,8 @@ const CSS = `
 .cf-btn:disabled{opacity:.4;cursor:not-allowed}
 .cf-btn--ghost{background:transparent;color:var(--ink2);border-color:var(--rule)}
 .cf-btn--danger{background:transparent;color:#A92F49;border-color:#D8A7B2;margin-left:7px}
+.cf-btn--danger-solid{background:#A92F49;border-color:#A92F49;margin-left:7px}
+.cf-delete-confirm{display:inline-flex;gap:7px;align-items:center}
 .cf-actions{display:flex;gap:8px;align-items:center;flex-wrap:wrap}
 
 @media (max-width:760px){
