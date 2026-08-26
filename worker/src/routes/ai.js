@@ -687,6 +687,35 @@ r.post("/escalations/:id/confirm", async (c) => {
   return c.json({ escalation:row });
 });
 
+/** Administrators may remove an invalid or test escalation. Related queued
+ * messages and the matching notification are removed in the same transaction
+ * so a deleted test cannot still email somebody or leave a badge behind. */
+r.delete("/escalations/:id", adminOnly, async (c) => {
+  const [before] = await c.get("db")`
+    SELECT * FROM escalations WHERE id = ${c.req.param("id")}`;
+  if (!before) return c.json({ code:"NOT_FOUND" }, 404);
+
+  const removed = await c.get("db").begin(async (tx) => {
+    const notifications = await tx`
+      DELETE FROM notifications
+      WHERE kind = 'escalation' AND params IS NOT NULL
+        AND params::jsonb ->> 'escalation_id' = ${before.id}
+      RETURNING id`;
+    await tx`DELETE FROM escalations WHERE id = ${before.id}`;
+    const outbox = await tx`
+      DELETE FROM outbox
+      WHERE (ref_type = 'escalation' AND ref_id = ${before.id})
+         OR id = ${before.outbox_id}
+      RETURNING id`;
+    return { notifications:notifications.length, outbox:outbox.length };
+  });
+
+  await audit(c, { action:"escalation.delete", entityType:"escalation",
+    entityId:before.id, before,
+    after:{ deleted:true, notifications:removed.notifications, outbox:removed.outbox } });
+  return c.json({ ok:true, id:before.id, removed });
+});
+
 r.post("/ai/:task", async (c) => {
   const task = c.req.param("task");
   const body = await c.req.json().catch(() => ({}));
