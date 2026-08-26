@@ -179,6 +179,18 @@ export default function Confirmations({ session: suppliedSession, section = "all
     } catch { flash("Could not confirm this item. Please try again."); }
   };
 
+  const deleteChat = async (item) => {
+    if (!window.confirm("Permanently delete this chat record and its related notification?")) return;
+    try {
+      const response = await fetch(`/api/escalations/${item.id}`, {
+        method:"DELETE", credentials:"include",
+      });
+      if (!response.ok) throw new Error("delete failed");
+      setChatConfirmations((items) => items.filter((x) => x.id !== item.id));
+      flash("Chat record deleted.");
+    } catch { flash("Could not delete this record. Please try again."); }
+  };
+
   const confirm = (p, edited, note) => {
     const role = p.outstanding.includes(session?.role) ? session.role : p.outstanding[0];
     const given = [...(p.confirmations ?? []), { id: uid("pc_"), role_code: role,
@@ -282,6 +294,11 @@ export default function Confirmations({ session: suppliedSession, section = "all
                     {pending && <button className="cf-btn" onClick={() => confirmChat(item)}>
                       Confirm handled
                     </button>}
+                    {session?.role === "admin" && (
+                      <button className="cf-btn cf-btn--danger" onClick={() => deleteChat(item)}>
+                        Delete record
+                      </button>
+                    )}
                     {!pending && item.claimed_name &&
                       <p className="cf-dim">Handled by {item.claimed_name}.</p>}
                   </div>
@@ -889,6 +906,7 @@ const CSS = `
   color:#fff;border:1px solid var(--brand);padding:8px 15px;border-radius:3px}
 .cf-btn:disabled{opacity:.4;cursor:not-allowed}
 .cf-btn--ghost{background:transparent;color:var(--ink2);border-color:var(--rule)}
+.cf-btn--danger{background:transparent;color:#A92F49;border-color:#D8A7B2;margin-left:7px}
 .cf-actions{display:flex;gap:8px;align-items:center;flex-wrap:wrap}
 
 @media (max-width:760px){
