@@ -107,27 +107,12 @@ const CHANNELS = {
   whatsapp: { label: "WhatsApp", icon: "◍" },
 };
 
-const SEED = [
-  { id: "m1", channel: "email", from: "j.tran@example.com", name: "Jenny Tran",
-    body: "Hi — do you have any 2 bedroom units available for September 1? What's the monthly rent, and is parking included in that?" },
-  { id: "m2", channel: "webform", from: "wchen@example.com", name: "Wei-Lun Chen",
-    body: "請問可以養狗嗎？大概 20 公斤的柴犬。押金要多少、每個月還要另外收錢嗎？" },
-  { id: "m3", channel: "sms", from: "+1 780 555 0142", name: "Unknown number",
-    body: "370-412 還有沒有車位 我想登記" },
-  { id: "m4", channel: "whatsapp", from: "+1 587 555 0198", name: "Marcus Idowu",
-    body: "I use a wheelchair and would need a parking stall close to the elevator. Is that something you can arrange?" },
-  { id: "m5", channel: "email", from: "d.singh@example.com", name: "Davinder Singh",
-    body: "Hello, do you accept tenants who receive AISH? What is your minimum income requirement to qualify?" },
-  { id: "m6", channel: "email", from: "lily.k@example.com", name: "Lily Kwan",
-    body: "我上週看過 378-519，想這週就簽約。可以把租約寄給我嗎？另外能不能少收一點押金？" },
-];
-
 const money = (n) => (n === "" || n == null || isNaN(n) ? null : "$" + Math.round(Number(n)).toLocaleString("en-CA"));
 
 export default function AIInbox({ session, embedded = false }) {
   const [loading, setLoading] = useState(true);
-  const [msgs, setMsgs] = useState(() => SEED.map((m) => ({ ...m, ts: Date.now(), state: "new" })));
-  const [sel, setSel] = useState("m1");
+  const [msgs, setMsgs] = useState([]);
+  const [sel, setSel] = useState(null);
   const [busy, setBusy] = useState(null);
   const [draftEdit, setDraftEdit] = useState("");
   const [view, setView] = useState("inbox");
@@ -327,6 +312,17 @@ useEffect(() => {
         </div>
       </header>}
 
+      {embedded && view === "inbox" && (
+        <div className="ai-headr ai-headr--embedded">
+          <button className="ai-btn ai-btn--ghost" onClick={() => setCompose({ ...compose, open: !compose.open })}>
+            Test a message
+          </button>
+          <button className="ai-btn" onClick={processAll} disabled={!!busy || counts.new === 0}>
+            {busy ? "Working…" : `Process all (${counts.new})`}
+          </button>
+        </div>
+      )}
+
       <nav className="ai-tabs">
         {[["inbox", "Inbox"], ["escalations", "Needs a person"],
           ["shadow", "Shadow mode"]].map(([k, l]) => (
@@ -374,6 +370,9 @@ useEffect(() => {
         <div className="ai-main">
           {/* Inbox */}
           <div className="ai-list">
+            {msgs.length === 0 && (
+              <div className="ai-empty">No test messages. Add one when you want to test the AI pipeline.</div>
+            )}
             {msgs.map((m) => {
               const lv = m.level ? LEVELS[m.level] : null;
               return (
@@ -864,6 +863,7 @@ const CSS = `
   letter-spacing:-.02em;margin:4px 0 0}
 .ai-head h1 span{font-weight:700;font-size:16px;color:var(--dim);margin-left:6px}
 .ai-headr{display:flex;gap:10px}
+.ai-headr--embedded{justify-content:flex-end;padding:16px 26px 0}
 .ai-btn{font:inherit;font-weight:600;font-size:13px;cursor:pointer;background:var(--brand,var(--ink));color:#fff;
   border:1px solid var(--brand,var(--ink));padding:8px 16px;border-radius:3px}
 .ai-btn:hover:not(:disabled){background:#000}
