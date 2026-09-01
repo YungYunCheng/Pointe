@@ -147,12 +147,27 @@ async function publicPropertyFacts(sql) {
       AND (p.effective_to IS NULL OR p.effective_to >= CURRENT_DATE)
     ORDER BY p.effective_from DESC LIMIT 1`;
 
+  const [site] = await sql`
+    SELECT content FROM public_site_settings WHERE id = 'main'`;
+  let siteContent = site?.content ?? {};
+  if (typeof siteContent === "string") {
+    try { siteContent = JSON.parse(siteContent); } catch { siteContent = {}; }
+  }
+  const publishedContact = siteContent?.contact ?? {};
+
   return {
     property: "Baydo Pointe, Clareview, Edmonton",
     snapshot_at: new Date().toISOString(),
     unit_types: types,
     parking,
     fees: fees ?? null,
+    contact: {
+      name: clipped(publishedContact.name, 120).trim()
+        || "Baydo Pointe Leasing Team",
+      phone: clipped(publishedContact.phone, 80).trim() || "780-937-8677",
+      email: clipped(publishedContact.email, 160).trim()
+        || "rentals@themizar.ca",
+    },
   };
 }
 
@@ -277,6 +292,16 @@ function publicAnswerForIntent(message, facts, zh, intent) {
   const type = unitTypeFrom(message);
   const unit = type ? facts.unit_types.find((x) => x.code === type) : null;
   const snapshot = zh ? "空房與車位為目前資料，可能隨時變動。" : "Availability is a current snapshot and may change.";
+
+  if (intent === "contact") {
+    const contact = facts.contact ?? {};
+    const name = contact.name || "Baydo Pointe Leasing Team";
+    const phone = contact.phone || "780-937-8677";
+    const email = contact.email || "rentals@themizar.ca";
+    return { intent, text: zh
+      ? `你可以聯絡 Baydo Pointe 租賃團隊：\n聯絡人：${name}\n電話：${phone}\nEmail：${email}`
+      : `You can contact the Baydo Pointe leasing team:\nContact: ${name}\nPhone: ${phone}\nEmail: ${email}` };
+  }
 
   if (intent === "parking") {
     if (!facts.parking?.length) return null;

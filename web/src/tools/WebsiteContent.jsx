@@ -112,7 +112,8 @@ export default function WebsiteContent() {
       </div>
     </section>
     <section className="wc-card"><div className="wc-cardhead"><div><h2>Footer</h2><p>Controls the dark footer at the bottom of every public page.</p></div></div>
-      <div className="wc-row"><Field label="Office phone" value={content.contact?.phone ?? ""} onChange={(v) => setContact("phone", v)} />
+      <div className="wc-row"><Field label="Contact person / team" value={content.contact?.name ?? ""} onChange={(v) => setContact("name", v)} />
+        <Field label="Office phone" value={content.contact?.phone ?? ""} onChange={(v) => setContact("phone", v)} />
         <Field label="Office email" type="email" value={content.contact?.email ?? ""} onChange={(v) => setContact("email", v)} /></div>
       <div className="wc-copy wc-footer-copy">{["en", "zh"].map((locale) => <div className="wc-lang" key={locale}><h3>{locale === "en" ? "English footer" : "中文 Footer"}</h3>
         {FOOTER_FIELDS.map(([field, label]) => <label key={field}><span>{label}</span><textarea rows={field === "footer_address" ? 3 : 2} value={content[locale]?.[field] ?? ""} onChange={(e) => setCopy(locale, field, e.target.value)} /></label>)}</div>)}</div>

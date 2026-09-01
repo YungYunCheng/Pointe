@@ -1,4 +1,5 @@
 const PATTERNS = {
+  contact: /\bcontact(?:s|\s+information|\s+details)?\b|\bphone(?:\s+number)?\b|\btelephone\b|\bcall\s+(?:you|the\s+office|the\s+leasing\s+team)\b|\be-?mail(?:\s+address)?\b|聯絡|联络|聯繫|联系|聯絡方式|联系方式|電話|电话|手機|手机|郵箱|邮箱|電子郵件|电子邮件|客服|找誰|找谁|聯絡人|联系人/i,
   parking: /\bparking\b|\bpark(?:ing)?\s+(?:stall|spot|space)\b|\bstall\b|\bgarage\b|车位|車位|停车位|停車位|停车|停車|泊车|泊車/i,
   pets: /\bpets?\b|\bdogs?\b|\bcats?\b|\banimals?\b|寵物|宠物|養狗|养狗|養貓|养猫|貓|猫|狗/i,
   fees: /\bdeposit\b|\bstorage\b|application\s+fee|utilities?|security\s+deposit|押金|保證金|保证金|儲物|储物|水電|水电|申請費|申请费/i,
@@ -36,6 +37,7 @@ export function detectPublicIntents(value) {
   const text = normalizePublicQuestion(value);
   if (!text) return [];
 
+  const contact = PATTERNS.contact.test(text);
   const parking = PATTERNS.parking.test(text);
   const pets = PATTERNS.pets.test(text);
   const fees = PATTERNS.fees.test(text);
@@ -46,6 +48,10 @@ export function detectPublicIntents(value) {
     || (GENERIC_AVAILABILITY.test(text) && housing);
   const rent = PATTERNS.rent.test(text);
   const price = PATTERNS.price.test(text);
+
+  // Contact requests must never be handed to the model: the published office
+  // details are the authoritative answer and are safe to show publicly.
+  if (contact) return ["contact"];
 
   // A named subject always wins over the generic words "price" and "rent".
   // Explicitly asking for both apartment rent and parking is still supported.

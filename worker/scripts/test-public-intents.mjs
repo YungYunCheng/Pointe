@@ -3,6 +3,11 @@ import { bedroomCountFromPublicQuestion, detectPublicIntents }
   from "../src/lib/public-intent.js";
 
 const cases = [
+  ["有联系方式么？", ["contact"]],
+  ["你们电话多少？", ["contact"]],
+  ["联系人是谁？", ["contact"]],
+  ["What is your email address?", ["contact"]],
+  ["How can I contact the leasing team?", ["contact"]],
   ["有车位么？多少钱", ["parking"]],
   ["我是问车位多少钱", ["parking"]],
   ["地下停车位一个月多少钱", ["parking"]],

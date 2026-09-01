@@ -44,7 +44,11 @@ const DEFAULT_CONTENT = {
     footer_tagline: "位於 Clareview 輕軌站旁的便利租住社區。",
     footer_address: "370 · 374 · 378 Clareview Station Drive NW\nEdmonton, Alberta",
   },
-  contact: { phone: "780-937-8677", email: "rentals@themizar.ca" },
+  contact: {
+    name: "Baydo Pointe Leasing Team",
+    phone: "780-937-8677",
+    email: "rentals@themizar.ca",
+  },
 };
 
 const clean = (value, max = 1500) => String(value ?? "").trim().slice(0, max);
@@ -110,6 +114,8 @@ r.put("/admin/site-content", require_("users.manage"), async (c) => {
       content[locale][field] = clean(input?.[locale]?.[field]);
   content.contact.phone = clean(input?.contact?.phone, 80);
   content.contact.email = clean(input?.contact?.email, 160).toLowerCase();
+  content.contact.name = clean(input?.contact?.name, 120)
+    || DEFAULT_CONTENT.contact.name;
   if (content.contact.email && !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(content.contact.email))
     return c.json({ code: "INVALID_CONTACT_EMAIL" }, 400);
 
